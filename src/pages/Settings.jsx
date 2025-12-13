@@ -84,6 +84,19 @@ export default function Settings() {
     }
   };
 
+  const handleTestNotification = async () => {
+    setLoading(true);
+    setMessage(null);
+    try {
+      await axios.post(`${API_URL}/notifications/test`);
+      setMessage({ type: 'success', text: 'Test notification sent!' });
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Failed to send notification.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const tabs = [
     { id: 'api', label: 'API Configuration', icon: Key },
     { id: 'notifications', label: 'Notifications', icon: Bell },
@@ -217,8 +230,13 @@ export default function Settings() {
                 <h3 className="text-xl font-bold text-white">Telegram Notifications</h3>
                 <div className="p-4 bg-slate-900/50 rounded-lg border border-slate-700 space-y-4">
                     <p className="text-slate-400 text-sm">Send a test message to verify your Telegram bot integration.</p>
-                    <button className="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2">
-                        <Bell className="w-4 h-4" /> Send Test Notification
+                    <button 
+                        onClick={handleTestNotification}
+                        disabled={loading}
+                        className="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2 disabled:opacity-50"
+                    >
+                        <Bell className="w-4 h-4" /> 
+                        {loading ? 'Sending...' : 'Send Test Notification'}
                     </button>
                 </div>
              </div>
