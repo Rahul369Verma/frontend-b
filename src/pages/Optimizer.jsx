@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Activity, Play, TrendingUp, AlertTriangle, Code } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useGlobalState } from '../context/GlobalContext';
+import { io } from 'socket.io-client';
 
 export default function Optimizer() {
   const navigate = useNavigate();
@@ -10,12 +11,25 @@ export default function Optimizer() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState(null);
   const [selectedResult, setSelectedResult] = useState(null);
+  const [progress, setProgress] = useState({ current: 0, total: 0, matches: 0 });
+  const [stopOnMatch, setStopOnMatch] = useState(false);
+
+  React.useEffect(() => {
+    const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:5000');
+    
+    socket.on('optimization_progress', (data) => {
+        setProgress(data);
+    });
+
+    return () => socket.disconnect();
+  }, []);
 
   const startOptimization = async () => {
     setRunning(true);
     setError(null);
     setResults(null);
     setSelectedResult(null);
+    setProgress({ current: 0, total: config.iterations, matches: 0 });
     
     try {
         const symbolMap = {
@@ -35,7 +49,8 @@ export default function Optimizer() {
                 strategy: config.strategy,
                 min_trades: config.minTrades,
                 min_win_rate: config.minWinRate,
-                max_drawdown: config.maxDrawdown || 20
+                max_drawdown: config.maxDrawdown || 20,
+                stop_on_match: stopOnMatch
             })
         });
         
@@ -54,25 +69,11 @@ export default function Optimizer() {
     }
   };
 
-  const handleRowClick = (result) => {
-      // Update Backtest Params in Global Context
-      setBacktestParams(prev => ({
-          ...prev,
-          ...result.params,
-          symbol: config.symbol,
-          start_date: config.start_date,
-          end_date: config.end_date,
-          capital: config.capital,
-          // Ensure we map optimizer params to backtest params correctly if names differ
-          // Assuming result.params keys match backtestParams keys
-      }));
-      
-      // Navigate to Backtest Page
-      navigate('/backtest');
-  };
+  // ... handleRowClick ...
 
   return (
     <div className="p-8 space-y-8">
+      {/* ... Header ... */}
       <h1 className="text-3xl font-bold text-white flex items-center gap-3">
         <Activity className="w-8 h-8 text-primary" />
         Strategy Optimizer
@@ -83,6 +84,7 @@ export default function Optimizer() {
           <h3 className="text-xl font-bold">Parameters</h3>
           
           <div className="space-y-4">
+            {/* ... Existing Inputs ... */}
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1">Strategy</label>
               <select className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white">
@@ -175,6 +177,16 @@ export default function Optimizer() {
                 </div>
             </div>
 
+            <div className="flex items-center gap-3 p-3 bg-slate-800 rounded-lg border border-slate-700">
+                <div 
+                    className={`w-10 h-6 rounded-full p-1 cursor-pointer transition-colors ${stopOnMatch ? 'bg-green-500' : 'bg-slate-600'}`}
+                    onClick={() => setStopOnMatch(!stopOnMatch)}
+                >
+                    <div className={`w-4 h-4 bg-white rounded-full transition-transform ${stopOnMatch ? 'translate-x-4' : 'translate-x-0'}`} />
+                </div>
+                <span className="text-sm font-medium text-slate-300">Stop on First Match</span>
+            </div>
+
             <button
               onClick={startOptimization}
               disabled={running}
@@ -194,10 +206,28 @@ export default function Optimizer() {
 
         <div className="lg:col-span-2 bg-surface p-6 rounded-xl border border-slate-700 min-h-[400px]">
           {running ? (
-            <div className="h-full flex flex-col items-center justify-center space-y-4">
-              <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
-              <p className="text-slate-400">Running genetic algorithm...</p>
-              <p className="text-xs text-slate-500">Testing {config.iterations} parameter combinations from {config.start_date} to {config.end_date}</p>
+            <div className="h-full flex flex-col items-center justify-center space-y-6">
+              <div className="relative w-32 h-32">
+                 <svg className="w-full h-full" viewBox="0 0 100 100">
+                    <circle cx="50" cy="50" r="45" fill="none" stroke="#1e293b" strokeWidth="8" />
+                    <circle 
+                        cx="50" cy="50" r="45" fill="none" stroke="#3b82f6" strokeWidth="8" 
+                        strokeDasharray="283" 
+                        strokeDashoffset={283 - (283 * progress.current / (progress.total || 1))}
+                        className="transition-all duration-300 ease-out"
+                        transform="rotate(-90 50 50)"
+                    />
+                 </svg>
+                 <div className="absolute inset-0 flex items-center justify-center flex-col">
+                    <span className="text-2xl font-bold text-white">{Math.round((progress.current / (progress.total || 1)) * 100)}%</span>
+                 </div>
+              </div>
+              
+              <div className="text-center space-y-2">
+                  <p className="text-xl font-bold text-white">Running Optimization...</p>
+                  <p className="text-slate-400">Iteration {progress.current} of {progress.total}</p>
+                  <p className="text-green-400 font-medium">Found {progress.matches} matches so far</p>
+              </div>
             </div>
           ) : results ? (
             <div className="space-y-6">

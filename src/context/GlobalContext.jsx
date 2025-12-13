@@ -11,16 +11,18 @@ export function GlobalProvider({ children }) {
     end_date: '2024-01-31',
     interval: '5',
     capital: 30000,
+    // Initial defaults (synced with backend on load)
     ema_short: 5,
     ema_long: 7,
-    use_15m_filter: true,
-    use_1h_filter: false,
     use_adx_filter: true,
+    adx_period: 14,
     adx_threshold: 26,
     use_rsi_filter: true,
     rsi_period: 14,
     rsi_overbought: 85,
     rsi_oversold: 24,
+    use_15m_filter: true,
+    use_1h_filter: false,
     atr_period: 14,
     atr_tp_mult: 3.5,
     atr_sl_mult: 1.8,
@@ -32,6 +34,26 @@ export function GlobalProvider({ children }) {
   });
   const [backtestResult, setBacktestResult] = useState(null);
 
+  // Fetch Defaults from Backend
+  React.useEffect(() => {
+    const fetchDefaults = async () => {
+      try {
+        const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
+        const res = await fetch(`${API_URL}/engine/defaults`);
+        const data = await res.json();
+        if (data) {
+            setBacktestParams(prev => ({
+                ...prev,
+                ...data
+            }));
+            console.log("✅ Loaded Strategy Defaults from Backend:", data);
+        }
+      } catch (err) {
+        console.error("❌ Failed to load defaults:", err);
+      }
+    };
+    fetchDefaults();
+  }, []);
   // Optimizer State
   const [optimizerParams, setOptimizerParams] = useState({
     symbol: 'NSE:NIFTYBANK-INDEX',

@@ -162,14 +162,14 @@ export default function Dashboard() {
             </div>
             <div className="p-3 bg-slate-800 rounded-lg">
                 <p className="text-slate-400 text-xs">ADX Filter</p>
-                <p className={`text-lg font-bold ${status.strategy_params?.use_adx ? 'text-green-400' : 'text-slate-500'}`}>
-                    {status.strategy_params?.use_adx ? `> ${status.strategy_params?.adx_threshold}` : 'OFF'}
+                <p className={`text-lg font-bold ${status.strategy_params?.use_adx_filter ? 'text-green-400' : 'text-slate-500'}`}>
+                    {status.strategy_params?.use_adx_filter ? `> ${status.strategy_params?.adx_threshold}` : 'OFF'}
                 </p>
             </div>
             <div className="p-3 bg-slate-800 rounded-lg">
                 <p className="text-slate-400 text-xs">RSI Range</p>
-                <p className={`text-lg font-bold ${status.strategy_params?.use_rsi ? 'text-purple-400' : 'text-slate-500'}`}>
-                    {status.strategy_params?.use_rsi ? `${status.strategy_params?.rsi_oversold} - ${status.strategy_params?.rsi_overbought}` : 'OFF'}
+                <p className={`text-lg font-bold ${status.strategy_params?.use_rsi_filter ? 'text-purple-400' : 'text-slate-500'}`}>
+                    {status.strategy_params?.use_rsi_filter ? `${status.strategy_params?.rsi_oversold} - ${status.strategy_params?.rsi_overbought}` : 'OFF'}
                 </p>
             </div>
              <div className="p-3 bg-slate-800 rounded-lg">
@@ -198,12 +198,12 @@ export default function Dashboard() {
                 <p className="text-xl font-bold text-white">₹{marketData?.ltp?.toFixed(2) || "0.00"}</p>
             </div>
             <div className="p-4 bg-slate-800 rounded-lg">
-                <p className="text-slate-400 text-sm">5m EMA 9</p>
-                <p className="text-xl font-bold text-blue-400">₹{marketData?.ema_9?.toFixed(2) || "0.00"}</p>
+                <p className="text-slate-400 text-sm">5m EMA Short</p>
+                <p className="text-xl font-bold text-blue-400">₹{marketData?.ema_short?.toFixed(2) || "0.00"}</p>
             </div>
             <div className="p-4 bg-slate-800 rounded-lg">
-                <p className="text-slate-400 text-sm">5m EMA 15</p>
-                <p className="text-xl font-bold text-purple-400">₹{marketData?.ema_15?.toFixed(2) || "0.00"}</p>
+                <p className="text-slate-400 text-sm">5m EMA Long</p>
+                <p className="text-xl font-bold text-purple-400">₹{marketData?.ema_long?.toFixed(2) || "0.00"}</p>
             </div>
             <div className="p-4 bg-slate-800 rounded-lg">
                 <p className="text-slate-400 text-sm">5m Trend</p>
@@ -211,8 +211,8 @@ export default function Dashboard() {
                     <p className={`text-xl font-bold ${marketData?.trend === 'BULLISH' ? 'text-green-500' : 'text-red-500'}`}>
                         {marketData?.trend || "NEUTRAL"}
                     </p>
-                    <span className={`text-xs ${marketData?.ema_9 - marketData?.ema_15 > 0 ? 'text-green-500' : 'text-red-500'}`}>
-                        (₹{(marketData?.ema_9 - marketData?.ema_15)?.toFixed(2) || "0.00"})
+                    <span className={`text-xs ${marketData?.ema_short - marketData?.ema_long > 0 ? 'text-green-500' : 'text-red-500'}`}>
+                        (₹{(marketData?.ema_short - marketData?.ema_long)?.toFixed(2) || "0.00"})
                     </span>
                 </div>
             </div>

@@ -217,7 +217,7 @@ export default function Backtest() {
                 <div className="space-y-2">
                     <div className="flex items-center justify-between">
                         <label className="text-sm text-slate-400">Use ADX Filter</label>
-                        <input type="checkbox" checked={params.use_adx_filter || false} 
+                        <input type="checkbox" checked={params.use_adx_filter} 
                             onChange={e => setParams({...params, use_adx_filter: e.target.checked})} />
                     </div>
                     {params.use_adx_filter && (
@@ -233,7 +233,7 @@ export default function Backtest() {
                 <div className="space-y-2">
                     <div className="flex items-center justify-between">
                         <label className="text-sm text-slate-400">Use RSI Filter</label>
-                        <input type="checkbox" checked={params.use_rsi_filter || true} 
+                        <input type="checkbox" checked={params.use_rsi_filter} 
                             onChange={e => setParams({...params, use_rsi_filter: e.target.checked})} />
                     </div>
                     {params.use_rsi_filter && (
@@ -333,8 +333,10 @@ export default function Backtest() {
                     <thead className="text-xs text-slate-400 uppercase bg-slate-700/50 sticky top-0 z-10">
                       <tr>
                         <th className="px-4 py-3 bg-slate-800">Entry Time</th>
+                        <th className="px-4 py-3 bg-slate-800">Symbol</th>
                         <th className="px-4 py-3 bg-slate-800">Type</th>
                         <th className="px-4 py-3 bg-slate-800">Price</th>
+                        <th className="px-4 py-3 bg-slate-800">Invested</th>
                         <th className="px-4 py-3 bg-slate-800">Exit Time</th>
                         <th className="px-4 py-3 bg-slate-800">Exit Price</th>
                         <th className="px-4 py-3 bg-slate-800">PnL</th>
@@ -345,10 +347,12 @@ export default function Backtest() {
                       {result.trades.map((trade, idx) => (
                         <tr key={idx} className="border-b border-slate-700 hover:bg-slate-700/30">
                           <td className="px-4 py-3">{new Date(trade.entryTime).toLocaleString()}</td>
+                          <td className="px-4 py-3 font-mono text-xs">{trade.option_symbol || '-'}</td>
                           <td className={`px-4 py-3 font-bold ${trade.type === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
                             {trade.type}
                           </td>
                           <td className="px-4 py-3">{trade.entryPrice.toFixed(2)}</td>
+                          <td className="px-4 py-3">₹{trade.invested_amount ? trade.invested_amount.toFixed(2) : '-'}</td>
                           <td className="px-4 py-3">{new Date(trade.exitTime).toLocaleString()}</td>
                           <td className="px-4 py-3">{trade.exitPrice.toFixed(2)}</td>
                           <td className={`px-4 py-3 font-bold ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
