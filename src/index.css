@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+:root {
+  --background-color: #0e1117;
+  --surface-color: #262730;
+  --text-color: #fafafa;
+  --primary-color: #ff4b4b;
+}
+
+@theme {
+  --color-background: #0e1117;
+  --color-surface: #262730;
+  --color-primary: #ff4b4b;
+  --color-secondary: #31333F;
+  --color-success: #09ab3b;
+  --color-danger: #ff2b2b;
+  --color-warning: #ffbd45;
+}
+
+body {
+  background-color: var(--background-color);
+  color: var(--text-color);
+  font-family: "Source Sans Pro", sans-serif;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0e1117;
+}
+::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #777;
+}
+
+/* Streamlit-like Inputs */
+input, select, textarea {
+  @apply bg-surface border border-[#41434d] text-white rounded-md px-3 py-2 focus:outline-none focus:border-primary transition-colors;
+}
+
+/* Streamlit-like Cards */
+.bg-surface {
+  @apply bg-surface border border-[#41434d];
+}
+
+/* Streamlit-like Buttons */
+.btn-primary {
+  @apply bg-primary hover:bg-primary/90 text-white font-medium py-2 px-4 rounded transition-colors;
+}
+.btn-secondary {
+  @apply bg-transparent border border-[#41434d] hover:border-primary text-white font-medium py-2 px-4 rounded transition-colors;
+}
