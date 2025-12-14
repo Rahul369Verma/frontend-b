@@ -92,11 +92,11 @@ export default function Backtest() {
                     <label className="block text-sm font-medium text-slate-400 mb-1">Backtest Mode</label>
                     <select 
                         className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
-                        value={params.backtest_mode || 'simulated'}
+                        value={params.backtest_mode || 'Simulated Premium'}
                         onChange={e => setParams({...params, backtest_mode: e.target.value})}
                     >
-                        <option value="simulated">Simulated Premium (Fast & Approx - 0.5 Delta)</option>
-                        <option value="real" disabled>Real Option Data (Coming Soon)</option>
+                        <option value="Simulated Premium">Simulated Premium (Fast & Approx - 0.5 Delta)</option>
+                        <option value="Real Option Data">Real Option Data (Slow & Accurate)</option>
                     </select>
                 </div>
             </div>
@@ -277,7 +277,7 @@ export default function Backtest() {
           
           {result ? (
             <div className="space-y-8">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                 <div className="p-4 bg-slate-800 rounded-lg">
                   <p className="text-slate-400 text-sm">Total P&L</p>
                   <p className={`text-xl font-bold ${result.metrics.totalPnL >= 0 ? 'text-green-500' : 'text-red-500'}`}>
@@ -295,6 +295,12 @@ export default function Backtest() {
                 <div className="p-4 bg-slate-800 rounded-lg">
                   <p className="text-slate-400 text-sm">Max Drawdown</p>
                   <p className="text-xl font-bold text-red-500">{result.metrics.maxDrawdown}%</p>
+                </div>
+                <div className="p-4 bg-slate-800 rounded-lg">
+                  <p className="text-slate-400 text-sm">Sharpe Ratio</p>
+                  <p className={`text-xl font-bold ${result.metrics.sharpeRatio >= 1 ? 'text-green-500' : result.metrics.sharpeRatio > 0 ? 'text-yellow-500' : 'text-red-500'}`}>
+                    {result.metrics.sharpeRatio}
+                  </p>
                 </div>
               </div>
               

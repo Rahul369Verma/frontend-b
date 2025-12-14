@@ -50,6 +50,7 @@ export default function Optimizer() {
                 min_trades: config.minTrades,
                 min_win_rate: config.minWinRate,
                 max_drawdown: config.maxDrawdown || 20,
+                min_sharpe_ratio: config.minSharpeRatio,
                 stop_on_match: stopOnMatch
             })
         });
@@ -175,6 +176,16 @@ export default function Optimizer() {
                     onChange={e => setConfig({...config, maxDrawdown: parseInt(e.target.value)})}
                   />
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-1">Min Sharpe Ratio</label>
+                  <input 
+                    type="number" 
+                    step="0.1"
+                    className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                    value={config.minSharpeRatio !== undefined ? config.minSharpeRatio : 0.4}
+                    onChange={e => setConfig({...config, minSharpeRatio: parseFloat(e.target.value)})}
+                  />
+                </div>
             </div>
 
             <div className="flex items-center gap-3 p-3 bg-slate-800 rounded-lg border border-slate-700">
@@ -250,6 +261,7 @@ export default function Optimizer() {
                                 <th className="p-3">Total PnL</th>
                                 <th className="p-3">Trades</th>
                                 <th className="p-3">Max DD</th>
+                                <th className="p-3">Sharpe</th> {/* Added Sharpe column header */}
                                 <th className="p-3">EMA (S/L)</th>
                                 <th className="p-3">Filters</th>
                                 <th className="p-3">Action</th>
@@ -267,6 +279,7 @@ export default function Optimizer() {
                                     <td className="p-3 font-mono">₹{res.metrics.totalPnL.toLocaleString()}</td>
                                     <td className="p-3">{res.metrics.totalTrades}</td>
                                     <td className="p-3 text-red-400">{res.metrics.maxDrawdown}%</td>
+                                    <td className="p-3 text-blue-400">{res.metrics.sharpeRatio}</td>
                                     <td className="p-3">{res.params.ema_short} / {res.params.ema_long}</td>
                                     <td className="p-3 text-xs text-slate-400">
                                         {res.params.use_adx_filter && <span className="mr-1 bg-blue-900/30 px-1 rounded">ADX</span>}

@@ -24,7 +24,7 @@ function StatCard({ title, value, subtext, icon: Icon, color }) {
 }
 
 export default function Dashboard() {
-  const [status, setStatus] = useState({ is_running: false });
+  const [status, setStatus] = useState({ is_running: false, mode: 'paper' });
   const [marketData, setMarketData] = useState(null);
   const [pnl, setPnl] = useState({ daily_pnl: 0, trades_count: 0 });
   const [positions, setPositions] = useState([]);
@@ -132,7 +132,16 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold text-white">Live Dashboard</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold text-white">Live Dashboard</h1>
+            <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+              status.mode === 'live' 
+                ? 'bg-red-500/20 text-red-400 border border-red-500/50' 
+                : 'bg-blue-500/20 text-blue-400 border border-blue-500/50'
+            }`}>
+              {status.mode === 'live' ? '🔴 LIVE TRADING' : '📝 PAPER TRADING'}
+            </span>
+          </div>
           <p className="text-slate-400 mt-1">
             {status.active_strategy} • {status.fyers_connected ? '🟢 Fyers Connected' : '🔴 Fyers Disconnected'}
           </p>

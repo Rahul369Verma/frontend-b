@@ -64,7 +64,9 @@ export function GlobalProvider({ children }) {
     strategy: 'mta_ema_crossover',
     minTrades: 5,
     minWinRate: 40,
-    maxDrawdown: 20
+    maxDrawdown: 100,
+    minSharpeRatio: 0.4,
+    stop_on_match: false
   });
   const [optimizerResult, setOptimizerResult] = useState(null);
 
