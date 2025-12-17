@@ -7,8 +7,8 @@ export function GlobalProvider({ children }) {
   const [backtestParams, setBacktestParams] = useState({
     strategy: 'mta_ema_crossover',
     symbol: 'BANKNIFTY',
-    start_date: '2024-01-01',
-    end_date: '2024-01-31',
+    start_date: '2025-01-01',
+    end_date: '2025-12-17',
     interval: '5',
     capital: 30000,
     // Initial defaults (synced with backend on load)
@@ -57,8 +57,9 @@ export function GlobalProvider({ children }) {
   // Optimizer State
   const [optimizerParams, setOptimizerParams] = useState({
     symbol: 'NSE:NIFTYBANK-INDEX',
-    start_date: '2024-01-01',
-    end_date: '2024-01-31',
+    lot_size: 35,
+    start_date: '2025-01-01',
+    end_date: '2025-12-17',
     capital: 30000,
     iterations: 10,
     strategy: 'mta_ema_crossover',

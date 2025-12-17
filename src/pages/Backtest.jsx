@@ -6,6 +6,14 @@ import { useGlobalState } from '../context/GlobalContext';
 
 const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
 
+const LOT_SIZES = {
+  "NSE:NIFTYBANK-INDEX": 35,
+  "NSE:NIFTY50-INDEX": 75,
+  "BSE:SENSEX-INDEX": 20,
+  "NSE:FINNIFTY-INDEX": 65,
+  "NSE:MIDCPNIFTY-INDEX": 140
+};
+
 export default function Backtest() {
   const { backtestParams: params, setBacktestParams: setParams, backtestResult: result, setBacktestResult: setResult } = useGlobalState();
   const [loading, setLoading] = useState(false);
@@ -57,12 +65,24 @@ export default function Backtest() {
             
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1">Symbol</label>
-              <input 
-                type="text" 
+              <select 
                 className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
                 value={params.symbol}
-                onChange={e => setParams({...params, symbol: e.target.value})}
-              />
+                onChange={e => {
+                  const newSymbol = e.target.value;
+                  setParams({
+                    ...params, 
+                    symbol: newSymbol,
+                    lot_size: LOT_SIZES[newSymbol] || 15 // Auto-update lot size
+                  });
+                }}
+              >
+                <option value="NSE:NIFTYBANK-INDEX">NIFTY BANK</option>
+                <option value="NSE:NIFTY50-INDEX">NIFTY 50</option>
+                <option value="BSE:SENSEX-INDEX">SENSEX</option>
+                <option value="NSE:FINNIFTY-INDEX">FINNIFTY</option>
+                <option value="NSE:MIDCPNIFTY-INDEX">MIDCPNIFTY</option>
+              </select>
             </div>
 
             {/* 1. General Settings */}

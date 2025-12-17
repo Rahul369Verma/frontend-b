@@ -231,6 +231,18 @@ export default function Dashboard() {
                     {marketData?.timestamp ? new Date(marketData.timestamp).toLocaleTimeString() : "--:--:--"}
                 </p>
             </div>
+             <div className="p-4 bg-slate-800 rounded-lg">
+                <p className="text-slate-400 text-sm">Last Heartbeat</p>
+                <p className="text-xl font-bold text-green-400">
+                    {marketData?.lastHeartbeat ? new Date(marketData.lastHeartbeat).toLocaleTimeString() : "--:--:--"}
+                </p>
+            </div>
+            <div className="p-4 bg-slate-800 rounded-lg">
+                <p className="text-slate-400 text-sm">Last Signal Check</p>
+                <p className="text-xl font-bold text-yellow-400">
+                    {marketData?.lastSignalCheck ? new Date(marketData.lastSignalCheck).toLocaleTimeString() : "Waiting..."}
+                </p>
+            </div>
         </div>
       </div>
 
@@ -412,7 +424,7 @@ export default function Dashboard() {
                     <tbody>
                         {mongoTrades.map((trade, i) => (
                             <tr key={i} className="border-b border-slate-800 hover:bg-slate-800/50">
-                                <td className="p-3 text-slate-300">{new Date(trade.timestamp).toLocaleTimeString()}</td>
+                                <td className="p-3 text-slate-300">{new Date(trade.timestamp).toLocaleString()}</td>
                                 <td className="p-3 font-medium text-white">{trade.tradingsymbol}</td>
                                 <td className={`p-3 font-bold ${trade.action === 'BUY' ? 'text-green-500' : 'text-red-500'}`}>{trade.action}</td>
                                 <td className="p-3 text-slate-300">{trade.quantity}</td>

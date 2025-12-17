@@ -4,6 +4,14 @@ import { useNavigate } from 'react-router-dom';
 import { useGlobalState } from '../context/GlobalContext';
 import { io } from 'socket.io-client';
 
+const LOT_SIZES = {
+  "NSE:NIFTYBANK-INDEX": 35,
+  "NSE:NIFTY50-INDEX": 75,
+  "BSE:SENSEX-INDEX": 20,
+  "NSE:FINNIFTY-INDEX": 65,
+  "NSE:MIDCPNIFTY-INDEX": 140
+};
+
 export default function Optimizer() {
   const navigate = useNavigate();
   const { optimizerParams: config, setOptimizerParams: setConfig, optimizerResult: results, setOptimizerResult: setResults, setBacktestParams } = useGlobalState();
@@ -32,16 +40,12 @@ export default function Optimizer() {
     setProgress({ current: 0, total: config.iterations, matches: 0 });
     
     try {
-        const symbolMap = {
-            'BANKNIFTY': 'NSE:NIFTYBANK-INDEX',
-            'NIFTY': 'NSE:NIFTY50-INDEX'
-        };
-
         const response = await fetch(`${import.meta.env.VITE_API_URL}/api/engine/optimizer/analyze`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                symbol: symbolMap[config.symbol] || config.symbol,
+                symbol: config.symbol,
+                lot_size: config.lot_size || 15,
                 start_date: config.start_date,
                 end_date: config.end_date,
                 capital: config.capital,
@@ -98,11 +102,31 @@ export default function Optimizer() {
               <select 
                 className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
                 value={config.symbol}
-                onChange={e => setConfig({...config, symbol: e.target.value})}
+                onChange={e => {
+                    const newSymbol = e.target.value;
+                    setConfig({
+                        ...config, 
+                        symbol: newSymbol,
+                        lot_size: LOT_SIZES[newSymbol] || 15
+                    });
+                }}
               >
-                <option value="BANKNIFTY">BANKNIFTY</option>
-                <option value="NIFTY">NIFTY</option>
+                <option value="NSE:NIFTYBANK-INDEX">NIFTY BANK</option>
+                <option value="NSE:NIFTY50-INDEX">NIFTY 50</option>
+                <option value="BSE:SENSEX-INDEX">SENSEX</option>
+                <option value="NSE:FINNIFTY-INDEX">FINNIFTY</option>
+                <option value="NSE:MIDCPNIFTY-INDEX">MIDCPNIFTY</option>
               </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-400 mb-1">Lot Size</label>
+              <input 
+                type="number" 
+                className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                value={config.lot_size || LOT_SIZES[config.symbol] || 35}
+                onChange={e => setConfig({...config, lot_size: parseInt(e.target.value)})}
+              />
             </div>
 
             <div className="grid grid-cols-2 gap-4">
