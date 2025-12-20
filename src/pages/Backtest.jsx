@@ -184,19 +184,19 @@ export default function Backtest() {
                     <div>
                         <label className="block text-xs text-slate-400 mb-1">ATR Period</label>
                         <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                            value={params.atr_period || 10}
+                            value={params.atr_period || 14}
                             onChange={e => setParams({...params, atr_period: e.target.value})} />
                     </div>
                     <div>
                         <label className="block text-xs text-slate-400 mb-1">ATR TP Multiplier</label>
                         <input type="number" step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                            value={params.atr_tp_mult || 4.3}
+                            value={params.atr_tp_mult || 3.5}
                             onChange={e => setParams({...params, atr_tp_mult: e.target.value})} />
                     </div>
                     <div>
                         <label className="block text-xs text-slate-400 mb-1">ATR SL Multiplier</label>
                         <input type="number" step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                            value={params.atr_sl_mult || 1.4}
+                            value={params.atr_sl_mult || 1.8}
                             onChange={e => setParams({...params, atr_sl_mult: e.target.value})} />
                     </div>
                 </div>
@@ -210,13 +210,13 @@ export default function Backtest() {
                     <div>
                         <label className="block text-xs text-slate-400 mb-1">EMA Short</label>
                         <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                            value={params.ema_short || 9}
+                            value={params.ema_short || 5}
                             onChange={e => setParams({...params, ema_short: e.target.value})} />
                     </div>
                     <div>
                         <label className="block text-xs text-slate-400 mb-1">EMA Long</label>
                         <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                            value={params.ema_long || 15}
+                            value={params.ema_long || 7}
                             onChange={e => setParams({...params, ema_long: e.target.value})} />
                     </div>
                 </div>
@@ -244,7 +244,7 @@ export default function Backtest() {
                         <div>
                             <label className="block text-xs text-slate-400 mb-1">ADX Threshold</label>
                             <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                                value={params.adx_threshold || 20}
+                                value={params.adx_threshold || 26}
                                 onChange={e => setParams({...params, adx_threshold: e.target.value})} />
                         </div>
                     )}
@@ -261,19 +261,19 @@ export default function Backtest() {
                              <div>
                                 <label className="block text-xs text-slate-400 mb-1">Period</label>
                                 <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                                    value={params.rsi_period || 15}
+                                    value={params.rsi_period || 14}
                                     onChange={e => setParams({...params, rsi_period: e.target.value})} />
                             </div>
                             <div>
                                 <label className="block text-xs text-slate-400 mb-1">Overbought</label>
                                 <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                                    value={params.rsi_overbought || 77}
+                                    value={params.rsi_overbought || 85}
                                     onChange={e => setParams({...params, rsi_overbought: e.target.value})} />
                             </div>
                             <div>
                                 <label className="block text-xs text-slate-400 mb-1">Oversold</label>
                                 <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                                    value={params.rsi_oversold || 25}
+                                    value={params.rsi_oversold || 24}
                                     onChange={e => setParams({...params, rsi_oversold: e.target.value})} />
                             </div>
                         </div>
