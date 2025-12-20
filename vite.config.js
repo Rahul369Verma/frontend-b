@@ -19,6 +19,9 @@ export default defineConfig({
   server: {
     host: true,              // allow external network access
     port: 5173,
+    watch: {
+      usePolling: true
+    },
     allowedHosts: [
       'wilburn-cuplike-bleatingly.ngrok-free.dev',
       '.ngrok-free.dev',

@@ -297,11 +297,17 @@ export default function Backtest() {
           
           {result ? (
             <div className="space-y-8">
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 <div className="p-4 bg-slate-800 rounded-lg">
                   <p className="text-slate-400 text-sm">Total P&L</p>
                   <p className={`text-xl font-bold ${result.metrics.totalPnL >= 0 ? 'text-green-500' : 'text-red-500'}`}>
                     ₹{result.metrics.totalPnL.toFixed(2)}
+                  </p>
+                </div>
+                <div className="p-4 bg-slate-800 rounded-lg">
+                  <p className="text-slate-400 text-sm">Avg PnL / Trade</p>
+                  <p className={`text-xl font-bold ${result.metrics.avgPnL >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                    ₹{result.metrics.avgPnL}
                   </p>
                 </div>
                 <div className="p-4 bg-slate-800 rounded-lg">
