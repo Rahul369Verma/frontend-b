@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Play } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -6,17 +6,21 @@ import { useGlobalState } from '../context/GlobalContext';
 
 const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
 
-const LOT_SIZES = {
-  "NSE:NIFTYBANK-INDEX": 35,
-  "NSE:NIFTY50-INDEX": 75,
-  "BSE:SENSEX-INDEX": 20,
-  "NSE:FINNIFTY-INDEX": 65,
-  "NSE:MIDCPNIFTY-INDEX": 140
-};
+// LOT_SIZES moved to Backend API
 
 export default function Backtest() {
   const { backtestParams: params, setBacktestParams: setParams, backtestResult: result, setBacktestResult: setResult } = useGlobalState();
   const [loading, setLoading] = useState(false);
+  const [instrumentConfig, setInstrumentConfig] = useState({});
+
+  useEffect(() => {
+      axios.get(`${API_URL}/config/instruments`)
+        .then(res => {
+            setInstrumentConfig(res.data);
+            // Optional: Set default symbol if not set
+        })
+        .catch(err => console.error("Failed to fetch instrument config", err));
+  }, []);
 
   const runBacktest = async () => {
     setLoading(true);
@@ -70,18 +74,32 @@ export default function Backtest() {
                 value={params.symbol}
                 onChange={e => {
                   const newSymbol = e.target.value;
+                  const config = instrumentConfig[newSymbol];
                   setParams({
                     ...params, 
                     symbol: newSymbol,
-                    lot_size: LOT_SIZES[newSymbol] || 15 // Auto-update lot size
+                    lot_size: config ? config.lotSize : 15 
                   });
                 }}
               >
-                <option value="NSE:NIFTYBANK-INDEX">NIFTY BANK</option>
-                <option value="NSE:NIFTY50-INDEX">NIFTY 50</option>
-                <option value="BSE:SENSEX-INDEX">SENSEX</option>
-                <option value="NSE:FINNIFTY-INDEX">FINNIFTY</option>
-                <option value="NSE:MIDCPNIFTY-INDEX">MIDCPNIFTY</option>
+                {/* Dynamic Options from Backend */}
+                {Object.keys(instrumentConfig).length === 0 && <option>Loading...</option>}
+                
+                <optgroup label="Indices">
+                    {Object.entries(instrumentConfig)
+                        .filter(([k, v]) => !k.includes('-EQ'))
+                        .map(([key, config]) => (
+                            <option key={key} value={key}>{config.underlying}</option>
+                        ))}
+                </optgroup>
+
+                <optgroup label="Stocks">
+                    {Object.entries(instrumentConfig)
+                        .filter(([k, v]) => k.includes('-EQ'))
+                        .map(([key, config]) => (
+                            <option key={key} value={key}>{config.underlying}</option>
+                        ))}
+                </optgroup>
               </select>
             </div>
 
@@ -133,11 +151,16 @@ export default function Backtest() {
                             onChange={e => setParams({...params, capital: e.target.value})} />
                     </div>
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1">Lot Size</label>
-                        <input type="number" step="35" min="35" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                            value={params.lot_size || 35}
+                        <label className="block text-xs text-slate-400 mb-1">Lot Size (Total Qty)</label>
+                        <input type="number" 
+                            step={instrumentConfig[params.symbol]?.lotSize || 1} 
+                            min={instrumentConfig[params.symbol]?.lotSize || 1}
+                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                            value={params.lot_size}
                             onChange={e => setParams({...params, lot_size: e.target.value})} />
-                        <span className="text-[10px] text-slate-500">Min: 35 (BankNifty)</span>
+                        <span className="text-[10px] text-slate-500">
+                           Multiple of {instrumentConfig[params.symbol]?.lotSize || '1'}
+                        </span>
                     </div>
                     <div>
                         <label className="block text-xs text-slate-400 mb-1">Max Daily Loss (₹)</label>
