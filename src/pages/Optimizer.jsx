@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Activity, Play, TrendingUp, AlertTriangle, Code } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 import { useGlobalState } from '../context/GlobalContext';
 import { io } from 'socket.io-client';
 
@@ -13,8 +12,7 @@ const LOT_SIZES = {
 };
 
 export default function Optimizer() {
-  const navigate = useNavigate();
-  const { optimizerParams: config, setOptimizerParams: setConfig, optimizerResult: results, setOptimizerResult: setResults, setBacktestParams } = useGlobalState();
+  const { optimizerParams: config, setOptimizerParams: setConfig, optimizerResult: results, setOptimizerResult: setResults } = useGlobalState();
 
   const [running, setRunning] = useState(false);
   const [error, setError] = useState(null);
@@ -74,7 +72,10 @@ export default function Optimizer() {
     }
   };
 
-  // ... handleRowClick ...
+  const handleRowClick = (result) => {
+      setSelectedResult(result);
+  };
+
 
   return (
     <div className="p-8 space-y-8">
@@ -209,6 +210,18 @@ export default function Optimizer() {
                     value={config.minSharpeRatio !== undefined ? config.minSharpeRatio : 0.4}
                     onChange={e => setConfig({...config, minSharpeRatio: parseFloat(e.target.value)})}
                   />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-1">Slippage (%)</label>
+                    <input type="number" step="0.01" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                        value={config.slippage_percent !== undefined ? config.slippage_percent : 0.05}
+                        onChange={e => setConfig({...config, slippage_percent: e.target.value})} />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-1">Brokerage (₹)</label>
+                    <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                        value={config.brokerage_per_order !== undefined ? config.brokerage_per_order : 20}
+                        onChange={e => setConfig({...config, brokerage_per_order: e.target.value})} />
                 </div>
             </div>
 

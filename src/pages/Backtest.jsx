@@ -186,6 +186,19 @@ export default function Backtest() {
                             value={params.trade_end_time || "15:00"}
                             onChange={e => setParams({...params, trade_end_time: e.target.value})} />
                     </div>
+                    {/* Execution Friction */}
+                    <div>
+                        <label className="block text-xs text-slate-400 mb-1">Slippage (%)</label>
+                        <input type="number" step="0.01" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                            value={params.slippage_percent || 0.05}
+                            onChange={e => setParams({...params, slippage_percent: e.target.value})} />
+                    </div>
+                    <div>
+                        <label className="block text-xs text-slate-400 mb-1">Brokerage/Order (₹)</label>
+                        <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                            value={params.brokerage_per_order || 20}
+                            onChange={e => setParams({...params, brokerage_per_order: e.target.value})} />
+                    </div>
                 </div>
             </div>
 
