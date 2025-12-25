@@ -135,18 +135,45 @@ export default function Dashboard() {
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-bold text-white">Live Dashboard</h1>
             <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-              status.mode === 'live' 
+              (status.mode === 'LIVE' || status.mode === 'live') 
                 ? 'bg-red-500/20 text-red-400 border border-red-500/50' 
                 : 'bg-blue-500/20 text-blue-400 border border-blue-500/50'
             }`}>
-              {status.mode === 'live' ? '🔴 LIVE TRADING' : '📝 PAPER TRADING'}
+              {(status.mode === 'LIVE' || status.mode === 'live') ? '🔴 LIVE TRADING' : '📝 PAPER TRADING'}
             </span>
           </div>
           <p className="text-slate-400 mt-1">
             {status.active_strategy} • {status.fyers_connected ? '🟢 Fyers Connected' : '🔴 Fyers Disconnected'}
           </p>
+          
+          {/* Resource Monitor Widget */}
+          {status.system_metrics && (
+              <div className="mt-2 flex items-center gap-4 text-xs font-mono bg-slate-800/50 p-2 rounded border border-slate-700 w-fit">
+                  <div className="flex items-center gap-2">
+                       <span className="text-slate-400">RAM:</span>
+                       <div className="w-24 h-2 bg-slate-700 rounded-full overflow-hidden">
+                           <div 
+                                className={`h-full transition-all duration-500 ${
+                                    status.system_metrics.ram_used > 400 ? 'bg-red-500' : 
+                                    status.system_metrics.ram_used > 300 ? 'bg-yellow-500' : 'bg-green-500'
+                                }`} 
+                                style={{ width: `${Math.min(100, (status.system_metrics.ram_used / status.system_metrics.ram_total) * 100)}%` }}
+                           />
+                       </div>
+                       <span className={`${status.system_metrics.ram_used > 300 ? 'text-yellow-400' : 'text-slate-300'}`}>
+                           {status.system_metrics.ram_used}MB
+                        </span>
+                  </div>
+                  <div className="w-px h-3 bg-slate-600"></div>
+                  <div className="flex items-center gap-2">
+                       <span className="text-slate-400">CPU:</span>
+                       <span className="text-slate-300">{status.system_metrics.cpu_load}</span>
+                  </div>
+              </div>
+          )}
         </div>
-        <button
+        {/* Button Removed - Controlled via Telegram */
+       /* <button
           onClick={toggleBot}
           disabled={loading}
           className={`flex items-center gap-2 px-6 py-3 rounded-lg font-bold transition-all ${
@@ -156,7 +183,7 @@ export default function Dashboard() {
           }`}
         >
           {loading ? <span className="animate-spin">⌛</span> : status.is_running ? <><Square className="w-5 h-5 fill-current" /> Stop Bot</> : <><Play className="w-5 h-5 fill-current" /> Start Bot</>}
-        </button>
+        </button> */}
       </div>
 
       {/* Active Strategy Configuration */}
