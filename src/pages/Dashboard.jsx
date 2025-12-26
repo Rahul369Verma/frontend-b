@@ -452,7 +452,7 @@ export default function Dashboard() {
                         {mongoTrades.map((trade, i) => (
                             <tr key={i} className="border-b border-slate-800 hover:bg-slate-800/50">
                                 <td className="p-3 text-slate-300">{new Date(trade.timestamp).toLocaleString()}</td>
-                                <td className="p-3 font-medium text-white">{trade.tradingsymbol}</td>
+                                <td className="p-3 font-medium text-white">{trade.tradingsymbol || trade.symbol}</td>
                                 <td className={`p-3 font-bold ${trade.action === 'BUY' ? 'text-green-500' : 'text-red-500'}`}>{trade.action}</td>
                                 <td className="p-3 text-slate-300">{trade.quantity}</td>
                                 <td className="p-3 text-slate-300">₹{trade.price}</td>
