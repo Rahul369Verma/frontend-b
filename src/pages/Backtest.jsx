@@ -87,7 +87,15 @@ export default function Backtest() {
                 
                 <optgroup label="Indices">
                     {Object.entries(instrumentConfig)
-                        .filter(([k, v]) => !k.includes('-EQ'))
+                        .filter(([k, v]) => !k.includes('-EQ') && !k.startsWith('MCX:'))
+                        .map(([key, config]) => (
+                            <option key={key} value={key}>{config.underlying}</option>
+                        ))}
+                </optgroup>
+
+                <optgroup label="Commodities (MCX)">
+                    {Object.entries(instrumentConfig)
+                        .filter(([k, v]) => k.startsWith('MCX:'))
                         .map(([key, config]) => (
                             <option key={key} value={key}>{config.underlying}</option>
                         ))}

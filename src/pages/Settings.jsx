@@ -45,7 +45,12 @@ export default function Settings() {
       // In a real app, we'd fetch this from backend. 
       // For now, we'll mock or fetch status.
       const res = await axios.get(`${API_URL}/engine/status`);
-      setConfig(res.data);
+      const data = res.data;
+      // Flatten strategy_params for easier access
+      if (data.strategy_params) {
+        Object.assign(data, data.strategy_params);
+      }
+      setConfig(data);
     } catch (err) {
       console.error("Failed to fetch config", err);
       setMessage({ type: 'error', text: 'Failed to load settings. Backend might be down.' });
@@ -220,6 +225,45 @@ export default function Settings() {
                       {config?.angel_connected ? 'Connected' : 'Disconnected'}
                     </span>
                   </div>
+                </div>
+              </div>
+
+              <hr className="border-slate-700" />
+
+              {/* MCX Section */}
+              <div className="space-y-4">
+                <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                  <div className="w-2 h-8 bg-yellow-500 rounded-full"></div>
+                  Commodities (MCX)
+                </h3>
+                <div className="p-4 bg-slate-900/50 rounded-lg border border-slate-700 flex items-center justify-between">
+                  <div>
+                    <h4 className="text-white font-medium">Enable MCX Trading</h4>
+                    <p className="text-sm text-slate-400">Allow the bot to trade Gold, Silver, and Crude Oil Futures.</p>
+                  </div>
+                  
+                  <button 
+                    onClick={async () => {
+                      try {
+                        const newValue = !config?.mcx_enabled;
+                        await axios.post(`${API_URL}/settings`, { mcx_enabled: newValue }); // Fixed endpoint
+                        setConfig(prev => ({ ...prev, mcx_enabled: newValue }));
+                        setMessage({ type: 'success', text: `MCX Trading ${newValue ? 'Enabled' : 'Disabled'}` });
+                      } catch (err) {
+                        console.error("MCX Toggle Error:", err);
+                        setMessage({ type: 'error', text: 'Failed to update setting' });
+                      }
+                    }}
+                    className={`relative w-14 h-7 rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${
+                      config?.mcx_enabled ? 'bg-green-500' : 'bg-slate-700'
+                    }`}
+                  >
+                    <span
+                      className={`block w-5 h-5 bg-white rounded-full shadow transform transition-transform duration-200 ease-in-out ${
+                        config?.mcx_enabled ? 'translate-x-8' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
                 </div>
               </div>
             </div>
