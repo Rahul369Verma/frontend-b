@@ -3,12 +3,14 @@ import React, { createContext, useContext, useState } from 'react';
 const GlobalContext = createContext();
 
 export function GlobalProvider({ children }) {
+  const today = new Date().toISOString().split('T')[0];
+  
   // Backtest State
   const [backtestParams, setBacktestParams] = useState({
     strategy: 'mta_ema_crossover',
     symbol: 'BANKNIFTY',
     start_date: '2025-01-01',
-    end_date: '2025-12-17',
+    end_date: today,
     interval: '5',
     capital: 30000,
     // Initial defaults (synced with backend on load)
@@ -59,7 +61,7 @@ export function GlobalProvider({ children }) {
     symbol: 'NSE:NIFTYBANK-INDEX',
     lot_size: 35,
     start_date: '2025-01-01',
-    end_date: '2025-12-17',
+    end_date: today,
     capital: 30000,
     iterations: 10,
     strategy: 'mta_ema_crossover',
