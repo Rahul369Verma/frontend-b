@@ -427,12 +427,12 @@ export default function Backtest() {
                           <td className={`px-4 py-3 font-bold ${trade.type === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
                             {trade.type}
                           </td>
-                          <td className="px-4 py-3">{trade.entryPrice.toFixed(2)}</td>
-                          <td className="px-4 py-3">₹{trade.invested_amount ? trade.invested_amount.toFixed(2) : '-'}</td>
+                          <td className="px-4 py-3">{trade.entryPrice != null ? trade.entryPrice.toFixed(2) : '-'}</td>
+                          <td className="px-4 py-3">₹{trade.invested_amount != null ? trade.invested_amount.toFixed(2) : '-'}</td>
                           <td className="px-4 py-3">{new Date(trade.exitTime).toLocaleString()}</td>
-                          <td className="px-4 py-3">{trade.exitPrice.toFixed(2)}</td>
+                          <td className="px-4 py-3">{trade.exitPrice != null ? trade.exitPrice.toFixed(2) : '-'}</td>
                           <td className={`px-4 py-3 font-bold ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                            {trade.pnl.toFixed(2)}
+                            {trade.pnl != null ? trade.pnl.toFixed(2) : '-'}
                           </td>
                           <td className="px-4 py-3 text-slate-400">{trade.reason}</td>
                         </tr>
