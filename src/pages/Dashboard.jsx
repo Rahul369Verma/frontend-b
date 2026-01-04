@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Play, Square, Activity, DollarSign, TrendingUp, AlertTriangle, Shield, ShoppingCart, List, Database } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { io } from 'socket.io-client';
 
@@ -30,7 +31,29 @@ export default function Dashboard() {
   const [positions, setPositions] = useState([]);
   const [optionChain, setOptionChain] = useState([]);
   const [mongoTrades, setMongoTrades] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [globalConfig, setGlobalConfig] = useState(null);
+  const [symbolConfig, setSymbolConfig] = useState({});
+  const [activeConfig, setActiveConfig] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const navigate = useNavigate();
+
+  const handleTestClick = (symbol, config) => {
+      // Prepare state for Backtester
+      const stateToPass = {
+          symbol: symbol,
+          strategy: config.strategyName,
+          params: { ...config } // Pass all params from the card
+      };
+      
+      // Remove internal keys if present
+      delete stateToPass.params.strategyName;
+      delete stateToPass.params._id;
+      delete stateToPass.params.__v;
+      delete stateToPass.params.updatedAt;
+
+      navigate('/backtest', { state: stateToPass });
+  };
 
   const fetchData = async () => {
     try {
@@ -45,6 +68,10 @@ export default function Dashboard() {
           setPositions(data.positions || []);
           setOptionChain(data.optionChain || []);
           setMongoTrades(data.mongoTrades || []);
+          // New Config Data
+          setGlobalConfig(data.config?.globalSettings || {});
+          setSymbolConfig(data.config?.symbolConfigs || {});
+          setActiveConfig(data.config?.activeParams || {});
       }
     } catch (err) {
       console.error("Failed to fetch dashboard data", err);
@@ -91,6 +118,9 @@ export default function Dashboard() {
             setPositions(data.positions || []);
             setOptionChain(data.optionChain || []);
             setMongoTrades(data.mongoTrades || []);
+            setGlobalConfig(data.config?.globalSettings || {});
+            setSymbolConfig(data.config?.symbolConfigs || {});
+            setActiveConfig(data.config?.activeParams || {});
         }
     });
 
@@ -186,41 +216,100 @@ export default function Dashboard() {
         </button> */}
       </div>
 
-      {/* Active Strategy Configuration */}
-      <div className="bg-surface p-6 rounded-xl border border-slate-700">
-        <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-            <Activity className="w-5 h-5 text-primary" /> Active Strategy Configuration
-        </h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            <div className="p-3 bg-slate-800 rounded-lg">
-                <p className="text-slate-400 text-xs">EMA Short/Long</p>
-                <p className="text-lg font-bold text-white">{status.strategy_params?.ema_short} / {status.strategy_params?.ema_long}</p>
-            </div>
-            <div className="p-3 bg-slate-800 rounded-lg">
-                <p className="text-slate-400 text-xs">ADX Filter</p>
-                <p className={`text-lg font-bold ${status.strategy_params?.use_adx_filter ? 'text-green-400' : 'text-slate-500'}`}>
-                    {status.strategy_params?.use_adx_filter ? `> ${status.strategy_params?.adx_threshold}` : 'OFF'}
-                </p>
-            </div>
-            <div className="p-3 bg-slate-800 rounded-lg">
-                <p className="text-slate-400 text-xs">RSI Range</p>
-                <p className={`text-lg font-bold ${status.strategy_params?.use_rsi_filter ? 'text-purple-400' : 'text-slate-500'}`}>
-                    {status.strategy_params?.use_rsi_filter ? `${status.strategy_params?.rsi_oversold} - ${status.strategy_params?.rsi_overbought}` : 'OFF'}
-                </p>
-            </div>
-             <div className="p-3 bg-slate-800 rounded-lg">
-                <p className="text-slate-400 text-xs">ATR TP/SL</p>
-                <p className="text-lg font-bold text-white">{status.strategy_params?.atr_tp_mult}x / {status.strategy_params?.atr_sl_mult}x</p>
-            </div>
-            <div className="p-3 bg-slate-800 rounded-lg">
-                <p className="text-slate-400 text-xs">Trading Window</p>
-                <p className="text-lg font-bold text-white">{status.strategy_params?.trade_start_time} - {status.strategy_params?.trade_end_time}</p>
-            </div>
-             <div className="p-3 bg-slate-800 rounded-lg">
-                <p className="text-slate-400 text-xs">Risk (Loss/Trades)</p>
-                <p className="text-lg font-bold text-red-400">₹{status.strategy_params?.max_daily_loss} / {status.strategy_params?.max_trades_per_day}</p>
-            </div>
-        </div>
+      {/* Global & Symbol Configuration */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Global Defaults */}
+          <div className="bg-surface p-6 rounded-xl border border-slate-700 space-y-4">
+               <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+                    <Shield className="w-5 h-5 text-primary" /> Global Defaults
+                </h3>
+                <div className="space-y-3">
+                    <div className="flex justify-between p-3 bg-slate-800 rounded">
+                        <span className="text-slate-400">Trading Window</span>
+                        <span className="font-bold text-white">{globalConfig?.trade_start_time || "09:15"} - {globalConfig?.trade_end_time || "15:30"}</span>
+                    </div>
+                     <div className="flex justify-between p-3 bg-slate-800 rounded">
+                        <span className="text-slate-400">Max Daily Loss</span>
+                        <span className="font-bold text-red-400">₹{globalConfig?.max_daily_loss || 2000}</span>
+                    </div>
+                     <div className="flex justify-between p-3 bg-slate-800 rounded">
+                        <span className="text-slate-400">Max Trades/Day</span>
+                        <span className="font-bold text-white">{globalConfig?.max_trades_per_day || 5}</span>
+                    </div>
+                     <div className="flex justify-between p-3 bg-slate-800 rounded">
+                        <span className="text-slate-400">Kill Switch</span>
+                        <span className={`font-bold ${globalConfig?.kill_switch ? 'text-red-500' : 'text-green-500'}`}>
+                            {globalConfig?.kill_switch ? 'ENGAGED' : 'OFF'}
+                        </span>
+                    </div>
+                </div>
+          </div>
+
+          {/* Symbol Strategies - DETAILED VIEW */}
+          <div className="lg:col-span-2 bg-surface p-6 rounded-xl border border-slate-700">
+               <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+                    <Activity className="w-5 h-5 text-primary" /> Active Strategy Configuration (Full Details)
+                </h3>
+                
+                <div className="space-y-6">
+                    {/* Iterate over activeParams which has the FULL merged config */}
+                    {Object.entries(activeConfig || {}).map(([symbol, params]) => {
+                        return (
+                            <div key={symbol} className="bg-slate-800 rounded-lg border border-slate-600 overflow-hidden">
+                                {/* Header */}
+                                <div className="p-4 bg-slate-700/50 border-b border-slate-600 flex justify-between items-center">
+                                    <div className="flex justify-between items-center w-full">
+                                        <h4 className="font-bold text-lg text-white/90">{symbol}</h4>
+                                        <div className="flex gap-2 items-center">
+                                            <button
+                                                onClick={() => handleTestClick(symbol, params)}
+                                                className="px-3 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded text-xs transition-colors flex items-center gap-1"
+                                                title="Test this config in Backtester"
+                                            >
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                                                Test
+                                            </button>
+                                            <span className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-gray-400">
+                                                {params.strategyName || 'Legacy Strategy'}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                {/* Key-Value Grid */}
+                                <div className="p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                                     {Object.entries(params).map(([key, val]) => {
+                                         if (key === 'strategyName') return null; // Already in header
+                                         
+                                         // Formatting Value
+                                         let displayVal = val;
+                                         if (typeof val === 'boolean') displayVal = val ? 'TRUE' : 'FALSE';
+                                         if (typeof val === 'object') displayVal = JSON.stringify(val);
+
+                                         // Highlight important keys
+                                         const isKey = ['lots', 'capital', 'max_daily_loss'].includes(key);
+                                         
+                                         return (
+                                             <div key={key} className="overflow-hidden">
+                                                 <p className="text-slate-500 text-[10px] uppercase font-bold tracking-wider mb-0.5">{key.replace(/_/g, ' ')}</p>
+                                                 <p className={`font-mono text-sm truncate ${isKey ? 'text-white font-bold' : 'text-slate-300'} ${typeof val === 'boolean' ? (val ? 'text-green-400' : 'text-red-400') : ''}`} title={String(displayVal)}>
+                                                     {String(displayVal)}
+                                                 </p>
+                                             </div>
+                                         )
+                                     })}
+                                </div>
+                            </div>
+                        )
+                    })}
+                     
+                     {(!activeConfig || Object.keys(activeConfig).length === 0) && (
+                         <div className="text-slate-500 text-sm italic p-4 text-center">
+                             Waiting for bot engine to report active configurations...
+                         </div>
+                     )}
+                </div>
+          </div>
       </div>
 
       {/* Live Market Data Section */}

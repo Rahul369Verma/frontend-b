@@ -1,18 +1,20 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Activity, Play, TrendingUp, AlertTriangle, Code } from 'lucide-react';
 import { useGlobalState } from '../context/GlobalContext';
 import { io } from 'socket.io-client';
 
-const LOT_SIZES = {
-  "NSE:NIFTYBANK-INDEX": 35,
-  "NSE:NIFTY50-INDEX": 75,
-  "BSE:SENSEX-INDEX": 20,
-  "NSE:FINNIFTY-INDEX": 65,
-  "NSE:MIDCPNIFTY-INDEX": 140
-};
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 export default function Optimizer() {
-  const { optimizerParams: config, setOptimizerParams: setConfig, optimizerResult: results, setOptimizerResult: setResults } = useGlobalState();
+  const navigate = useNavigate();
+  const { 
+    optimizerParams: config, 
+    setOptimizerParams: setConfig, 
+    optimizerResult: results, 
+    setOptimizerResult: setResults,
+    setBacktestParams
+  } = useGlobalState();
 
   const [running, setRunning] = useState(false);
   const [error, setError] = useState(null);
@@ -20,12 +22,27 @@ export default function Optimizer() {
   const [progress, setProgress] = useState({ current: 0, total: 0, matches: 0 });
   const [stopOnMatch, setStopOnMatch] = useState(false);
 
+  const [strategyDefaults, setStrategyDefaults] = useState({});
+  const [instrumentConfig, setInstrumentConfig] = useState({});
+
   React.useEffect(() => {
-    const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:5000');
+    const socket = io(API_URL);
     
     socket.on('optimization_progress', (data) => {
         setProgress(data);
     });
+
+    // Fetch strategy defaults
+    fetch(`${API_URL}/api/config/strategies/defaults`)
+        .then(res => res.json())
+        .then(data => setStrategyDefaults(data))
+        .catch(err => console.error("Failed to fetch strategy defaults", err));
+
+    // Fetch Instruments
+    fetch(`${API_URL}/api/config/instruments`)
+        .then(res => res.json())
+        .then(data => setInstrumentConfig(data))
+        .catch(err => console.error("Failed to fetch instruments", err));
 
     return () => socket.disconnect();
   }, []);
@@ -38,7 +55,7 @@ export default function Optimizer() {
     setProgress({ current: 0, total: config.iterations, matches: 0 });
     
     try {
-        const response = await fetch(`${import.meta.env.VITE_API_URL}/api/engine/optimizer/analyze`, {
+        const response = await fetch(`${API_URL}/api/engine/optimizer/analyze`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -76,6 +93,53 @@ export default function Optimizer() {
       setSelectedResult(result);
   };
 
+  const handleTestClick = (result) => {
+    // 1. Prepare parameters for Backtester
+    const newBacktestParams = {
+        // Universal params from optimizer config
+        symbol: config.symbol,
+        lot_size: config.lot_size || 35,
+        start_date: config.start_date,
+        end_date: config.end_date,
+        capital: config.capital,
+        strategy: config.strategy,
+        
+        slippage_percent: config.slippage_percent || 0.05,
+        brokerage_per_order: config.brokerage_per_order || 20,
+        use_ai_prediction: config.use_ai_prediction || false,
+
+        // Strategy-specific optimized params
+        ...result.params
+    };
+
+    // 2. Set global state for Backtest.jsx
+    setBacktestParams(newBacktestParams);
+
+    // 3. Optional: Clear old backtest result so user sees they need to run it or it auto-runs?
+    // Let's just navigate first.
+
+    // 4. Navigate to Backtest page
+    navigate('/backtest');
+  };
+
+
+  const handleStrategyChange = (e) => {
+    const newStrategy = e.target.value;
+    
+    // Fetch Best Defaults
+    fetch(`${API_URL}/api/engine/defaults?strategy=${newStrategy}`)
+        .then(res => res.json())
+        .then(data => {
+            const newConfig = { ...config, strategy: newStrategy };
+            Object.keys(data).forEach(key => {
+                newConfig[key] = data[key];
+            });
+            setConfig(newConfig);
+        })
+        .catch(err => console.error("Failed to load strategy defaults:", err));
+      
+      setConfig({...config, strategy: newStrategy});
+  };
 
   return (
     <div className="p-8 space-y-8">
@@ -93,8 +157,18 @@ export default function Optimizer() {
             {/* ... Existing Inputs ... */}
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1">Strategy</label>
-              <select className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white">
+              <select 
+                className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                value={config.strategy || 'mta_ema_crossover'}
+                onChange={handleStrategyChange}
+              >
                 <option value="mta_ema_crossover">MTA EMA Crossover</option>
+                <option value="vwap_momentum">VWAP Momentum Scalper</option>
+                <option value="bb_reversion">Bollinger Band Reversion</option>
+                <option value="inside_bar">Inside Bar Breakout</option>
+                <option value="orb_breakout">Open Range Breakout (ORB)</option>
+                <option value="supertrend_adx">SuperTrend + ADX Filter</option>
+                <option value="universal">Universal / Discovery Mode (Random AI)</option>
               </select>
             </div>
 
@@ -105,18 +179,40 @@ export default function Optimizer() {
                 value={config.symbol}
                 onChange={e => {
                     const newSymbol = e.target.value;
+                    const result = instrumentConfig[newSymbol];
                     setConfig({
                         ...config, 
                         symbol: newSymbol,
-                        lot_size: LOT_SIZES[newSymbol] || 15
+                        lot_size: result ? result.lotSize : 15
                     });
                 }}
               >
-                <option value="NSE:NIFTYBANK-INDEX">NIFTY BANK</option>
-                <option value="NSE:NIFTY50-INDEX">NIFTY 50</option>
-                <option value="BSE:SENSEX-INDEX">SENSEX</option>
-                <option value="NSE:FINNIFTY-INDEX">FINNIFTY</option>
-                <option value="NSE:MIDCPNIFTY-INDEX">MIDCPNIFTY</option>
+                {/* Dynamic Options from Backend */}
+                {Object.keys(instrumentConfig).length === 0 && <option>Loading...</option>}
+                
+                <optgroup label="Indices">
+                    {Object.entries(instrumentConfig)
+                        .filter(([k]) => !k.includes('-EQ') && !k.startsWith('MCX:'))
+                        .map(([key, config]) => (
+                            <option key={key} value={key}>{config.underlying}</option>
+                        ))}
+                </optgroup>
+
+                <optgroup label="Commodities (MCX)">
+                    {Object.entries(instrumentConfig)
+                        .filter(([k]) => k.startsWith('MCX:'))
+                        .map(([key, config]) => (
+                            <option key={key} value={key}>{config.underlying}</option>
+                        ))}
+                </optgroup>
+
+                <optgroup label="Stocks">
+                    {Object.entries(instrumentConfig)
+                        .filter(([k]) => k.includes('-EQ'))
+                        .map(([key, config]) => (
+                            <option key={key} value={key}>{config.underlying}</option>
+                        ))}
+                </optgroup>
               </select>
             </div>
 
@@ -125,8 +221,8 @@ export default function Optimizer() {
               <input 
                 type="number" 
                 className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
-                value={config.lot_size || LOT_SIZES[config.symbol] || 35}
-                onChange={e => setConfig({...config, lot_size: parseInt(e.target.value)})}
+                value={config.lot_size || ''}
+                onChange={e => setConfig({...config, lot_size: e.target.value === '' ? '' : parseInt(e.target.value)})}
               />
             </div>
 
@@ -156,8 +252,8 @@ export default function Optimizer() {
               <input 
                 type="number" 
                 className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
-                value={config.capital}
-                onChange={e => setConfig({...config, capital: parseInt(e.target.value)})}
+                value={config.capital || ''}
+                onChange={e => setConfig({...config, capital: e.target.value === '' ? '' : parseInt(e.target.value)})}
               />
             </div>
 
@@ -166,8 +262,8 @@ export default function Optimizer() {
               <input 
                 type="number" 
                 className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
-                value={config.iterations}
-                onChange={e => setConfig({...config, iterations: parseInt(e.target.value)})}
+                value={config.iterations || ''}
+                onChange={e => setConfig({...config, iterations: e.target.value === '' ? '' : parseInt(e.target.value)})}
               />
             </div>
 
@@ -177,8 +273,8 @@ export default function Optimizer() {
                   <input 
                     type="number" 
                     className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
-                    value={config.minTrades}
-                    onChange={e => setConfig({...config, minTrades: parseInt(e.target.value)})}
+                    value={config.minTrades || ''}
+                    onChange={e => setConfig({...config, minTrades: e.target.value === '' ? '' : parseInt(e.target.value)})}
                   />
                 </div>
 
@@ -187,8 +283,8 @@ export default function Optimizer() {
                   <input 
                     type="number" 
                     className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
-                    value={config.minWinRate}
-                    onChange={e => setConfig({...config, minWinRate: parseInt(e.target.value)})}
+                    value={config.minWinRate || ''}
+                    onChange={e => setConfig({...config, minWinRate: e.target.value === '' ? '' : parseInt(e.target.value)})}
                   />
                 </div>
 
@@ -197,8 +293,8 @@ export default function Optimizer() {
                   <input 
                     type="number" 
                     className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
-                    value={config.maxDrawdown || 20}
-                    onChange={e => setConfig({...config, maxDrawdown: parseInt(e.target.value)})}
+                    value={config.maxDrawdown || ''}
+                    onChange={e => setConfig({...config, maxDrawdown: e.target.value === '' ? '' : parseInt(e.target.value)})}
                   />
                 </div>
                 <div>
@@ -207,8 +303,8 @@ export default function Optimizer() {
                     type="number" 
                     step="0.1"
                     className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
-                    value={config.minSharpeRatio !== undefined ? config.minSharpeRatio : 0.4}
-                    onChange={e => setConfig({...config, minSharpeRatio: parseFloat(e.target.value)})}
+                    value={config.minSharpeRatio !== undefined ? config.minSharpeRatio : ''}
+                    onChange={e => setConfig({...config, minSharpeRatio: e.target.value === '' ? '' : parseFloat(e.target.value)})}
                   />
                 </div>
                 <div>
@@ -224,6 +320,8 @@ export default function Optimizer() {
                         onChange={e => setConfig({...config, brokerage_per_order: e.target.value})} />
                 </div>
             </div>
+
+            {/* AI Exits is now randomized in backend */}
 
             <div className="flex items-center gap-3 p-3 bg-slate-800 rounded-lg border border-slate-700">
                 <div 
@@ -298,8 +396,13 @@ export default function Optimizer() {
                                 <th className="p-3">Total PnL</th>
                                 <th className="p-3">Trades</th>
                                 <th className="p-3">Max DD</th>
-                                <th className="p-3">Sharpe</th> {/* Added Sharpe column header */}
-                                <th className="p-3">EMA (S/L)</th>
+                                <th className="p-3">Sharpe</th>
+                                {/* Dynamic Parameter Columns */}
+                                {Object.keys(strategyDefaults[config.strategy] || {}).map(key => {
+                                    if (['resolution', 'lots', 'trade_start_time', 'trade_end_time', 'max_daily_loss', 'max_trades_per_day', 'max_slippage_percent'].includes(key)) return null;
+                                    const label = key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+                                    return <th key={key} className="p-3">{label}</th>;
+                                })}
                                 <th className="p-3">Filters</th>
                                 <th className="p-3">Action</th>
                             </tr>
@@ -317,14 +420,29 @@ export default function Optimizer() {
                                     <td className="p-3">{res.metrics.totalTrades}</td>
                                     <td className="p-3 text-red-400">{res.metrics.maxDrawdown}%</td>
                                     <td className="p-3 text-blue-400">{res.metrics.sharpeRatio}</td>
-                                    <td className="p-3">{res.params.ema_short} / {res.params.ema_long}</td>
+                                    
+                                    {/* Dynamic Parameter Values */}
+                                    {Object.keys(strategyDefaults[config.strategy] || {}).map(key => {
+                                        if (['resolution', 'lots', 'trade_start_time', 'trade_end_time', 'max_daily_loss', 'max_trades_per_day', 'max_slippage_percent'].includes(key)) return null;
+                                        const val = res.params[key];
+                                        return <td key={key} className="p-3">{typeof val === 'boolean' ? (val ? 'Yes' : 'No') : val}</td>;
+                                    })}
+
                                     <td className="p-3 text-xs text-slate-400">
                                         {res.params.use_adx_filter && <span className="mr-1 bg-blue-900/30 px-1 rounded">ADX</span>}
                                         {res.params.use_rsi_filter && <span className="mr-1 bg-purple-900/30 px-1 rounded">RSI</span>}
                                         {res.params.use_1h_filter && <span className="bg-orange-900/30 px-1 rounded">1H</span>}
+                                        {res.params.trend_filter && <span className="bg-green-900/30 px-1 rounded">Trend</span>}
+                                        {res.params.use_ai_prediction && <span className="ml-1 bg-teal-900/30 text-teal-400 px-1 rounded border border-teal-900/50">Smart AI</span>}
                                     </td>
                                     <td className="p-3 flex gap-2">
-                                        <button className="text-xs bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-white">
+                                        <button 
+                                            className="text-xs bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-white"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleTestClick(res);
+                                            }}
+                                        >
                                             Test
                                         </button>
                                         <button 
