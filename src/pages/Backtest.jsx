@@ -93,7 +93,7 @@ export default function Backtest() {
     });
 
     try {
-        const res = await axios.post(`${API_URL}/config/strategies/defaults`, {
+        await axios.post(`${API_URL}/config/strategies/defaults`, {
             strategy: params.strategy,
             params: strategyParams
         });
@@ -389,6 +389,18 @@ export default function Backtest() {
                     >
                         <option value="Simulated Premium">Simulated Premium (Fast & Approx - 0.5 Delta)</option>
                         <option value="Real Option Data">Real Option Data (Slow & Accurate)</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-1">Data Source (Indices)</label>
+                    <select 
+                        className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                        value={params.dataSource || 'AUTO'}
+                        onChange={e => setParams({...params, dataSource: e.target.value})}
+                    >
+                        <option value="AUTO">Auto (Smart Switch)</option>
+                        <option value="FUT">Future Data (Forced)</option>
+                        <option value="SPOT">Spot Data (Forced)</option>
                     </select>
                 </div>
             </div>
