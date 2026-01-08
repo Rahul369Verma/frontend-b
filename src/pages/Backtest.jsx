@@ -682,6 +682,8 @@ export default function Backtest() {
                       <tr>
                         <th className="px-4 py-3 bg-slate-800">Entry Time</th>
                         <th className="px-4 py-3 bg-slate-800">Symbol</th>
+                        <th className="px-4 py-3 bg-slate-800">Volume</th>
+                        <th className="px-4 py-3 bg-slate-800">Avg Vol</th>
                         <th className="px-4 py-3 bg-slate-800">Type</th>
                         <th className="px-4 py-3 bg-slate-800">Price</th>
                         <th className="px-4 py-3 bg-slate-800">Invested</th>
@@ -696,6 +698,8 @@ export default function Backtest() {
                         <tr key={idx} className="border-b border-slate-700 hover:bg-slate-700/30">
                           <td className="px-4 py-3">{new Date(trade.entryTime).toLocaleString()}</td>
                           <td className="px-4 py-3 font-mono text-xs">{trade.option_symbol || '-'}</td>
+                          <td className="px-4 py-3">{trade.volume || '-'}</td>
+                          <td className="px-4 py-3">{trade.avg_volume ? Math.round(trade.avg_volume) : '-'}</td>
                           <td className={`px-4 py-3 font-bold ${trade.type === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
                             {trade.type}
                           </td>
