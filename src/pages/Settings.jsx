@@ -141,6 +141,39 @@ export default function Settings() {
         <div className="p-8">
           {activeTab === 'api' && (
             <div className="space-y-8">
+              {/* General Configuration */}
+              <div className="space-y-4">
+                <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                   <div className="w-2 h-8 bg-purple-500 rounded-full"></div>
+                   General Configuration
+                </h3>
+                <div className="p-4 bg-slate-900/50 rounded-lg border border-slate-700 flex items-center justify-between">
+                     <div>
+                        <h4 className="text-white font-medium">Live Data Source</h4>
+                        <p className="text-sm text-slate-400">Select the price source for analysis (Spot vs Futures).</p>
+                     </div>
+                     <select 
+                        value={config?.dataSource || 'SPOT'}
+                        onChange={async (e) => {
+                             try {
+                                 const newVal = e.target.value;
+                                 await axios.post(`${API_URL}/settings`, { dataSource: newVal }); // Ensure /settings endpoint handles partial updates
+                                 setConfig(prev => ({ ...prev, dataSource: newVal }));
+                                 setMessage({ type: 'success', text: `Data Source set to ${newVal}` });
+                             } catch(err) {
+                                 setMessage({ type: 'error', text: 'Failed to update Data Source' });
+                             }
+                        }}
+                        className="bg-slate-800 text-white border border-slate-600 rounded px-3 py-2 focus:outline-none focus:border-primary"
+                     >
+                        <option value="SPOT">Spot Price (Index)</option>
+                        <option value="FUTURES">Futures Price (Current Month)</option>
+                     </select>
+                </div>
+              </div>
+
+              <hr className="border-slate-700" />
+
               {/* Fyers Section */}
               <div className="space-y-4">
                 <h3 className="text-xl font-bold text-white flex items-center gap-2">

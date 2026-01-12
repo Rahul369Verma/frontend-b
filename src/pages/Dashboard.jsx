@@ -146,10 +146,10 @@ export default function Dashboard() {
     }
   };
 
-  const manualTrade = async (type) => {
-    if (!window.confirm(`Execute Manual ${type} Trade?`)) return;
+  const manualTrade = async (type, symbol) => {
+    if (!window.confirm(`Execute Manual ${type} Trade for ${symbol || 'Default'}?`)) return;
     try {
-        await axios.post(`${API_URL}/engine/manual-trade`, { type });
+        await axios.post(`${API_URL}/engine/manual-trade`, { type, symbol });
         alert(`${type} Trade Executed!`);
         fetchData();
     } catch (err) {
@@ -261,13 +261,28 @@ export default function Dashboard() {
                                     <div className="flex justify-between items-center w-full">
                                         <h4 className="font-bold text-lg text-white/90">{symbol}</h4>
                                         <div className="flex gap-2 items-center">
+                                            {/* Context-Aware Mock Trade Buttons */}
+                                            <button
+                                                onClick={() => manualTrade('CE', symbol)}
+                                                className="px-2 py-1 bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/40 rounded text-xs font-bold transition-colors"
+                                                title={`Simulate BUY CE Signal for ${symbol}`}
+                                            >
+                                                + CE
+                                            </button>
+                                            <button
+                                                onClick={() => manualTrade('PE', symbol)}
+                                                className="px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/40 rounded text-xs font-bold transition-colors"
+                                                title={`Simulate BUY PE Signal for ${symbol}`}
+                                            >
+                                                + PE
+                                            </button>
+
                                             <button
                                                 onClick={() => handleTestClick(symbol, params)}
-                                                className="px-3 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded text-xs transition-colors flex items-center gap-1"
+                                                className="px-3 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded text-xs transition-colors flex items-center gap-1 ml-2"
                                                 title="Test this config in Backtester"
                                             >
-                                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                                                Test
+                                                 Test
                                             </button>
                                             <span className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-gray-400">
                                                 {params.strategyName || 'Legacy Strategy'}

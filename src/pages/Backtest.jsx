@@ -301,7 +301,12 @@ export default function Backtest() {
               <select 
                 className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
                 value={params.resolution || '5'}
-                onChange={e => setParams({...params, resolution: e.target.value})}
+                onChange={e => {
+                    const val = e.target.value;
+                    // User Request: resolution should be number if possible
+                    const numVal = Number(val);
+                    setParams({...params, resolution: isNaN(numVal) ? val : numVal});
+                }}
               >
                 <option value="1">1 Minute</option>
                 <option value="3">3 Minutes</option>
@@ -565,7 +570,11 @@ export default function Backtest() {
                                 ) : (
                                     <input type="number" step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
                                         value={params[key] ?? val}
-                                        onChange={e => setParams({...params, [key]: e.target.value})} />
+                                        onChange={e => {
+                                            let v = e.target.value;
+                                            if (!isNaN(parseFloat(v))) v = parseFloat(v);
+                                            setParams({...params, [key]: v});
+                                        }} />
                                 )}
                             </div>
                         );
