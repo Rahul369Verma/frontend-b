@@ -98,12 +98,17 @@ export default function Dashboard() {
     }
   }, []);
 
+  // Socket Ref
+  const socketRef = React.useRef(null);
+  const [showChain, setShowChain] = useState(false);
+
   useEffect(() => {
     // Initial Fetch
     fetchData();
 
     // Connect Socket
     const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:5000');
+    socketRef.current = socket;
 
     socket.on('connect', () => {
         console.log("✅ Connected to WebSocket");
@@ -132,6 +137,20 @@ export default function Dashboard() {
         socket.disconnect();
     };
   }, []);
+
+  // Handlers for Option Chain Toggle
+  const toggleOptionChain = () => {
+      if (showChain) {
+          // Stop
+          setShowChain(false);
+          setOptionChain([]); // Clear local
+          socketRef.current?.emit('stop_option_chain');
+      } else {
+          // Start
+          setShowChain(true);
+          socketRef.current?.emit('request_option_chain');
+      }
+  };
 
   const toggleBot = async () => {
     setLoading(true);
@@ -462,74 +481,95 @@ export default function Dashboard() {
       </div>
 
       {/* Option Chain */}
-      <div className="bg-surface rounded-xl border border-slate-700 p-6">
-          <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-            <List className="w-5 h-5 text-primary" /> Real Option Chain (BANKNIFTY)
-          </h3>
-          {optionChain.length > 0 ? (
-            <div className="overflow-x-auto">
-                <table className="w-full text-center border-collapse text-sm">
-                    <thead>
-                        <tr className="text-slate-400 border-b border-slate-700 bg-slate-800/50">
-                            <th className="p-3 text-green-400" colSpan="2">CALLS (CE)</th>
-                            <th className="p-3 text-white bg-slate-700">STRIKE</th>
-                            <th className="p-3 text-red-400" colSpan="2">PUTS (PE)</th>
-                        </tr>
-                        <tr className="text-xs text-slate-500 border-b border-slate-700">
-                            <th className="p-2">LTP</th>
-                            <th className="p-2">Symbol</th>
-                            <th className="p-2 bg-slate-800"></th>
-                            <th className="p-2">Symbol</th>
-                            <th className="p-2">LTP</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {(() => {
-                            // Group by Strike
-                            const grouped = {};
-                            optionChain.forEach(opt => {
-                                if (!grouped[opt.strike]) grouped[opt.strike] = { CE: null, PE: null };
-                                grouped[opt.strike][opt.type] = opt;
-                            });
-                            
-                            return Object.keys(grouped).sort((a, b) => a - b).map((strike) => {
-                                const ce = grouped[strike].CE;
-                                const pe = grouped[strike].PE;
-                                const isAtm = marketData?.ltp && Math.abs(marketData.ltp - strike) < 50; // Highlight ATM roughly
+      <div className="bg-surface rounded-xl border border-slate-700 p-6 transition-all duration-300">
+          <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-bold flex items-center gap-2 text-white">
+                <List className="w-5 h-5 text-primary" /> Real Option Chain <span className="text-slate-500 text-sm font-normal">(BANKNIFTY)</span>
+              </h3>
+              <button
+                  onClick={toggleOptionChain}
+                  className={`px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider transition-all flex items-center gap-2 shadow-lg ${
+                      showChain 
+                      ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20 border border-red-500/20 shadow-red-900/10' 
+                      : 'bg-green-500/10 text-green-500 hover:bg-green-500/20 border border-green-500/20 shadow-green-900/10'
+                  }`}
+              >
+                  {showChain ? 'Hide Chain' : 'Load Chain'}
+              </button>
+          </div>
 
-                                return (
-                                    <tr key={strike} className={`border-b border-slate-800 hover:bg-slate-800/30 ${isAtm ? 'bg-blue-500/10' : ''}`}>
-                                        {/* CE Data */}
-                                        <td className={`p-2 font-mono ${ce ? 'text-green-400' : 'text-slate-600'}`}>
-                                            {ce ? `₹${ce.ltp.toFixed(2)}` : '-'}
-                                        </td>
-                                        <td className="p-2 text-xs text-slate-500 truncate max-w-[100px]" title={ce?.tradingsymbol}>
-                                            {ce?.tradingsymbol || '-'}
-                                        </td>
+          {showChain ? (
+              optionChain.length > 0 ? (
+                <div className="overflow-x-auto rounded-lg border border-slate-700">
+                    <table className="w-full text-center border-collapse text-sm">
+                        <thead>
+                            <tr className="text-slate-400 border-b border-slate-700 bg-slate-800/80">
+                                <th className="p-3 text-green-400 font-bold bg-green-900/10" colSpan="2">CALLS (CE)</th>
+                                <th className="p-3 text-white bg-slate-700 font-bold border-x border-slate-600">STRIKE</th>
+                                <th className="p-3 text-red-400 font-bold bg-red-900/10" colSpan="2">PUTS (PE)</th>
+                            </tr>
+                            <tr className="text-xs text-slate-500 border-b border-slate-700 bg-slate-800/40">
+                                <th className="p-2 w-[15%]">LTP</th>
+                                <th className="p-2 w-[25%]">Symbol</th>
+                                <th className="p-2 w-[20%] bg-slate-800/50 border-x border-slate-700"></th>
+                                <th className="p-2 w-[25%]">Symbol</th>
+                                <th className="p-2 w-[15%]">LTP</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {(() => {
+                                // Group by Strike
+                                const grouped = {};
+                                optionChain.forEach(opt => {
+                                    if (!grouped[opt.strike]) grouped[opt.strike] = { CE: null, PE: null };
+                                    grouped[opt.strike][opt.type] = opt;
+                                });
+                                
+                                return Object.keys(grouped).sort((a, b) => a - b).map((strike) => {
+                                    const ce = grouped[strike].CE;
+                                    const pe = grouped[strike].PE;
+                                    const isAtm = marketData?.ltp && Math.abs(marketData.ltp - strike) < 100; // Highlight ATM roughly
 
-                                        {/* Strike */}
-                                        <td className={`p-2 font-bold bg-slate-800/50 border-x border-slate-700 ${isAtm ? 'text-blue-400' : 'text-white'}`}>
-                                            {strike}
-                                        </td>
+                                    return (
+                                        <tr key={strike} className={`border-b border-slate-800 hover:bg-slate-700/30 transition-colors ${isAtm ? 'bg-blue-500/5' : ''}`}>
+                                            {/* CE Data */}
+                                            <td className={`p-2 font-mono font-medium ${ce ? 'text-green-400' : 'text-slate-600'}`}>
+                                                {ce ? `₹${ce.ltp.toFixed(2)}` : '-'}
+                                            </td>
+                                            <td className="p-2 text-[10px] text-slate-500 truncate max-w-[100px]" title={ce?.tradingsymbol}>
+                                                {ce?.tradingsymbol || '-'}
+                                            </td>
 
-                                        {/* PE Data */}
-                                        <td className="p-2 text-xs text-slate-500 truncate max-w-[100px]" title={pe?.tradingsymbol}>
-                                            {pe?.tradingsymbol || '-'}
-                                        </td>
-                                        <td className={`p-2 font-mono ${pe ? 'text-red-400' : 'text-slate-600'}`}>
-                                            {pe ? `₹${pe.ltp.toFixed(2)}` : '-'}
-                                        </td>
-                                    </tr>
-                                );
-                            });
-                        })()}
-                    </tbody>
-                </table>
-            </div>
+                                            {/* Strike */}
+                                            <td className={`p-2 font-bold font-mono border-x border-slate-700 ${isAtm ? 'text-blue-400 bg-blue-500/10' : 'text-slate-300 bg-slate-800/30'}`}>
+                                                {strike}
+                                            </td>
+
+                                            {/* PE Data */}
+                                            <td className="p-2 text-[10px] text-slate-500 truncate max-w-[100px]" title={pe?.tradingsymbol}>
+                                                {pe?.tradingsymbol || '-'}
+                                            </td>
+                                            <td className={`p-2 font-mono font-medium ${pe ? 'text-red-400' : 'text-slate-600'}`}>
+                                                {pe ? `₹${pe.ltp.toFixed(2)}` : '-'}
+                                            </td>
+                                        </tr>
+                                    );
+                                });
+                            })()}
+                        </tbody>
+                    </table>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-48 text-slate-500 bg-slate-900/30 rounded-lg animate-pulse border border-slate-800/50">
+                    <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mb-3"></div>
+                    <p className="text-sm font-medium">Connecting to Real-Time Feed...</p>
+                </div>
+              )
           ) : (
-            <div className="flex items-center justify-center h-32 text-slate-500 bg-slate-900/50 rounded-lg">
-                Loading Option Chain...
-            </div>
+             <div className="flex flex-col items-center justify-center h-32 text-slate-500 bg-slate-900/20 rounded-lg border border-slate-800/50 border-dashed">
+                 <List className="w-10 h-10 opacity-10 mb-2" />
+                 <p className="text-xs font-medium uppercase tracking-widest opacity-60">Chain Hidden</p>
+             </div>
           )}
       </div>
 
