@@ -18,8 +18,20 @@ export default function Backtest() {
   const [strategyDefaults, setStrategyDefaults] = useState({});
   const [savedConfigs, setSavedConfigs] = useState([]);
   const [liveConfigs, setLiveConfigs] = useState([]);
+  const [aiStatus, setAiStatus] = useState(null); // AI Model Status
+
+  const fetchAiStatus = async () => {
+      try {
+          const res = await axios.get(`${API_URL}/ai/status`);
+          setAiStatus(res.data);
+      } catch (err) {
+          console.error("Failed to fetch AI status", err);
+      }
+  };
 
   useEffect(() => {
+      fetchAiStatus(); // Fetch on mount
+      
       axios.get(`${API_URL}/config/instruments`)
         .then(res => setInstrumentConfig(res.data))
         .catch(err => console.error("Failed to fetch instruments", err));
@@ -292,6 +304,7 @@ export default function Backtest() {
                 <option value="inside_bar">Inside Bar Breakout</option>
                 <option value="orb_breakout">Open Range Breakout (ORB)</option>
                 <option value="supertrend_adx">SuperTrend + ADX Filter</option>
+                <option value="ai_filtered">AI Filtered Strategy (LSTM) 🧠</option>
                 <option value="universal">Universal / Discovery Mode</option>
               </select>
             </div>
@@ -507,16 +520,19 @@ export default function Backtest() {
                             onChange={e => setParams({...params, atr_sl_mult: e.target.value})} />
                     </div>
                 </div>
-                <div className="flex items-center justify-between col-span-2 bg-slate-800/50 p-2 rounded mt-2 border border-slate-700/50">
+                <div className="flex items-center justify-between col-span-2 bg-purple-900/20 p-2 rounded mt-2 border border-purple-700/50">
                     <div className="flex items-center gap-2">
-                        <Activity className="w-3.5 h-3.5 text-primary" />
-                        <label className="text-xs font-medium text-slate-300">Enable Smart AI Exits</label>
+                        <Activity className="w-3.5 h-3.5 text-purple-400" />
+                        <div>
+                            <label className="text-xs font-bold text-purple-200 block">Enable Universal AI Confirmation</label>
+                            <span className="text-[10px] text-purple-400 block">Validates Entry Signals with Trained Model</span>
+                        </div>
                     </div>
                     <input 
                       type="checkbox" 
-                      className="w-4 h-4 accent-primary cursor-pointer"
-                      checked={params.use_ai_prediction || false}
-                      onChange={e => setParams({...params, use_ai_prediction: e.target.checked})}
+                      className="w-4 h-4 accent-purple-500 cursor-pointer"
+                      checked={params.use_ai_confirmation || false}
+                      onChange={e => setParams({...params, use_ai_confirmation: e.target.checked})}
                     />
                 </div>
             </div>
@@ -582,13 +598,58 @@ export default function Backtest() {
                 </div>
             </div>
             
-            <button
-              onClick={runBacktest}
-              disabled={loading}
-              className="w-full bg-primary hover:bg-blue-600 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors"
-            >
-              {loading ? 'Running...' : <><Play className="w-4 h-4" /> Run Backtest</>}
-            </button>
+            {/* AI Status Badge */}
+            {aiStatus && (
+                <div className={`mt-2 p-2 rounded text-xs border ${aiStatus.isTrained ? 'bg-green-900/30 border-green-700 text-green-200' : 'bg-red-900/30 border-red-700 text-red-200'}`}>
+                    <div className="font-bold flex items-center gap-2">
+                        <span>AI Model Status:</span>
+                        <span>{aiStatus.isTrained ? '✅ TRAINED' : '⚠️ UNTRAINED'}</span>
+                    </div>
+                    {aiStatus.isTrained && (
+                        <div className="mt-1 opacity-80">
+                            <div>Symbol: {aiStatus.symbol}</div>
+                            <div>Range: {aiStatus.startDate} to {aiStatus.endDate}</div>
+                            <div>Last Update: {new Date(aiStatus.trainedAt).toLocaleString()}</div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            <div className="flex gap-2">
+                <button
+                    onClick={runBacktest}
+                    disabled={loading}
+                    className="flex-1 bg-primary hover:bg-blue-600 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors"
+                >
+                    {loading ? 'Running...' : <><Play className="w-4 h-4" /> Run Backtest</>}
+                </button>
+                {/* AI Training Trigger */}
+                <button
+                    onClick={async () => {
+                         const confirm = window.confirm(`Start AI Training?\n\nSymbol: ${params.symbol}\nData Source: ${params.dataSource || 'Default'}\nResolution: ${params.resolution || '5'}m\nRange: ${params.start_date} to ${params.end_date}\n\nThis will take a few minutes.`);
+                         if (!confirm) return;
+                         try {
+                              alert("Training Started. Check Server Logs.");
+                              await axios.post(`${API_URL}/ai/train`, {
+                                  symbol: params.symbol,
+                                  startDate: params.start_date,
+                                  endDate: params.end_date,
+                                  resolution: params.resolution || "5",
+                                  dataSource: params.dataSource || "FUTURES"
+                              });
+                              alert("Training Command Sent.");
+                              // Poll for update
+                              setTimeout(fetchAiStatus, 5000);
+                         } catch (err) {
+                              alert("Training Failed: " + err.message);
+                         }
+                    }}
+                    className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 rounded-lg flex items-center justify-center transition-colors"
+                    title="Train AI Model on Current Symbol/Date Range"
+                >
+                    🧠 Train AI
+                </button>
+            </div>
 
          <div className="grid grid-cols-2 gap-2 mt-auto">
             <button 

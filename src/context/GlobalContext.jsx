@@ -44,11 +44,22 @@ export function GlobalProvider({ children }) {
         const res = await fetch(`${API_URL}/engine/defaults`);
         const data = await res.json();
         if (data) {
+            // Filter out system params that should NOT be overwritten by defaults (Dates, Capital)
+            // Use underscores to satisfy linter for unused vars
+            const { 
+                start_date: _sd, 
+                end_date: _ed, 
+                startDate: _Sd, 
+                endDate: _Ed, 
+                capital: _cap, 
+                ...safeData 
+            } = data;
+            
             setBacktestParams(prev => ({
                 ...prev,
-                ...data
+                ...safeData
             }));
-            console.log("✅ Loaded Strategy Defaults from Backend:", data);
+            console.log("✅ Loaded Strategy Defaults from Backend (Dates Excluded):", safeData);
         }
       } catch (err) {
         console.error("❌ Failed to load defaults:", err);
