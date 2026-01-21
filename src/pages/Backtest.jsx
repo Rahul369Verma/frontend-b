@@ -453,6 +453,12 @@ export default function Backtest() {
                             onChange={e => setParams({...params, max_daily_loss: e.target.value})} />
                     </div>
                     <div>
+                        <label className="block text-xs text-slate-400 mb-1">Max Single Loss (₹)</label>
+                        <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                            value={params.max_single_trade_loss || 2000}
+                            onChange={e => setParams({...params, max_single_trade_loss: parseFloat(e.target.value)})} />
+                    </div>
+                    <div>
                         <label className="block text-xs text-slate-400 mb-1">Max Trades / Day</label>
                         <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
                             value={params.max_trades_per_day || 10}
@@ -570,7 +576,7 @@ export default function Backtest() {
                     {/* Dynamic Inputs (Fallback) */}
                     {Object.entries(strategyDefaults[params.strategy] || {}).map(([key, val]) => {
                         // Skip keys we explicitly handled above or internal ones
-                        if (['resolution', 'lots', 'trade_start_time', 'trade_end_time', 'max_daily_loss', 'max_trades_per_day', 'max_slippage_percent'].includes(key)) return null;
+                        if (['resolution', 'lots', 'trade_start_time', 'trade_end_time', 'max_daily_loss', 'max_single_trade_loss', 'max_trades_per_day', 'max_slippage_percent'].includes(key)) return null;
                         if (params.strategy === 'orb_breakout' && ['range_duration_min', 'breakout_buffer_pct'].includes(key)) return null;
 
                         

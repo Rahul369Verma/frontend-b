@@ -321,7 +321,7 @@ export default function Dashboard() {
                                          if (typeof val === 'object') displayVal = JSON.stringify(val);
 
                                          // Highlight important keys
-                                         const isKey = ['lots', 'capital', 'max_daily_loss'].includes(key);
+                                         const isKey = ['lots', 'capital', 'max_daily_loss', 'max_single_trade_loss'].includes(key);
                                          
                                          return (
                                              <div key={key} className="overflow-hidden">
@@ -443,7 +443,7 @@ export default function Dashboard() {
                                 <td className="p-3 font-medium text-white">{pos.symbol}</td>
                                 <td className="p-3 text-slate-300">{pos.quantity}</td>
                                 <td className="p-3 text-slate-300">₹{pos.price}</td>
-                                <td className={`p-3 font-bold ${0 >= 0 ? 'text-green-500' : 'text-red-500'}`}>₹0.00</td>
+                                <td className={`p-3 font-bold ${pos.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>₹{pos.pnl ? pos.pnl.toFixed(2) : "0.00"}</td>
                             </tr>
                         ))}
                     </tbody>
