@@ -6,6 +6,8 @@ import Backtest from './pages/Backtest';
 import Optimizer from './pages/Optimizer';
 import SettingsPage from './pages/Settings';
 import Callback from './pages/Callback';
+import AiManager from './components/AiManager'; // New Component
+import DataManager from './components/DataManager'; // New Component
 
 function Sidebar() {
   const location = useLocation();
@@ -15,6 +17,8 @@ function Sidebar() {
     { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { path: '/backtest', icon: LineChart, label: 'Backtest' },
     { path: '/optimizer', icon: Activity, label: 'Optimizer' },
+    { path: '/ai-manager', icon: Terminal, label: 'AI Manager' }, // New Item
+    { path: '/data-manager', icon: Square, label: 'Data Manager' }, // Archiving
     { path: '/settings', icon: Settings, label: 'Settings' },
   ];
 
@@ -74,6 +78,8 @@ function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/backtest" element={<Backtest />} />
               <Route path="/optimizer" element={<Optimizer />} />
+              <Route path="/ai-manager" element={<AiManager />} />
+              <Route path="/data-manager" element={<DataManager />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/callback" element={<Callback />} />
             </Routes>

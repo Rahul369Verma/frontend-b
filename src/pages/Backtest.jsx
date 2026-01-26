@@ -18,20 +18,27 @@ export default function Backtest() {
   const [strategyDefaults, setStrategyDefaults] = useState({});
   const [savedConfigs, setSavedConfigs] = useState([]);
   const [liveConfigs, setLiveConfigs] = useState([]);
-  const [aiStatus, setAiStatus] = useState(null); // AI Model Status
+  const [aiModels, setAiModels] = useState([]); // List of available models
+  const [marketTimings, setMarketTimings] = useState({}); // New State
 
-  const fetchAiStatus = async () => {
+
+  const fetchModels = async () => {
       try {
-          const res = await axios.get(`${API_URL}/ai/status`);
-          setAiStatus(res.data);
+          // Fetch List of Models
+          const modelsRes = await axios.get(`${API_URL}/ai/models`);
+          setAiModels(modelsRes.data);
       } catch (err) {
-          console.error("Failed to fetch AI status", err);
+          console.error("Failed to fetch AI models", err);
       }
   };
 
   useEffect(() => {
-      fetchAiStatus(); // Fetch on mount
+      fetchModels(); // Fetch on mount
       
+      axios.get(`${API_URL}/config/timings`)
+         .then(res => setMarketTimings(res.data))
+         .catch(err => console.error("Failed to fetch timings", err));
+
       axios.get(`${API_URL}/config/instruments`)
         .then(res => setInstrumentConfig(res.data))
         .catch(err => console.error("Failed to fetch instruments", err));
@@ -331,6 +338,31 @@ export default function Backtest() {
               </select>
             </div>
             
+            {/* AI Confirmation (Universal) */}
+            <div className="bg-purple-900/10 border border-purple-800/30 p-2 rounded mt-2">
+                 <div className="flex items-center justify-between">
+                     <label className="text-sm text-purple-200">🤖 AI Confirmation</label>
+                     <input 
+                        type="checkbox"
+                        className="w-4 h-4 accent-purple-500"
+                        checked={params.use_ai_confirmation || false}
+                        onChange={e => setParams({...params, use_ai_confirmation: e.target.checked})}
+                     />
+                 </div>
+                 {params.use_ai_confirmation && (
+                     <div className="mt-2 flex items-center justify-between">
+                         <label className="text-xs text-slate-400">Min Conf (%)</label>
+                         <input 
+                            type="number"
+                            step="5"
+                            className="w-16 bg-slate-900 border border-slate-700 rounded p-1 text-xs text-white text-right"
+                            value={(params.ai_confidence_threshold || 0.60) * 100}
+                            onChange={e => setParams({...params, ai_confidence_threshold: parseFloat(e.target.value) / 100})}
+                         />
+                     </div>
+                 )}
+            </div>
+            
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1">Symbol</label>
               <select 
@@ -342,38 +374,48 @@ export default function Backtest() {
                   setParams({
                     ...params, 
                     symbol: newSymbol,
-                    lot_size: config ? config.lotSize : 15 
+                    lot_size: config ? config.lotSize : 15,
+                    trade_start_time: (config && marketTimings[config.exchange]) ? marketTimings[config.exchange].strategyStart : (marketTimings['NSE']?.strategyStart || "09:30"),
+                    trade_end_time: (config && marketTimings[config.exchange]) ? marketTimings[config.exchange].strategyEnd : (marketTimings['NSE']?.strategyEnd || "15:00")
                   });
                 }}
               >
-                {/* Dynamic Options from Backend */}
-                {Object.keys(instrumentConfig).length === 0 && <option>Loading...</option>}
-                
-                <optgroup label="Indices">
-                    {Object.entries(instrumentConfig)
-                        .filter(([k]) => !k.includes('-EQ') && !k.startsWith('MCX:'))
-                        .map(([key, config]) => (
-                            <option key={key} value={key}>{config.underlying}</option>
-                        ))}
-                </optgroup>
+                  {Object.keys(instrumentConfig).length === 0 && <option>Loading instruments...</option>}
+                  
+                  <optgroup label="Indices">
+                      {Object.entries(instrumentConfig)
+                          .filter(([k]) => !k.includes('-EQ') && !k.startsWith('MCX:'))
+                          .map(([key, config]) => (
+                              <option key={key} value={key}>{config.underlying}</option>
+                          ))}
+                  </optgroup>
 
-                <optgroup label="Commodities (MCX)">
-                    {Object.entries(instrumentConfig)
-                        .filter(([k]) => k.startsWith('MCX:'))
-                        .map(([key, config]) => (
-                            <option key={key} value={key}>{config.underlying}</option>
-                        ))}
-                </optgroup>
+                  <optgroup label="Commodities (MCX)">
+                      {Object.entries(instrumentConfig)
+                          .filter(([k]) => k.startsWith('MCX:'))
+                          .map(([key, config]) => (
+                              <option key={key} value={key}>{config.underlying}</option>
+                          ))}
+                  </optgroup>
 
-                <optgroup label="Stocks">
-                    {Object.entries(instrumentConfig)
-                        .filter(([k]) => k.includes('-EQ'))
-                        .map(([key, config]) => (
-                            <option key={key} value={key}>{config.underlying}</option>
-                        ))}
-                </optgroup>
+                  <optgroup label="Stocks">
+                      {Object.entries(instrumentConfig)
+                          .filter(([k]) => k.includes('-EQ'))
+                          .map(([key, config]) => (
+                              <option key={key} value={key}>{config.underlying}</option>
+                          ))}
+                  </optgroup>
               </select>
+              <input 
+                  type="text" 
+                  placeholder="Or Type Custom Symbol..." 
+                  className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-xs mt-2"
+                  onChange={(e) => setParams({...params, symbol: e.target.value})}
+              />
             </div>
+
+            {/* Data Source Selection */}
+
 
             {/* 1. General Settings */}
             <div className="grid grid-cols-2 gap-4">
@@ -410,16 +452,30 @@ export default function Backtest() {
                     </select>
                 </div>
                 <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-1">Data Source (Indices)</label>
+                    <label className="block text-sm font-medium text-blue-400 mb-1">Data Source (Indices)</label>
                     <select 
-                        className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                        className="w-full bg-slate-900 border border-blue-900 rounded p-2 text-white"
                         value={params.dataSource || 'AUTO'}
                         onChange={e => setParams({...params, dataSource: e.target.value})}
                     >
                         <option value="AUTO">Auto (Smart Switch)</option>
-                        <option value="FUT">Future Data (Forced)</option>
-                        <option value="SPOT">Spot Data (Forced)</option>
+                        <option value="SPOT">Spot Data</option>
+                        <option value="FUT">Current Month Future</option>
+                        <option value="ARCHIVE">📂 Local Archive (Fast)</option>
                     </select>
+                </div>
+                
+                 <div className="col-span-1 flex items-center gap-3 bg-slate-800 p-2 rounded border border-slate-700 mt-5 h-10">
+                    <input 
+                        type="checkbox" 
+                        id="holding_enabled"
+                        className="w-4 h-4 accent-blue-500 cursor-pointer"
+                        checked={params.holding_enabled || false}
+                        onChange={e => setParams({...params, holding_enabled: e.target.checked})}
+                    />
+                    <label htmlFor="holding_enabled" className="text-xs font-bold text-slate-300 cursor-pointer select-none">
+                        Enable Positional / 24h Mode <span className="text-slate-500 font-normal">(No Intraday Auto-Exit)</span>
+                    </label>
                 </div>
             </div>
 
@@ -526,14 +582,17 @@ export default function Backtest() {
                             onChange={e => setParams({...params, atr_sl_mult: e.target.value})} />
                     </div>
                 </div>
-                <div className="flex items-center justify-between col-span-2 bg-purple-900/20 p-2 rounded mt-2 border border-purple-700/50">
-                    <div className="flex items-center gap-2">
-                        <Activity className="w-3.5 h-3.5 text-purple-400" />
-                        <div>
-                            <label className="text-xs font-bold text-purple-200 block">Enable Universal AI Confirmation</label>
-                            <span className="text-[10px] text-purple-400 block">Validates Entry Signals with Trained Model</span>
-                        </div>
-                    </div>
+                </div>
+
+
+            {/* AI Confirmation Section */}
+            <div className="border-t border-slate-700 pt-4">
+                <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-bold text-slate-300 flex items-center gap-2">
+                        <Activity className="w-4 h-4 text-purple-400" /> 
+                        AI Confirmation 
+                        <span className="text-[10px] bg-purple-900/40 text-purple-300 px-1 rounded ml-1">Beta</span>
+                    </h4>
                     <input 
                       type="checkbox" 
                       className="w-4 h-4 accent-purple-500 cursor-pointer"
@@ -541,6 +600,40 @@ export default function Backtest() {
                       onChange={e => setParams({...params, use_ai_confirmation: e.target.checked})}
                     />
                 </div>
+                
+                {params.use_ai_confirmation && (
+                    <div className="bg-slate-800/50 p-3 rounded border border-purple-900/30 space-y-3">
+                         <div>
+                             <label className="block text-xs text-slate-400 mb-1">Select AI Model</label>
+                             <select
+                                className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                value={params.modelName || ''}
+                                onChange={e => setParams({...params, modelName: e.target.value})}
+                             >
+                                 <option value="">-- {params.symbol ? `Auto (${params.symbol})` : 'Auto-Detect'} --</option>
+                                 {aiModels.map((m, idx) => (
+                                     <option key={idx} value={m.name || m.symbol}>
+                                         {m.name ? `${m.name} (${m.symbol})` : m.symbol}
+                                     </option>
+                                 ))}
+                             </select>
+                             <div className="text-[10px] text-slate-500 mt-1">
+                                 Select a specific trained model or leave Auto to find model by symbol.
+                             </div>
+                         </div>
+                         
+                         <div className="flex items-center justify-between">
+                             <label className="text-xs text-slate-400">Min Confidence (%)</label>
+                             <input 
+                                type="number"
+                                step="5"
+                                className="w-16 bg-slate-900 border border-slate-700 rounded p-1 text-xs text-white text-right"
+                                value={(params.ai_confidence_threshold || 0.60) * 100}
+                                onChange={e => setParams({...params, ai_confidence_threshold: parseFloat(e.target.value) / 100})}
+                             />
+                         </div>
+                    </div>
+                )}
             </div>
 
             {/* 4. Strategy Specific Params */}
@@ -604,23 +697,9 @@ export default function Backtest() {
                 </div>
             </div>
             
-            {/* AI Status Badge */}
-            {aiStatus && (
-                <div className={`mt-2 p-2 rounded text-xs border ${aiStatus.isTrained ? 'bg-green-900/30 border-green-700 text-green-200' : 'bg-red-900/30 border-red-700 text-red-200'}`}>
-                    <div className="font-bold flex items-center gap-2">
-                        <span>AI Model Status:</span>
-                        <span>{aiStatus.isTrained ? '✅ TRAINED' : '⚠️ UNTRAINED'}</span>
-                    </div>
-                    {aiStatus.isTrained && (
-                        <div className="mt-1 opacity-80">
-                            <div>Symbol: {aiStatus.symbol}</div>
-                            <div>Range: {aiStatus.startDate} to {aiStatus.endDate}</div>
-                            <div>Last Update: {new Date(aiStatus.trainedAt).toLocaleString()}</div>
-                        </div>
-                    )}
-                </div>
-            )}
 
+
+            {/* AI Training Controls Moved to AI Manager */}
             <div className="flex gap-2">
                 <button
                     onClick={runBacktest}
@@ -628,32 +707,6 @@ export default function Backtest() {
                     className="flex-1 bg-primary hover:bg-blue-600 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors"
                 >
                     {loading ? 'Running...' : <><Play className="w-4 h-4" /> Run Backtest</>}
-                </button>
-                {/* AI Training Trigger */}
-                <button
-                    onClick={async () => {
-                         const confirm = window.confirm(`Start AI Training?\n\nSymbol: ${params.symbol}\nData Source: ${params.dataSource || 'Default'}\nResolution: ${params.resolution || '5'}m\nRange: ${params.start_date} to ${params.end_date}\n\nThis will take a few minutes.`);
-                         if (!confirm) return;
-                         try {
-                              alert("Training Started. Check Server Logs.");
-                              await axios.post(`${API_URL}/ai/train`, {
-                                  symbol: params.symbol,
-                                  startDate: params.start_date,
-                                  endDate: params.end_date,
-                                  resolution: params.resolution || "5",
-                                  dataSource: params.dataSource || "FUTURES"
-                              });
-                              alert("Training Command Sent.");
-                              // Poll for update
-                              setTimeout(fetchAiStatus, 5000);
-                         } catch (err) {
-                              alert("Training Failed: " + err.message);
-                         }
-                    }}
-                    className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 rounded-lg flex items-center justify-center transition-colors"
-                    title="Train AI Model on Current Symbol/Date Range"
-                >
-                    🧠 Train AI
                 </button>
             </div>
 
@@ -761,7 +814,10 @@ export default function Backtest() {
                         <th className="px-4 py-3 bg-slate-800">Volume</th>
                         <th className="px-4 py-3 bg-slate-800">Avg Vol</th>
                         <th className="px-4 py-3 bg-slate-800">Type</th>
+                        <th className="px-4 py-3 bg-slate-800">AI Conf</th>
                         <th className="px-4 py-3 bg-slate-800">Price</th>
+                        <th className="px-4 py-3 bg-slate-800">SL</th>
+                        <th className="px-4 py-3 bg-slate-800">TP</th>
                         <th className="px-4 py-3 bg-slate-800">Invested</th>
                         <th className="px-4 py-3 bg-slate-800">Exit Time</th>
                         <th className="px-4 py-3 bg-slate-800">Exit Price</th>
@@ -779,7 +835,12 @@ export default function Backtest() {
                           <td className={`px-4 py-3 font-bold ${trade.type === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
                             {trade.type}
                           </td>
+                          <td className="px-4 py-3 font-mono text-blue-300">
+                            {trade.ai_confidence ? (trade.ai_confidence * 100).toFixed(0) + '%' : '-'}
+                          </td>
                           <td className="px-4 py-3">{trade.entryPrice.toFixed(2)}</td>
+                          <td className="px-4 py-3 text-red-300">{trade.sl ? trade.sl.toFixed(2) : '-'}</td>
+                          <td className="px-4 py-3 text-green-300">{trade.tp ? trade.tp.toFixed(2) : '-'}</td>
                           <td className="px-4 py-3">₹{trade.invested_amount ? trade.invested_amount.toFixed(2) : '-'}</td>
                           <td className="px-4 py-3">{new Date(trade.exitTime).toLocaleString()}</td>
                           <td className="px-4 py-3">{trade.exitPrice.toFixed(2)}</td>

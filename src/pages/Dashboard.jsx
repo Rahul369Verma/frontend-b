@@ -36,6 +36,15 @@ export default function Dashboard() {
   const [activeConfig, setActiveConfig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  
+  // Trade Preview Modal State
+  const [previewModal, setPreviewModal] = useState({ 
+      isOpen: false, 
+      loading: false, 
+      data: null, 
+      params: { type: 'CE', symbol: '', quantity: 15, sl: 40, tp: 100, price: 0 } 
+  });
+
   const navigate = useNavigate();
 
   const handleTestClick = (symbol, config) => {
@@ -165,15 +174,69 @@ export default function Dashboard() {
     }
   };
 
-  const manualTrade = async (type, symbol) => {
-    if (!window.confirm(`Execute Manual ${type} Trade for ${symbol || 'Default'}?`)) return;
-    try {
-        await axios.post(`${API_URL}/engine/manual-trade`, { type, symbol });
-        alert(`${type} Trade Executed!`);
-        fetchData();
-    } catch (err) {
-        alert("Trade Failed: " + err.message);
-    }
+  const openTradeModal = async (type, symbol) => {
+      // 1. Open Modal with Loading State
+      setPreviewModal({
+          isOpen: true,
+          loading: true,
+          data: null,
+          params: { type, symbol, quantity: 0, sl: 0, tp: 0, price: 0 } // Reset
+      });
+      
+      try {
+          // 2. Fetch Preview Data from Backend
+          const res = await axios.post(`${API_URL}/engine/preview-trade`, { type, symbol });
+          const preview = res.data;
+          
+          setPreviewModal(prev => ({
+              ...prev,
+              loading: false,
+              data: preview,
+              params: {
+                  type,
+                  symbol,
+                  quantity: preview.quantity,
+                  sl: preview.suggestedSl,
+                  tp: preview.suggestedTp,
+                  price: preview.optionLtp || 0
+              }
+          }));
+      } catch (err) {
+          alert("Failed to Get Trade Preview: " + err.message);
+          setPreviewModal(prev => ({ ...prev, isOpen: false }));
+      }
+  };
+
+  const executeTradeFromModal = async () => {
+       const { params, data } = previewModal;
+       if (!window.confirm("Confirm Execution?")) return;
+       
+       try {
+           // Pass explicit params from Modal Inputs
+           const payload = {
+               type: params.type,
+               symbol: params.symbol, // Underlying
+               optionSymbol: data.optionSymbol, // Explicit Option Symbol
+               quantity: parseInt(params.quantity),
+               slPoints: parseFloat(params.sl),
+               tpPoints: parseFloat(params.tp),
+               entryPrice: parseFloat(params.price)
+           };
+
+           await axios.post(`${API_URL}/engine/manual-trade`, payload);
+           alert("✅ Trade Executed Successfully!");
+           setPreviewModal(prev => ({ ...prev, isOpen: false })); // Close
+           fetchData(); // Refresh Dashboard
+       } catch (err) {
+           alert("❌ Execution Failed: " + err.message);
+       }
+  };
+
+  const handleModalInput = (field, value) => {
+      setPreviewModal(prev => ({
+          ...prev,
+          params: { ...prev.params, [field]: value }
+      }));
   };
 
   return (
@@ -282,14 +345,14 @@ export default function Dashboard() {
                                         <div className="flex gap-2 items-center">
                                             {/* Context-Aware Mock Trade Buttons */}
                                             <button
-                                                onClick={() => manualTrade('CE', symbol)}
+                                                onClick={() => openTradeModal('CE', symbol)}
                                                 className="px-2 py-1 bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/40 rounded text-xs font-bold transition-colors"
                                                 title={`Simulate BUY CE Signal for ${symbol}`}
                                             >
                                                 + CE
                                             </button>
                                             <button
-                                                onClick={() => manualTrade('PE', symbol)}
+                                                onClick={() => openTradeModal('PE', symbol)}
                                                 className="px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/40 rounded text-xs font-bold transition-colors"
                                                 title={`Simulate BUY PE Signal for ${symbol}`}
                                             >
@@ -461,13 +524,13 @@ export default function Dashboard() {
           <h3 className="text-xl font-bold mb-4">Manual Controls</h3>
           <div className="space-y-4">
              <button 
-                onClick={() => manualTrade('CE')}
+                onClick={() => openTradeModal('CE')}
                 className="w-full bg-green-500/10 hover:bg-green-500/20 text-green-500 border border-green-500/20 py-3 rounded-lg font-bold transition-colors"
              >
                 📈 Test FAKE BUY (CE)
              </button>
              <button 
-                onClick={() => manualTrade('PE')}
+                onClick={() => openTradeModal('PE')}
                 className="w-full bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 py-3 rounded-lg font-bold transition-colors"
              >
                 📉 Test FAKE SELL (PE)
@@ -612,7 +675,123 @@ export default function Dashboard() {
                 No trade history found.
             </div>
           )}
-      </div>
+       </div>
+
+      {/* TRADE CONFIRMATION MODAL */}
+      {previewModal.isOpen && (
+          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+              <div className="bg-surface border border-slate-600 rounded-xl w-full max-w-md shadow-2xl overflow-hidden">
+                  
+                  {/* Header */}
+                  <div className={`p-4 border-b border-slate-700 flex justify-between items-center ${previewModal.params.type === 'CE' ? 'bg-green-500/10' : 'bg-red-500/10'}`}>
+                      <h3 className={`text-lg font-bold flex items-center gap-2 ${previewModal.params.type === 'CE' ? 'text-green-400' : 'text-red-400'}`}>
+                          {previewModal.params.type === 'CE' ? <TrendingUp className="w-5 h-5" /> : <TrendingUp className="w-5 h-5 rotate-180" />}
+                          Confirm {previewModal.params.type} Entry
+                      </h3>
+                      <button onClick={() => setPreviewModal(prev => ({ ...prev, isOpen: false }))} className="text-slate-400 hover:text-white">✕</button>
+                  </div>
+
+                  {/* Body */}
+                  <div className="p-6 space-y-4">
+                      {previewModal.loading ? (
+                          <div className="py-8 flex flex-col items-center justify-center text-slate-400">
+                              <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mb-2"></div>
+                              Fetching Live Price...
+                          </div>
+                      ) : (
+                          <>
+                              {/* Option Info */}
+                              <div className="bg-slate-800 p-3 rounded-lg border border-slate-700">
+                                  <div className="flex justify-between items-center mb-1">
+                                      <span className="text-xs text-slate-400">Option Symbol</span>
+                                      <span className="text-xs font-mono text-slate-500">{previewModal.data?.spotSymbol}</span>
+                                  </div>
+                                  <div className="text-base font-bold text-white break-all font-mono mb-2">
+                                      {previewModal.data?.optionSymbol}
+                                  </div>
+                                  <div className="flex justify-between items-center pt-2 border-t border-slate-700">
+                                      <span className="text-sm text-slate-300">Current Price (LTP)</span>
+                                      <span className="text-lg font-bold text-blue-400">₹{previewModal.data?.optionLtp}</span>
+                                  </div>
+                              </div>
+
+                              {/* Form Inputs */}
+                              <div className="grid grid-cols-2 gap-4">
+                                  <div>
+                                      <label className="text-xs text-slate-400 block mb-1">Quantity</label>
+                                      <input 
+                                          type="number" 
+                                          value={previewModal.params.quantity}
+                                          onChange={(e) => handleModalInput('quantity', e.target.value)}
+                                          className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white font-mono focus:border-primary outline-none"
+                                      />
+                                  </div>
+                                  <div>
+                                      <label className="text-xs text-slate-400 block mb-1">Entry Price (Limit)</label>
+                                      <input 
+                                          type="number" 
+                                          value={previewModal.params.price}
+                                          onChange={(e) => handleModalInput('price', e.target.value)}
+                                          step="0.05"
+                                          className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white font-mono focus:border-primary outline-none"
+                                      />
+                                  </div>
+                                  <div>
+                                      <label className="text-xs text-red-300 block mb-1">Stop Loss (Pts)</label>
+                                      <input 
+                                          type="number" 
+                                          value={previewModal.params.sl}
+                                          onChange={(e) => handleModalInput('sl', e.target.value)}
+                                          className="w-full bg-slate-900 border border-red-500/30 rounded px-3 py-2 text-white font-mono focus:border-red-500 outline-none"
+                                      />
+                                      <span className="text-[10px] text-slate-500">
+                                          Risk: ₹{(previewModal.params.sl * previewModal.params.quantity).toFixed(0)}
+                                      </span>
+                                  </div>
+                                  <div>
+                                      <label className="text-xs text-green-300 block mb-1">Target Profit (Pts)</label>
+                                      <input 
+                                          type="number" 
+                                          value={previewModal.params.tp}
+                                          onChange={(e) => handleModalInput('tp', e.target.value)}
+                                          className="w-full bg-slate-900 border border-green-500/30 rounded px-3 py-2 text-white font-mono focus:border-green-500 outline-none"
+                                      />
+                                      <span className="text-[10px] text-slate-500">
+                                          Reward: ₹{(previewModal.params.tp * previewModal.params.quantity).toFixed(0)}
+                                      </span>
+                                  </div>
+                              </div>
+                              
+                              <div className="text-[10px] text-slate-500 italic text-center">
+                                  * Limit order will be placed with 2% buffer for entry.
+                              </div>
+                          </>
+                      )}
+                  </div>
+
+                  {/* Footer */}
+                  <div className="p-4 border-t border-slate-700 bg-slate-800/50 flex gap-3">
+                      <button 
+                          onClick={() => setPreviewModal(prev => ({ ...prev, isOpen: false }))}
+                          className="flex-1 py-3 rounded-lg font-bold text-slate-400 hover:bg-slate-700 transition-colors"
+                      >
+                          Cancel
+                      </button>
+                      <button 
+                          onClick={executeTradeFromModal}
+                          disabled={previewModal.loading}
+                          className={`flex-1 py-3 rounded-lg font-bold text-white shadow-lg transition-transform active:scale-95 ${
+                              previewModal.params.type === 'CE' 
+                              ? 'bg-green-600 hover:bg-green-500 shadow-green-900/20' 
+                              : 'bg-red-600 hover:bg-red-500 shadow-red-900/20'
+                          }`}
+                      >
+                          ⚡ Execute Order
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
     </div>
   );
 }
