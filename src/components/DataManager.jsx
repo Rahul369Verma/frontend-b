@@ -55,7 +55,12 @@ const DataManager = () => {
             const data = await res.json();
             
             if (data.status === 'success') {
-                setArchiveStatus(`Success! Saved to ${data.file.split('/').pop()}`);
+                if (data.batch) {
+                    const successCount = data.results.filter(r => r.status === 'success').length;
+                    setArchiveStatus(`Batch Success! Archived ${successCount} files.`);
+                } else {
+                    setArchiveStatus(`Success! Saved to ${data.file.split('/').pop()}`);
+                }
                 fetchArchives();
             } else {
                 setArchiveStatus(`Error: ${data.error}`);
@@ -135,7 +140,7 @@ const DataManager = () => {
                     {/* A. Futures Archiver */}
                     <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg h-fit">
                         <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-                            <FaCloudDownloadAlt className="text-green-400" /> Futures Archiver
+                            <FaCloudDownloadAlt className="text-green-400" /> Futures & AI Dataset
                         </h2>
                         <div className="space-y-4">
                             <div>
@@ -164,10 +169,11 @@ const DataManager = () => {
                                         <option value="15">15 Minute</option>
                                         <option value="60">1 Hour</option>
                                         <option value="D">Daily</option>
+                                        <option value="ALL">All Timeframes (Batch)</option>
                                     </select>
                                 </div>
                                 <div className="text-xs text-gray-500 italic">
-                                    * Archives active futures contract (approx. 100 days).
+                                    * Archives active futures (~100 days). Use 'All Timeframes' for full AI training set.
                                 </div>
                             </div>
 
