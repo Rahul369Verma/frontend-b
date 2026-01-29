@@ -465,7 +465,53 @@ export default function Backtest() {
                     </select>
                 </div>
                 
-                 <div className="col-span-1 flex items-center gap-3 bg-slate-800 p-2 rounded border border-slate-700 mt-5 h-10">
+                {/* TRADING MODE (BUY v/s SELL) */}
+                <div>
+                     <label className="block text-sm font-medium text-purple-400 mb-1">Trading Mode</label>
+                     <select 
+                        className="w-full bg-slate-900 border border-purple-900 rounded p-2 text-white"
+                        value={params.trade_mode || 'BUY'}
+                        onChange={e => setParams({...params, trade_mode: e.target.value})}
+                     >
+                         <option value="BUY">Buying (Long Options)</option>
+                         <option value="SELL">Selling (Naked Shorts)</option>
+                         <option value="HEDGE_SELL">Selling (Hedged)</option>
+                     </select>
+                </div>
+
+                {/* Selling Parameters (Conditional) */}
+                {(params.trade_mode === 'SELL' || params.trade_mode === 'HEDGE_SELL') && (
+                     <div className="col-span-1 lg:col-span-2 bg-slate-800/50 p-3 rounded border border-purple-500/30 grid grid-cols-3 gap-3">
+                         <div>
+                             <label className="block text-xs text-purple-300 mb-1">Margin / Lot (₹)</label>
+                             <input type="number" 
+                                className="w-full bg-slate-900 border border-purple-700/50 rounded p-2 text-white text-xs"
+                                value={params.margin_per_lot || 120000}
+                                onChange={e => setParams({...params, margin_per_lot: parseFloat(e.target.value)})}
+                             />
+                         </div>
+                         <div>
+                             <label className="block text-xs text-purple-300 mb-1">Theta Gain / Day (Pts)</label>
+                             <input type="number" 
+                                className="w-full bg-slate-900 border border-purple-700/50 rounded p-2 text-white text-xs"
+                                value={params.theta_decay || 20}
+                                onChange={e => setParams({...params, theta_decay: parseFloat(e.target.value)})}
+                             />
+                         </div>
+                         {params.trade_mode === 'HEDGE_SELL' && (
+                             <div>
+                                 <label className="block text-xs text-purple-300 mb-1">Hedge Cost (Pts)</label>
+                                 <input type="number" 
+                                    className="w-full bg-slate-900 border border-purple-700/50 rounded p-2 text-white text-xs"
+                                    value={params.hedge_cost || 10}
+                                    onChange={e => setParams({...params, hedge_cost: parseFloat(e.target.value)})}
+                                 />
+                             </div>
+                         )}
+                     </div>
+                )}
+                
+                 <div className="col-span-1 lg:col-span-1 flex items-center gap-3 bg-slate-800 p-2 rounded border border-slate-700 mt-0 h-10">
                     <input 
                         type="checkbox" 
                         id="holding_enabled"
@@ -474,7 +520,7 @@ export default function Backtest() {
                         onChange={e => setParams({...params, holding_enabled: e.target.checked})}
                     />
                     <label htmlFor="holding_enabled" className="text-xs font-bold text-slate-300 cursor-pointer select-none">
-                        Enable Positional / 24h Mode <span className="text-slate-500 font-normal">(No Intraday Auto-Exit)</span>
+                        Positional <span className="text-slate-500 font-normal">(Carry Over)</span>
                     </label>
                 </div>
             </div>
