@@ -19,7 +19,26 @@ export default function Backtest() {
   const [savedConfigs, setSavedConfigs] = useState([]);
   const [liveConfigs, setLiveConfigs] = useState([]);
   const [aiModels, setAiModels] = useState([]); // List of available models
-  const [marketTimings, setMarketTimings] = useState({}); // New State
+  const [marketTimings, setMarketTimings] = useState({});
+  const [expiryDates, setExpiryDates] = useState([]); // For Futures Expiry Selection
+
+  useEffect(() => {
+    const fetchExpiries = async () => {
+        if (!params.symbol) return;
+        try {
+            const res = await axios.get(`${API_URL}/cal/expiries?symbol=${params.symbol}`);
+            if (res.data.expiries && res.data.expiries.length > 0) {
+                setExpiryDates(res.data.expiries);
+            } else {
+                setExpiryDates([]);
+            }
+        } catch (err) {
+            console.error("Failed to fetch expiries", err);
+            setExpiryDates([]);
+        }
+    };
+    fetchExpiries();
+  }, [params.symbol]);
 
 
   const fetchModels = async () => {
@@ -149,6 +168,22 @@ export default function Backtest() {
       }
   };
 
+  // --- Helper: Clean Payload for Backend ---
+  const preparePayload = (currentParams) => {
+      const clean = { ...currentParams };
+      Object.keys(clean).forEach(key => {
+          let val = clean[key];
+          // Try parse numeric strings
+          if (typeof val === 'string' && val.trim() !== '') {
+              // Check if valid number format (allow ints and floats)
+              if (!isNaN(Number(val))) {
+                  clean[key] = Number(val);
+              }
+          }
+      });
+      return clean;
+  };
+
   const handleDeployLive = async () => {
     if (!params.symbol) return alert("Please select a symbol.");
     // Warn if format is incorrect
@@ -162,13 +197,15 @@ export default function Backtest() {
 
     // MERGE DEFAULTS: Ensure we save the EXACT snapshot of what the user sees
     const currentDefaults = strategyDefaults[params.strategy] || {};
-    const mergedParams = { ...currentDefaults, ...params };
+    // Merge: Defaults -> Params
+    const mergedRaw = { ...currentDefaults, ...params };
+    const cleanParams = preparePayload(mergedRaw);
 
     try {
         await axios.post(`${API_URL}/config/symbols`, {
             symbol: params.symbol,
             strategy: params.strategy,
-            params: mergedParams,
+            params: cleanParams,
             isActive: true, 
             tradeMode: 'PAPER' 
         });
@@ -182,7 +219,9 @@ export default function Backtest() {
     setLoading(true);
     setResult(null);
     try {
-      const res = await axios.post(`${API_URL}/engine/backtest/run`, params);
+      // Clean params before executing
+      const cleanParams = preparePayload(params);
+      const res = await axios.post(`${API_URL}/engine/backtest/run`, cleanParams);
       if (res.data.error) {
         alert("Backtest Error: " + res.data.error);
         setResult(null);
@@ -465,6 +504,26 @@ export default function Backtest() {
                     </select>
                 </div>
                 
+                {/* Futures Expiry Selection */}
+                {params.dataSource === 'FUT' && (
+                     <div>
+                         <label className="block text-sm font-medium text-purple-400 mb-1">Futures Expiry</label>
+                         <select 
+                             className="w-full bg-slate-900 border border-purple-900 rounded p-2 text-white"
+                             value={params.futures_expiry || ''}
+                             onChange={e => setParams({...params, futures_expiry: e.target.value})}
+                         >
+                             <option value="">-- Auto (Match Start Date) --</option>
+                             {expiryDates.map((exp) => (
+                                 <option key={exp.date} value={exp.date}>{exp.label}</option>
+                             ))}
+                         </select>
+                         <div className="text-[10px] text-gray-500 mt-1">
+                             Force a specific contract (e.g. 26FEB) regardless of backtest dates.
+                         </div>
+                     </div>
+                )}
+                
                 {/* TRADING MODE (BUY v/s SELL) */}
                 <div>
                      <label className="block text-sm font-medium text-purple-400 mb-1">Trading Mode</label>
@@ -543,7 +602,7 @@ export default function Backtest() {
                             min={instrumentConfig[params.symbol]?.lotSize || 1}
                             className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
                             value={params.lot_size}
-                            onChange={e => setParams({...params, lot_size: e.target.value})} />
+                            onChange={e => setParams({...params, lot_size: parseInt(e.target.value)})} />
                         <span className="text-[10px] text-slate-500">
                            Multiple of {instrumentConfig[params.symbol]?.lotSize || '1'}
                         </span>
@@ -558,13 +617,13 @@ export default function Backtest() {
                         <label className="block text-xs text-slate-400 mb-1">Max Single Loss (₹)</label>
                         <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
                             value={params.max_single_trade_loss || 2000}
-                            onChange={e => setParams({...params, max_single_trade_loss: parseFloat(e.target.value)})} />
+                            onChange={e => setParams({...params, max_single_trade_loss: e.target.value})} />
                     </div>
                     <div>
                         <label className="block text-xs text-slate-400 mb-1">Max Trades / Day</label>
                         <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
                             value={params.max_trades_per_day || 10}
-                            onChange={e => setParams({...params, max_trades_per_day: e.target.value})} />
+                            onChange={e => setParams({...params, max_trades_per_day: parseInt(e.target.value)})} />
                     </div>
                     <div>
                         <label className="block text-xs text-slate-400 mb-1">Trade Start Time</label>
@@ -600,33 +659,56 @@ export default function Backtest() {
                 
                 <div className="grid grid-cols-2 gap-4">
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1">Stop-Loss Method</label>
+                        <label className="block text-xs text-slate-400 mb-1">Stop-Loss Type</label>
                         <select className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                            value={params.sl_method || 'atr'}
-                            onChange={e => setParams({...params, sl_method: e.target.value})}
+                            value={params.sl_type || 'ATR'}
+                            onChange={e => setParams({...params, sl_type: e.target.value})}
                         >
-                            <option value="atr">ATR (Dynamic)</option>
-                            <option value="fixed">Fixed Points (Not Impl)</option>
+                            <option value="ATR">ATR (Dynamic)</option>
+                            <option value="FIXED">Fixed Points</option>
+                            <option value="STRATEGY">Strategy Defined</option>
                         </select>
                     </div>
-                    <div>
-                        <label className="block text-xs text-slate-400 mb-1">ATR Period</label>
-                        <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                            value={params.atr_period || 14}
-                            onChange={e => setParams({...params, atr_period: e.target.value})} />
-                    </div>
-                    <div>
-                        <label className="block text-xs text-slate-400 mb-1">ATR TP Multiplier</label>
-                        <input type="number" step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                            value={params.atr_tp_mult || 3.5}
-                            onChange={e => setParams({...params, atr_tp_mult: e.target.value})} />
-                    </div>
-                    <div>
-                        <label className="block text-xs text-slate-400 mb-1">ATR SL Multiplier</label>
-                        <input type="number" step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                            value={params.atr_sl_mult || 1.8}
-                            onChange={e => setParams({...params, atr_sl_mult: e.target.value})} />
-                    </div>
+                    {/* Conditional Inputs */}
+                    {params.sl_type === 'FIXED' ? (
+                        <>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">Fixed SL (Pts)</label>
+                                <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                    value={params.fixed_sl_points || 40}
+                                    onChange={e => setParams({...params, fixed_sl_points: e.target.value})} />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">Fixed TP (Pts)</label>
+                                <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                    value={params.fixed_tp_points || 100}
+                                    onChange={e => setParams({...params, fixed_tp_points: e.target.value})} />
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">ATR Period</label>
+                                <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                    value={params.atr_period || 14}
+                                    onChange={e => setParams({...params, atr_period: parseInt(e.target.value) || 14})} />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">ATR TP Multiplier</label>
+                                <input type="number" step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                    value={params.atr_tp_mult || 3.5}
+                                    onChange={e => setParams({...params, atr_tp_mult: parseFloat(e.target.value)})} />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-slate-400 mb-1">
+                                    {params.sl_type === 'STRATEGY' ? 'ATR SL Mult (Fallback)' : 'ATR SL Multiplier'}
+                                </label>
+                                <input type="number" step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                    value={params.atr_sl_mult || 1.8}
+                                    onChange={e => setParams({...params, atr_sl_mult: parseFloat(e.target.value)})} />
+                            </div>
+                        </>
+                    )}
                 </div>
                 </div>
 
@@ -716,6 +798,7 @@ export default function Backtest() {
                     {Object.entries(strategyDefaults[params.strategy] || {}).map(([key, val]) => {
                         // Skip keys we explicitly handled above or internal ones
                         if (['resolution', 'lots', 'trade_start_time', 'trade_end_time', 'max_daily_loss', 'max_single_trade_loss', 'max_trades_per_day', 'max_slippage_percent'].includes(key)) return null;
+                        if (['atr_period', 'atr_tp_mult', 'atr_sl_mult', 'use_trailing_sl', 'trailing_sl_mult'].includes(key)) return null; // Rendered in Risk/Exit Section
                         if (params.strategy === 'orb_breakout' && ['range_duration_min', 'breakout_buffer_pct'].includes(key)) return null;
 
                         

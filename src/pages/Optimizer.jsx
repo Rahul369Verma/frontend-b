@@ -180,10 +180,12 @@ export default function Optimizer() {
                 onChange={e => {
                     const newSymbol = e.target.value;
                     const result = instrumentConfig[newSymbol];
+                    // Dynamic Lot Size from Backend Config
+                    const newLotSize = result ? result.lotSize : 15; 
                     setConfig({
                         ...config, 
                         symbol: newSymbol,
-                        lot_size: result ? result.lotSize : 15
+                        lot_size: newLotSize
                     });
                 }}
               >

@@ -220,7 +220,8 @@ export default function Dashboard() {
                quantity: parseInt(params.quantity),
                slPoints: parseFloat(params.sl),
                tpPoints: parseFloat(params.tp),
-               entryPrice: parseFloat(params.price)
+               entryPrice: parseFloat(params.price),
+               mode: params.forcePaper ? 'PAPER' : undefined // Override Mode
            };
 
            await axios.post(`${API_URL}/engine/manual-trade`, payload);
@@ -688,7 +689,20 @@ export default function Dashboard() {
                           {previewModal.params.type === 'CE' ? <TrendingUp className="w-5 h-5" /> : <TrendingUp className="w-5 h-5 rotate-180" />}
                           Confirm {previewModal.params.type} Entry
                       </h3>
-                      <button onClick={() => setPreviewModal(prev => ({ ...prev, isOpen: false }))} className="text-slate-400 hover:text-white">✕</button>
+                      
+                      <div className="flex items-center gap-3">
+                          {/* MODE BADGE */}
+                          {(status.mode === 'LIVE' || status.mode === 'live') ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-600 text-white animate-pulse border border-red-400 shadow-lg shadow-red-500/20">
+                                  🔴 LIVE EXECUTION
+                              </span>
+                          ) : (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/20 text-blue-300 border border-blue-500/40">
+                                  📝 SIMULATION
+                              </span>
+                          )}
+                          <button onClick={() => setPreviewModal(prev => ({ ...prev, isOpen: false }))} className="text-slate-400 hover:text-white">✕</button>
+                      </div>
                   </div>
 
                   {/* Body */}
@@ -762,6 +776,25 @@ export default function Dashboard() {
                                   </div>
                               </div>
                               
+                              {/* Force Paper Toggle - Allow testing in Live Mode */}
+                              {(status.mode === 'LIVE' || status.mode === 'live') && (
+                                  <div className="bg-blue-500/10 border border-blue-500/30 p-3 rounded-lg flex justify-between items-center">
+                                      <div>
+                                          <div className="text-sm font-bold text-blue-300">Force Paper Trade</div>
+                                          <div className="text-[10px] text-blue-400">Simulate this trade without real execution</div>
+                                      </div>
+                                      <label className="relative inline-flex items-center cursor-pointer">
+                                          <input 
+                                              type="checkbox" 
+                                              className="sr-only peer"
+                                              checked={previewModal.params.forcePaper || false}
+                                              onChange={(e) => handleModalInput('forcePaper', e.target.checked)}
+                                          />
+                                          <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                      </label>
+                                  </div>
+                              )}
+
                               <div className="text-[10px] text-slate-500 italic text-center">
                                   * Limit order will be placed with 2% buffer for entry.
                               </div>
