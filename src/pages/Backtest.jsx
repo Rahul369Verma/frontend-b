@@ -669,6 +669,18 @@ export default function Backtest() {
                             <option value="STRATEGY">Strategy Defined</option>
                         </select>
                     </div>
+                    <div>
+                        <label className="block text-xs text-slate-400 mb-1">Strike Selection</label>
+                        <select className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                            value={params.strike_selection || 'ATM'}
+                            onChange={e => setParams({...params, strike_selection: e.target.value})}
+                        >
+                            <option value="ATM">ATM (Delta ~0.5)</option>
+                            <option value="ITM_1">ITM 1 Step (Safe / Delta ~0.6)</option>
+                            <option value="ITM_2">ITM 2 Step (Deep / Delta ~0.7)</option>
+                            <option value="OTM_1">OTM 1 Step (Risky / Delta ~0.4)</option>
+                        </select>
+                    </div>
                     {/* Conditional Inputs */}
                     {params.sl_type === 'FIXED' ? (
                         <>
