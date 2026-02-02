@@ -59,6 +59,7 @@ export default function Optimizer() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+                ...config,
                 symbol: config.symbol,
                 lot_size: config.lot_size || 15,
                 start_date: config.start_date,
