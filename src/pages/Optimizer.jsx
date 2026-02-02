@@ -168,6 +168,7 @@ export default function Optimizer() {
                 <option value="inside_bar">Inside Bar Breakout</option>
                 <option value="orb_breakout">Open Range Breakout (ORB)</option>
                 <option value="supertrend_adx">SuperTrend + ADX Filter</option>
+                <option value="candlestick_pattern">Candlestick Pattern (Reversal)</option>
                 <option value="universal">Universal / Discovery Mode (Random AI)</option>
               </select>
             </div>

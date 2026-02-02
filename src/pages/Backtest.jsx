@@ -93,7 +93,8 @@ export default function Backtest() {
               'InsideBarStrategy': 'inside_bar',
               'OrbStrategy': 'orb_breakout',
               'SuperTrendStrategy': 'supertrend_adx',
-              'UniversalStrategy': 'universal'
+              'UniversalStrategy': 'universal',
+              'CandlestickPatternStrategy': 'candlestick_pattern'
           };
           if (STRATEGY_MAPPING[strategyId]) {
               strategyId = STRATEGY_MAPPING[strategyId];
