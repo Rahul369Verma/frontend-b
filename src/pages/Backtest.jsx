@@ -668,6 +668,7 @@ export default function Backtest() {
                             <option value="ATR">ATR (Dynamic)</option>
                             <option value="FIXED">Fixed Points</option>
                             <option value="STRATEGY">Strategy Defined</option>
+                            <option value="INDEX_LEVEL">Index Level (Manual)</option>
                         </select>
                     </div>
                     <div>
@@ -954,6 +955,7 @@ export default function Backtest() {
                         <th className="px-4 py-3 bg-slate-800">Entry Time</th>
                         <th className="px-4 py-3 bg-slate-800">Symbol</th>
                         <th className="px-4 py-3 bg-slate-800">Volume</th>
+                        <th className="px-4 py-3 bg-slate-800">Underlying</th>
                         <th className="px-4 py-3 bg-slate-800">Avg Vol</th>
                         <th className="px-4 py-3 bg-slate-800">Type</th>
                         <th className="px-4 py-3 bg-slate-800">AI Conf</th>
@@ -972,24 +974,34 @@ export default function Backtest() {
                         <tr key={idx} className="border-b border-slate-700 hover:bg-slate-700/30">
                           <td className="px-4 py-3">{new Date(trade.entryTime).toLocaleString()}</td>
                           <td className="px-4 py-3 font-mono text-xs">{trade.option_symbol || '-'}</td>
-                          <td className="px-4 py-3">{trade.volume || '-'}</td>
-                          <td className="px-4 py-3">{trade.avg_volume ? Math.round(trade.avg_volume) : '-'}</td>
+                          <td className="px-4 py-3 text-slate-400">{trade.volume || '-'}</td>
+                          <td className="px-4 py-3 font-medium text-blue-300">
+                              <div className="flex flex-col text-xs">
+                                  <span>{trade.underlying_price ? `${Number(trade.underlying_price).toFixed(2)} (${trade.underlying_type})` : '-'}</span>
+                                  {trade.spot_price && trade.underlying_type === 'FUT' && (
+                                      <span className="text-slate-400">Spot: {Number(trade.spot_price).toFixed(2)}</span>
+                                  )}
+                              </div>
+                          </td>
+                          <td className="px-4 py-3 text-slate-500">{trade.avg_volume ? Math.round(trade.avg_volume) : '-'}</td>
                           <td className={`px-4 py-3 font-bold ${trade.type === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
                             {trade.type}
                           </td>
                           <td className="px-4 py-3 font-mono text-blue-300">
                             {trade.ai_confidence ? (trade.ai_confidence * 100).toFixed(0) + '%' : '-'}
                           </td>
-                          <td className="px-4 py-3">{trade.entryPrice.toFixed(2)}</td>
-                          <td className="px-4 py-3 text-red-300">{trade.sl ? trade.sl.toFixed(2) : '-'}</td>
-                          <td className="px-4 py-3 text-green-300">{trade.tp ? trade.tp.toFixed(2) : '-'}</td>
-                          <td className="px-4 py-3">₹{trade.invested_amount ? trade.invested_amount.toFixed(2) : '-'}</td>
-                          <td className="px-4 py-3">{new Date(trade.exitTime).toLocaleString()}</td>
-                          <td className="px-4 py-3">{trade.exitPrice.toFixed(2)}</td>
-                          <td className={`px-4 py-3 font-bold ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                            {trade.pnl.toFixed(2)}
+                          <td className="px-4 py-3 font-bold text-white">{Number(trade.entryPrice).toFixed(2)}</td>
+                          <td className="px-4 py-3 text-red-300 cursor-help border-b border-dashed border-red-500/30" title={trade.slDetails ? `ATR: ${trade.slDetails.atr} | Strat: ${trade.slDetails.strategy || 'N/A'} | Fixed: ${trade.slDetails.fixed || 'N/A'} | Chosen: ${trade.slDetails.chosen}` : 'No Details'}>
+                              {trade.sl ? Number(trade.sl).toFixed(2) : '-'}
                           </td>
-                          <td className="px-4 py-3 text-slate-400">{trade.reason}</td>
+                          <td className="px-4 py-3 text-green-300">{trade.tp ? Number(trade.tp).toFixed(2) : '-'}</td>
+                          <td className="px-4 py-3">₹{trade.invested_amount ? Number(trade.invested_amount).toFixed(2) : '-'}</td>
+                          <td className="px-4 py-3">{new Date(trade.exitTime).toLocaleString()}</td>
+                          <td className="px-4 py-3">{Number(trade.exitPrice).toFixed(2)}</td>
+                          <td className={`px-4 py-3 font-bold ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {Number(trade.pnl).toFixed(2)}
+                          </td>
+                          <td className="px-4 py-3 text-slate-400 text-xs">{trade.reason}</td>
                         </tr>
                       ))}
                     </tbody>
