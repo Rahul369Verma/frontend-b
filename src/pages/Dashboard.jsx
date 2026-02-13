@@ -342,7 +342,32 @@ export default function Dashboard() {
                                 {/* Header */}
                                 <div className="p-4 bg-slate-700/50 border-b border-slate-600 flex justify-between items-center">
                                     <div className="flex justify-between items-center w-full">
-                                        <h4 className="font-bold text-lg text-white/90">{symbol}</h4>
+                                        <div className="flex items-center gap-2">
+                                            <h4 className="font-bold text-lg text-white/90">{symbol}</h4>
+                                            {/* Toggle Switch */}
+                                            <label className="relative inline-flex items-center cursor-pointer ml-2" title="Toggle Strategy Active Status">
+                                                <input 
+                                                    type="checkbox" 
+                                                    className="sr-only peer"
+                                                    checked={params.isActive !== false} // Default true if undefined
+                                                    onChange={async (e) => {
+                                                        const newState = e.target.checked;
+                                                        try {
+                                                            await axios.post(`${API_URL}/config/symbols/toggle`, { 
+                                                                symbol, 
+                                                                isActive: newState 
+                                                            });
+                                                            // Optimistic Update or Wait for Socket
+                                                            // For now, let socket handle it or refresh
+                                                            fetchData();
+                                                        } catch (err) {
+                                                            alert("Failed to toggle strategy: " + err.message);
+                                                        }
+                                                    }}
+                                                />
+                                                <div className="w-9 h-5 bg-slate-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-500"></div>
+                                            </label>
+                                        </div>
                                         <div className="flex gap-2 items-center">
                                             {/* Context-Aware Mock Trade Buttons */}
                                             <button

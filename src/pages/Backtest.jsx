@@ -79,40 +79,47 @@ export default function Backtest() {
   useEffect(() => {
       if (location.state) {
           console.log("📥 Received Params via Navigation:", location.state);
-          // Merge incoming params with defaults, ensuring incoming takes precedence
-          const newParams = { ...params };
           
-          if (location.state.symbol) newParams.symbol = location.state.symbol;
-          
-          // Normalize Strategy Name (Class Name -> Internal ID)
-          let strategyId = location.state.strategy;
-          const STRATEGY_MAPPING = {
-              'MultiTimeframeStrategy': 'mta_ema_crossover',
-              'VwapMomentumStrategy': 'vwap_momentum',
-              'BollingerBandStrategy': 'bb_reversion',
-              'InsideBarStrategy': 'inside_bar',
-              'OrbStrategy': 'orb_breakout',
-              'SuperTrendStrategy': 'supertrend_adx',
-              'UniversalStrategy': 'universal',
-              'CandlestickPatternStrategy': 'candlestick_pattern'
-          };
-          if (STRATEGY_MAPPING[strategyId]) {
-              strategyId = STRATEGY_MAPPING[strategyId];
-          }
-          newParams.strategy = strategyId;
+          setParams(prevParams => {
+              const newParams = { ...prevParams };
+              
+              if (location.state.symbol) newParams.symbol = location.state.symbol;
+              
+              // Normalize Strategy Name (Class Name -> Internal ID)
+              let strategyId = location.state.strategy;
+              const STRATEGY_MAPPING = {
+                  'MultiTimeframeStrategy': 'mta_ema_crossover',
+                  'VwapMomentumStrategy': 'vwap_momentum',
+                  'BollingerBandStrategy': 'bb_reversion',
+                  'InsideBarStrategy': 'inside_bar',
+                  'OrbStrategy': 'orb_breakout',
+                  'SuperTrendStrategy': 'supertrend_adx',
+                  'UniversalStrategy': 'universal',
+                  'CandlestickPatternStrategy': 'candlestick_pattern'
+              };
+              if (STRATEGY_MAPPING[strategyId]) {
+                  strategyId = STRATEGY_MAPPING[strategyId];
+              }
+              newParams.strategy = strategyId;
 
-          if (location.state.params) {
-              Object.keys(location.state.params).forEach(key => {
-                  newParams[key] = location.state.params[key];
-              });
-          }
+              if (location.state.params) {
+                  Object.keys(location.state.params).forEach(key => {
+                      newParams[key] = location.state.params[key];
+                  });
+              }
+              
+              // Merge Top-level critical params (Explicitly passed from Optimizer)
+              if (location.state.dataSource) newParams.dataSource = location.state.dataSource;
+              if (location.state.backtest_mode) newParams.backtest_mode = location.state.backtest_mode;
+              if (location.state.resolution) newParams.resolution = location.state.resolution;
 
-          setParams(newParams);
+              return newParams;
+          });
           
           // Clear state to avoid re-triggering on refresh (optional but good context cleanup)
           window.history.replaceState({}, document.title);
       }
-  }, [location.state]);
+  }, [location.state, setParams]);
 
 
   // Keys to exclude from Strategy Params (System/Backtest Config)
@@ -172,7 +179,16 @@ export default function Backtest() {
   // --- Helper: Clean Payload for Backend ---
   const preparePayload = (currentParams) => {
       const clean = { ...currentParams };
+      
+      // Remove legacy/system keys that shouldn't go to backend logic if they are redundant
+      // 'interval' is legacy for 'resolution'. Backend uses 'resolution'.
+      if (clean.interval) delete clean.interval;
+      if (clean.period) delete clean.period; 
+
       Object.keys(clean).forEach(key => {
+          // Resolution should stay as string if originally string (Backtester expects safe string/number handling but Fyers prefers string)
+          if (key === 'resolution') return;
+
           let val = clean[key];
           // Try parse numeric strings
           if (typeof val === 'string' && val.trim() !== '') {
@@ -238,29 +254,82 @@ export default function Backtest() {
 
   // Auto-fetch defaults on mount if strategy is set but empty params
   // Or handle change
+  // Keys that should persist across strategy changes
+  const SYSTEM_KEYS = [
+      'symbol', 'start_date', 'end_date', 'capital', 'resolution', 
+      'lot_size', 'trade_start_time', 'trade_end_time', 
+      'backtest_mode', 'dataSource', 'futures_expiry', 'trade_mode'
+  ];
+
+  // Helper: Get only system params from current state
+  const getSystemParams = (currentParams) => {
+      const sys = {};
+      SYSTEM_KEYS.forEach(k => {
+          if (currentParams[k] !== undefined) sys[k] = currentParams[k];
+      });
+      return sys;
+  };
+
   const handleStrategyChange = (e) => {
     const newStrategy = e.target.value;
     
     // Fetch Best Defaults
-    // Use the same endpoint we fixed: /api/engine/defaults?strategy=...
-    fetch(`http://localhost:5000/api/engine/defaults?strategy=${newStrategy}`)
+    fetch(`${API_URL}/engine/defaults?strategy=${newStrategy}`)
         .then(res => res.json())
         .then(data => {
-            const newParams = { ...params, strategy: newStrategy };
-            // Merge defaults
-            Object.keys(data).forEach(key => {
-                newParams[key] = data[key];
-            });
+            // RESET Logic: Keep System Params, Replace Strategy Params with Defaults
+            const systemParams = getSystemParams(params);
+            const newParams = { 
+                ...systemParams, 
+                strategy: newStrategy,
+                ...data 
+            };
             setParams(newParams);
         })
         .catch(err => console.error("Failed to load strategy defaults:", err));
 
-    setParams({ ...params, strategy: newStrategy });
+    // Optimistic Update (will be overwritten by fetch)
+    setParams(prev => ({ ...getSystemParams(prev), strategy: newStrategy }));
   };
 
   return (
     <div className="p-8 space-y-8">
-      <h1 className="text-3xl font-bold text-white">Backtest Strategy</h1>
+      <div className="flex justify-between items-center">
+        <h1 className="text-3xl font-bold text-white">Backtest Strategy</h1>
+        <button 
+            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded border border-slate-700 text-sm transition-colors"
+            onClick={() => {
+                const json = prompt("Paste Parameters JSON here:");
+                if (json) {
+                    try {
+                        const parsed = JSON.parse(json);
+                        
+                        // Smart Import: 
+                        // 1. If JSON has "strategy", we assume it's a full config -> Replace All (but keep critical system keys if missing in JSON)
+                        // 2. If JSON is partial (no strategy), we merge into current.
+                        
+                        // Actually, user wants to Paste JSON and have it EXACTLY as is, usually.
+                        // But if they paste a snippet without Symbol/Date, they want to keep current Symbol/Date.
+                        
+                        // Strategy: Create a base from Current System Params, then Overwrite with JSON.
+                        // This cleans out OLD strategy params (unwanted 'ema_long' etc) that are NOT in the JSON.
+                        
+                        const systemDefaults = getSystemParams(params);
+                        
+                        // If JSON has its own system keys, they override current defaults.
+                        const newParams = { ...systemDefaults, ...parsed };
+                        
+                        setParams(newParams);
+                        alert("✅ Parameters Imported Successfully");
+                    } catch (e) {
+                        alert("❌ Invalid JSON: " + e.message);
+                    }
+                }
+            }}
+        >
+            <span className="font-mono text-xs">{`{ }`}</span> Import JSON
+        </button>
+      </div>
       
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Controls */}

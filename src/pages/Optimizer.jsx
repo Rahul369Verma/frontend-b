@@ -108,6 +108,11 @@ export default function Optimizer() {
         slippage_percent: config.slippage_percent || 0.05,
         brokerage_per_order: config.brokerage_per_order || 20,
         use_ai_prediction: config.use_ai_prediction || false,
+        
+        // Critical Params for Discrepancy Fix
+        dataSource: config.dataSource || 'AUTO',
+        backtest_mode: config.backtest_mode || 'Simulated Premium',
+        resolution: config.resolution || '5',
 
         // Strategy-specific optimized params
         ...result.params
@@ -249,6 +254,59 @@ export default function Optimizer() {
                   onChange={e => setConfig({...config, end_date: e.target.value})}
                 />
               </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4">
+                <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-1">Backtest Mode</label>
+                    <select 
+                        className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                        value={config.backtest_mode || 'Simulated Premium'}
+                        onChange={e => setConfig({...config, backtest_mode: e.target.value})}
+                    >
+                        <option value="Simulated Premium">Simulated Premium (Fast & Approx - 0.5 Delta)</option>
+                        <option value="Real Option Data">Real Option Data (Slow & Accurate)</option>
+                    </select>
+                    {config.backtest_mode === 'Real Option Data' && (
+                        <div className="text-[10px] text-orange-400 mt-1 flex items-center gap-1">
+                             <AlertTriangle className="w-3 h-3" />
+                             <span>Warning: Extremely slow! Fetches option history for every trade.</span>
+                        </div>
+                    )}
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-blue-400 mb-1">Data Source</label>
+                    <select 
+                        className="w-full bg-slate-900 border border-blue-900 rounded p-2 text-white"
+                        value={config.dataSource || 'AUTO'}
+                        onChange={e => setConfig({...config, dataSource: e.target.value})}
+                    >
+                        <option value="AUTO">Auto (Smart Switch)</option>
+                        <option value="SPOT">Spot Data</option>
+                        <option value="FUT">Current Month Future</option>
+                        <option value="ARCHIVE">📂 Local Archive (Fast)</option>
+                    </select>
+                </div>
+                 <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-1">Resolution (Timeframe)</label>
+                  <select 
+                    className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                    value={config.resolution || '5'}
+                    onChange={e => {
+                        const val = e.target.value;
+                        const numVal = Number(val);
+                        setConfig({...config, resolution: isNaN(numVal) ? val : numVal});
+                    }}
+                  >
+                    <option value="1">1 Minute</option>
+                    <option value="3">3 Minutes</option>
+                    <option value="5">5 Minutes</option>
+                    <option value="15">15 Minutes</option>
+                    <option value="30">30 Minutes</option>
+                    <option value="60">1 Hour</option>
+                    <option value="D">Daily</option>
+                  </select>
+                </div>
             </div>
 
             <div>
