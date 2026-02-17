@@ -95,7 +95,8 @@ export default function Backtest() {
                   'OrbStrategy': 'orb_breakout',
                   'SuperTrendStrategy': 'supertrend_adx',
                   'UniversalStrategy': 'universal',
-                  'CandlestickPatternStrategy': 'candlestick_pattern'
+                  'CandlestickPatternStrategy': 'candlestick_pattern',
+                  'BreakoutRangeStrategy': 'breakout_range'
               };
               if (STRATEGY_MAPPING[strategyId]) {
                   strategyId = STRATEGY_MAPPING[strategyId];
@@ -421,6 +422,8 @@ export default function Backtest() {
                 <option value="orb_breakout">Open Range Breakout (ORB)</option>
                 <option value="supertrend_adx">SuperTrend + ADX Filter</option>
                 <option value="ai_filtered">AI Filtered Strategy (LSTM) 🧠</option>
+                <option value="candlestick_pattern">Candlestick Pattern (Reversal)</option>
+                <option value="breakout_range">Breakout Range Strategy</option>
                 <option value="universal">Universal / Discovery Mode</option>
               </select>
             </div>
@@ -792,6 +795,31 @@ export default function Backtest() {
                             </div>
                         </>
                     )}
+
+                    {/* Trailing SL Control */}
+                    <div className="col-span-2 flex items-center justify-between mt-2 bg-slate-800/50 p-2 rounded border border-slate-700/50">
+                         <div className="flex flex-col">
+                             <label className="text-xs text-slate-300 font-medium">Trailing Stop-Loss</label>
+                             <span className="text-[10px] text-slate-500">Move SL to Break-even & Trail</span>
+                         </div>
+                         <div className="flex items-center gap-3">
+                             <input type="checkbox"
+                                 checked={params.use_trailing_sl || false}
+                                 onChange={e => setParams({...params, use_trailing_sl: e.target.checked})}
+                                 className="w-4 h-4 accent-blue-500"
+                             />
+                             {params.use_trailing_sl && (
+                                 <div className="flex items-center gap-1">
+                                     <span className="text-[10px] text-slate-400">Mult:</span>
+                                     <input type="number" step="0.1"
+                                         className="w-16 bg-slate-900 border border-slate-700 rounded p-1 text-xs text-white"
+                                         value={params.trailing_sl_mult || 1.5}
+                                         onChange={e => setParams({...params, trailing_sl_mult: parseFloat(e.target.value)})}
+                                     />
+                                 </div>
+                             )}
+                         </div>
+                    </div>
                 </div>
                 </div>
 
@@ -877,12 +905,31 @@ export default function Backtest() {
                         </>
                     )}
 
+                    {/* Breakout Strategy Specific */}
+                    {params.strategy === 'breakout_range' && (
+                        <div className="col-span-2 bg-slate-800/50 p-2 rounded border border-blue-900/30 mb-2">
+                             <label className="block text-xs text-blue-300 mb-1 font-bold">Breakout Range Mode</label>
+                             <select 
+                                 className="w-full bg-slate-900 border border-blue-900/50 rounded p-2 text-white text-sm"
+                                 value={params.breakout_mode || 'ORB'}
+                                 onChange={e => setParams({...params, breakout_mode: e.target.value})}
+                             >
+                                 <option value="ORB">Opening Range Breakout (ORB)</option>
+                                 <option value="DYNAMIC">Dynamic (Donchian / Recent High-Low)</option>
+                             </select>
+                             <div className="text-[10px] text-slate-500 mt-1">
+                                 {params.breakout_mode === 'ORB' ? 'Trades breakouts of the initial market range (e.g. first 30m).' : 'Trades breakouts of dynamic High/Low channels (Donchian).'}
+                             </div>
+                        </div>
+                    )}
+
                     {/* Dynamic Inputs (Fallback) */}
                     {Object.entries(strategyDefaults[params.strategy] || {}).map(([key, val]) => {
                         // Skip keys we explicitly handled above or internal ones
                         if (['resolution', 'lots', 'trade_start_time', 'trade_end_time', 'max_daily_loss', 'max_single_trade_loss', 'max_trades_per_day', 'max_slippage_percent'].includes(key)) return null;
                         if (['atr_period', 'atr_tp_mult', 'atr_sl_mult', 'use_trailing_sl', 'trailing_sl_mult'].includes(key)) return null; // Rendered in Risk/Exit Section
                         if (params.strategy === 'orb_breakout' && ['range_duration_min', 'breakout_buffer_pct'].includes(key)) return null;
+                        if (params.strategy === 'breakout_range' && ['breakout_mode'].includes(key)) return null;
 
                         
                         const label = key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
@@ -895,11 +942,12 @@ export default function Backtest() {
                                     <input type="checkbox" checked={params[key] ?? val} 
                                         onChange={e => setParams({...params, [key]: e.target.checked})} />
                                 ) : (
-                                    <input type="number" step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                    <input type={typeof val === 'string' ? "text" : "number"} step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
                                         value={params[key] ?? val}
                                         onChange={e => {
                                             let v = e.target.value;
-                                            if (!isNaN(parseFloat(v))) v = parseFloat(v);
+                                            // Only parse as number if the original default was a number
+                                            if (typeof val === 'number' && !isNaN(parseFloat(v))) v = parseFloat(v);
                                             setParams({...params, [key]: v});
                                         }} />
                                 )}
