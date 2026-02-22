@@ -24,6 +24,26 @@ export default function Optimizer() {
 
   const [strategyDefaults, setStrategyDefaults] = useState({});
   const [instrumentConfig, setInstrumentConfig] = useState({});
+  const [expiryDates, setExpiryDates] = useState([]); // For Options/Futures Expiry Selection
+
+  React.useEffect(() => {
+    const fetchExpiries = async () => {
+        if (!config.symbol) return;
+        try {
+            const res = await fetch(`${API_URL}/api/cal/expiries?symbol=${config.symbol}`);
+            const data = await res.json();
+            if (data.expiries && data.expiries.length > 0) {
+                setExpiryDates(data.expiries);
+            } else {
+                setExpiryDates([]);
+            }
+        } catch (err) {
+            console.error("Failed to fetch expiries", err);
+            setExpiryDates([]);
+        }
+    };
+    fetchExpiries();
+  }, [config.symbol]);
 
   React.useEffect(() => {
     const socket = io(API_URL);
@@ -71,7 +91,8 @@ export default function Optimizer() {
                 min_win_rate: config.minWinRate,
                 max_drawdown: config.maxDrawdown || 20,
                 min_sharpe_ratio: config.minSharpeRatio,
-                stop_on_match: stopOnMatch
+                stop_on_match: stopOnMatch,
+                futures_expiry: config.futures_expiry
             })
         });
         
@@ -112,7 +133,8 @@ export default function Optimizer() {
         // Critical Params for Discrepancy Fix
         dataSource: config.dataSource || 'AUTO',
         backtest_mode: config.backtest_mode || 'Simulated Premium',
-        resolution: config.resolution || '5',
+        resolution: config.resolution || '1',
+        futures_expiry: config.futures_expiry,
 
         // Strategy-specific optimized params
         ...result.params
@@ -176,6 +198,9 @@ export default function Optimizer() {
                 <option value="supertrend_adx">SuperTrend + ADX Filter</option>
                 <option value="candlestick_pattern">Candlestick Pattern (Reversal)</option>
                 <option value="breakout_range">Breakout Range Strategy</option>
+                <option value="pos_5ema_scalp">Power of Stocks 5 EMA Scalp</option>
+                <option value="vwap_scalp">VWAP Rejection Scalp</option>
+                <option value="momentum_scalp">Momentum RSI-EMA Scalp</option>
                 <option value="universal">Universal / Discovery Mode (Random AI)</option>
               </select>
             </div>
@@ -283,16 +308,40 @@ export default function Optimizer() {
                         onChange={e => setConfig({...config, dataSource: e.target.value})}
                     >
                         <option value="AUTO">Auto (Smart Switch)</option>
-                        <option value="SPOT">Spot Data</option>
+                        <option value="SPOT">Spot Data (API)</option>
                         <option value="FUT">Current Month Future</option>
                         <option value="ARCHIVE">📂 Local Archive (Fast)</option>
+                        <option value="SPOT_ARCHIVE">🔁 Spot API + Archive Options</option>
                     </select>
                 </div>
+                
+                {/* Expiry Selection (Futures / Real Option Data) */}
+                {(config.dataSource === 'FUT' || config.backtest_mode === 'Real Option Data') && (
+                     <div>
+                         <label className="block text-sm font-medium text-purple-400 mb-1">
+                             {config.backtest_mode === 'Real Option Data' ? 'Options Expiry Date' : 'Futures Expiry Date'}
+                         </label>
+                         <select 
+                             className="w-full bg-slate-900 border border-purple-900 rounded p-2 text-white"
+                             value={config.futures_expiry || ''}
+                             onChange={e => setConfig({...config, futures_expiry: e.target.value})}
+                         >
+                             <option value="">-- Auto (Match Start Date) --</option>
+                             {expiryDates.map((exp) => (
+                                 <option key={exp.date} value={exp.date}>{exp.label}</option>
+                             ))}
+                         </select>
+                         <div className="text-[10px] text-gray-500 mt-1">
+                             Force a specific contract (e.g. 26FEB) regardless of backtest dates.
+                         </div>
+                     </div>
+                )}
+                
                  <div>
                   <label className="block text-sm font-medium text-slate-400 mb-1">Resolution (Timeframe)</label>
                   <select 
                     className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
-                    value={config.resolution || '5'}
+                    value={config.resolution || '1'}
                     onChange={e => {
                         const val = e.target.value;
                         const numVal = Number(val);
@@ -495,6 +544,8 @@ export default function Optimizer() {
                                         {res.params.use_adx_filter && <span className="mr-1 bg-blue-900/30 px-1 rounded">ADX</span>}
                                         {res.params.use_rsi_filter && <span className="mr-1 bg-purple-900/30 px-1 rounded">RSI</span>}
                                         {res.params.use_1h_filter && <span className="bg-orange-900/30 px-1 rounded">1H</span>}
+                                        {res.params.use_st_filter && <span className="mr-1 bg-green-900/30 px-1 rounded">STTrend</span>}
+                                        {res.params.use_vwap_filter && <span className="mr-1 bg-blue-900/30 px-1 rounded">VWAP</span>}
                                         {res.params.trend_filter && <span className="bg-green-900/30 px-1 rounded">Trend</span>}
                                         {res.params.use_ai_prediction && <span className="ml-1 bg-teal-900/30 text-teal-400 px-1 rounded border border-teal-900/50">Smart AI</span>}
                                     </td>

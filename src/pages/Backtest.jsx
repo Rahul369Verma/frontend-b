@@ -96,7 +96,10 @@ export default function Backtest() {
                   'SuperTrendStrategy': 'supertrend_adx',
                   'UniversalStrategy': 'universal',
                   'CandlestickPatternStrategy': 'candlestick_pattern',
-                  'BreakoutRangeStrategy': 'breakout_range'
+                  'BreakoutRangeStrategy': 'breakout_range',
+                  'PowerOfStocks5EmaStrategy': 'pos_5ema_scalp',
+                  'VwapScalpStrategy': 'vwap_scalp',
+                  'MomentumScalpStrategy': 'momentum_scalp'
               };
               if (STRATEGY_MAPPING[strategyId]) {
                   strategyId = STRATEGY_MAPPING[strategyId];
@@ -424,6 +427,9 @@ export default function Backtest() {
                 <option value="ai_filtered">AI Filtered Strategy (LSTM) 🧠</option>
                 <option value="candlestick_pattern">Candlestick Pattern (Reversal)</option>
                 <option value="breakout_range">Breakout Range Strategy</option>
+                <option value="pos_5ema_scalp">Power of Stocks 5 EMA Scalp</option>
+                <option value="vwap_scalp">VWAP Rejection Scalp</option>
+                <option value="momentum_scalp">Momentum RSI-EMA Scalp</option>
                 <option value="universal">Universal / Discovery Mode</option>
               </select>
             </div>
@@ -571,16 +577,19 @@ export default function Backtest() {
                         onChange={e => setParams({...params, dataSource: e.target.value})}
                     >
                         <option value="AUTO">Auto (Smart Switch)</option>
-                        <option value="SPOT">Spot Data</option>
+                        <option value="SPOT">Spot Data (API)</option>
                         <option value="FUT">Current Month Future</option>
                         <option value="ARCHIVE">📂 Local Archive (Fast)</option>
+                        <option value="SPOT_ARCHIVE">🔁 Spot API + Archive Options</option>
                     </select>
                 </div>
                 
-                {/* Futures Expiry Selection */}
-                {params.dataSource === 'FUT' && (
-                     <div>
-                         <label className="block text-sm font-medium text-purple-400 mb-1">Futures Expiry</label>
+                {/* Expiry Selection (Futures / Real Option Data) */}
+                {(params.dataSource === 'FUT' || params.backtest_mode === 'Real Option Data') && (
+                     <div className="mt-4">
+                         <label className="block text-sm font-medium text-purple-400 mb-1">
+                             {params.backtest_mode === 'Real Option Data' ? 'Options Expiry Date' : 'Futures Expiry Date'}
+                         </label>
                          <select 
                              className="w-full bg-slate-900 border border-purple-900 rounded p-2 text-white"
                              value={params.futures_expiry || ''}
