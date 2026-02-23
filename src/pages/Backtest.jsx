@@ -127,7 +127,7 @@ export default function Backtest() {
 
 
   // Keys to exclude from Strategy Params (System/Backtest Config)
-  const IGNORED_PARAMS = ['symbol', 'strategy', 'startDate', 'endDate', 'start_date', 'end_date', 'interval', 'period', 'capital'];
+  const IGNORED_PARAMS = ['startDate', 'endDate', 'interval', 'period'];
 
   const handleSaveDefault = async () => {
     if (!params.strategy) return alert("Please select a strategy first.");
@@ -171,7 +171,10 @@ export default function Backtest() {
               name: name,
               strategyId: params.strategy,
               params: strategyParams,
-              symbol: params.symbol
+              symbol: params.symbol,
+              start_date: params.start_date,
+              end_date: params.end_date,
+              capital: params.capital
           });
           alert("✅ Configuration Saved!");
           setSavedConfigs(prev => [res.data, ...prev.filter(c => c._id !== res.data._id)]);
