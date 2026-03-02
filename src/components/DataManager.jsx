@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FaDatabase, FaCloudDownloadAlt, FaSpinner, FaFolderOpen, FaCheck, FaChevronDown, FaTimes, FaSearch } from 'react-icons/fa';
+import { getExpiriesForSymbol } from '../utils/expiryUtils';
+import { INSTRUMENT_CONFIG } from '../constants';
 
 // --- MultiSelect Component ---
 const MultiSelect = ({ options, selectedValues, onChange, placeholder = "Select...", label = "Items" }) => {
@@ -148,36 +150,23 @@ const DataManager = () => {
 
     // Fetch Expiries when SINGLE symbol selected
     useEffect(() => {
-        const fetchExpiries = async () => {
-            if (selectedSymbols.length !== 1) {
-                setExpiryDates([]);
-                setSelectedExpiry('');
-                return;
-            }
-            
-            const symbol = selectedSymbols[0];
-            try {
-                const res = await fetch(`${API_URL}/cal/expiries?symbol=${symbol}`);
-                const data = await res.json();
-                if (data.expiries && data.expiries.length > 0) {
-                    setExpiryDates(data.expiries);
-                    setSelectedExpiry(data.expiries[0].date);
-                }
-            } catch (e) {
-                console.error("Failed to fetch expiries", e);
-            }
-        };
-        fetchExpiries();
-    }, [selectedSymbols, API_URL]);
+        if (selectedSymbols.length !== 1) {
+            setExpiryDates([]);
+            setSelectedExpiry('');
+            return;
+        }
+        
+        const symbol = selectedSymbols[0];
+        const expiries = getExpiriesForSymbol(symbol, 4, 1);
+        if (expiries && expiries.length > 0) {
+            setExpiryDates(expiries);
+            setSelectedExpiry(expiries[0].date);
+        }
+    }, [selectedSymbols]);
 
     const fetchInstruments = async () => {
-        try {
-            const res = await fetch(`${API_URL}/config/instruments`);
-            const data = await res.json();
-            setInstruments(data);
-        } catch (e) {
-            console.error("Failed to fetch instruments", e);
-        }
+        // Use static instruments
+        setInstruments(INSTRUMENT_CONFIG);
     };
 
     const fetchArchives = async () => {

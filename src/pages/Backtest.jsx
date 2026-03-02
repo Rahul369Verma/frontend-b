@@ -9,6 +9,8 @@ const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`
 // LOT_SIZES moved to Backend API
 
 import { useLocation } from 'react-router-dom';
+import { INSTRUMENT_CONFIG, MARKET_TIMINGS } from '../constants';
+import { getExpiriesForSymbol } from '../utils/expiryUtils';
 
 export default function Backtest() {
   const { backtestParams: params, setBacktestParams: setParams, backtestResult: result, setBacktestResult: setResult } = useGlobalState();
@@ -19,48 +21,41 @@ export default function Backtest() {
   const [savedConfigs, setSavedConfigs] = useState([]);
   const [liveConfigs, setLiveConfigs] = useState([]);
   const [aiModels, setAiModels] = useState([]); // List of available models
+  const [rlModels, setRlModels] = useState([]); // List of available RL Models
   const [marketTimings, setMarketTimings] = useState({});
   const [expiryDates, setExpiryDates] = useState([]); // For Futures Expiry Selection
 
   useEffect(() => {
-    const fetchExpiries = async () => {
-        if (!params.symbol) return;
-        try {
-            const res = await axios.get(`${API_URL}/cal/expiries?symbol=${params.symbol}`);
-            if (res.data.expiries && res.data.expiries.length > 0) {
-                setExpiryDates(res.data.expiries);
-            } else {
-                setExpiryDates([]);
-            }
-        } catch (err) {
-            console.error("Failed to fetch expiries", err);
-            setExpiryDates([]);
-        }
-    };
-    fetchExpiries();
+    if (!params.symbol) return;
+    const expiries = getExpiriesForSymbol(params.symbol, 4, 1);
+    setExpiryDates(expiries);
+    
+    // Auto-select first expiry if not present or invalid
+    if (expiries.length > 0 && !params.futures_expiry) {
+         setParams(p => ({ ...p, futures_expiry: expiries.find(e => !e.isPast)?.date || expiries[0].date }));
+    }
   }, [params.symbol]);
-
 
   const fetchModels = async () => {
       try {
-          // Fetch List of Models
+          // Fetch List of Static ML Models
           const modelsRes = await axios.get(`${API_URL}/ai/models`);
           setAiModels(modelsRes.data);
+
+          // Fetch List of RL Models
+          const rlRes = await axios.get(`${API_URL}/rl/models/info`);
+          setRlModels(rlRes.data);
       } catch (err) {
-          console.error("Failed to fetch AI models", err);
+          console.error("Failed to fetch models", err);
       }
   };
 
   useEffect(() => {
       fetchModels(); // Fetch on mount
       
-      axios.get(`${API_URL}/config/timings`)
-         .then(res => setMarketTimings(res.data))
-         .catch(err => console.error("Failed to fetch timings", err));
-
-      axios.get(`${API_URL}/config/instruments`)
-        .then(res => setInstrumentConfig(res.data))
-        .catch(err => console.error("Failed to fetch instruments", err));
+      // Use static constants instead of fetching
+      setMarketTimings(MARKET_TIMINGS);
+      setInstrumentConfig(INSTRUMENT_CONFIG);
 
       axios.get(`${API_URL}/config/strategies/defaults`)
         .then(res => setStrategyDefaults(res.data))
@@ -92,6 +87,8 @@ export default function Backtest() {
                   'VwapMomentumStrategy': 'vwap_momentum',
                   'BollingerBandStrategy': 'bb_reversion',
                   'InsideBarStrategy': 'inside_bar',
+                  'FalseInsideBarStrategy': 'false_inside_bar',
+                  'HybridInsideBarStrategy': 'hybrid_inside_bar',
                   'OrbStrategy': 'orb_breakout',
                   'SuperTrendStrategy': 'supertrend_adx',
                   'UniversalStrategy': 'universal',
@@ -99,7 +96,8 @@ export default function Backtest() {
                   'BreakoutRangeStrategy': 'breakout_range',
                   'PowerOfStocks5EmaStrategy': 'pos_5ema_scalp',
                   'VwapScalpStrategy': 'vwap_scalp',
-                  'MomentumScalpStrategy': 'momentum_scalp'
+                  'MomentumScalpStrategy': 'momentum_scalp',
+                  'RlStrategy': 'rl_agent'
               };
               if (STRATEGY_MAPPING[strategyId]) {
                   strategyId = STRATEGY_MAPPING[strategyId];
@@ -114,6 +112,7 @@ export default function Backtest() {
               
               // Merge Top-level critical params (Explicitly passed from Optimizer)
               if (location.state.dataSource) newParams.dataSource = location.state.dataSource;
+              if (location.state.broker) newParams.broker = location.state.broker;
               if (location.state.backtest_mode) newParams.backtest_mode = location.state.backtest_mode;
               if (location.state.resolution) newParams.resolution = location.state.resolution;
 
@@ -265,7 +264,7 @@ export default function Backtest() {
   const SYSTEM_KEYS = [
       'symbol', 'start_date', 'end_date', 'capital', 'resolution', 
       'lot_size', 'trade_start_time', 'trade_end_time', 
-      'backtest_mode', 'dataSource', 'futures_expiry', 'trade_mode'
+      'backtest_mode', 'dataSource', 'broker', 'futures_expiry', 'trade_mode'
   ];
 
   // Helper: Get only system params from current state
@@ -425,6 +424,8 @@ export default function Backtest() {
                 <option value="vwap_momentum">VWAP Momentum Scalper</option>
                 <option value="bb_reversion">Bollinger Band Reversion</option>
                 <option value="inside_bar">Inside Bar Breakout</option>
+                <option value="false_inside_bar">False Inside Bar (Fakey)</option>
+                <option value="hybrid_inside_bar">Hybrid Inside Bar + Fakey</option>
                 <option value="orb_breakout">Open Range Breakout (ORB)</option>
                 <option value="supertrend_adx">SuperTrend + ADX Filter</option>
                 <option value="ai_filtered">AI Filtered Strategy (LSTM) 🧠</option>
@@ -434,8 +435,31 @@ export default function Backtest() {
                 <option value="vwap_scalp">VWAP Rejection Scalp</option>
                 <option value="momentum_scalp">Momentum RSI-EMA Scalp</option>
                 <option value="universal">Universal / Discovery Mode</option>
+                <option value="rl_agent">RL Agent Strategy 🤖</option>
               </select>
             </div>
+
+            {params.strategy === 'rl_agent' && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-1">RL Model File</label>
+                  <select 
+                    className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                    value={params.model_file || ''}
+                    onChange={e => setParams({...params, model_file: e.target.value})}
+                  >
+                    <option value="">-- Default Auto-Select --</option>
+                    {rlModels.map((m, i) => {
+                        const filename = m.model_file || `${m.symbol}_ppo_final.zip`;
+                        return (
+                           <option key={i} value={filename}>
+                               {m.model_name || m.symbol} ({filename})
+                           </option>
+                        );
+                    })}
+                  </select>
+                </div>
+            )}
+
 
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1">Resolution (Timeframe)</label>
@@ -535,7 +559,25 @@ export default function Backtest() {
               />
             </div>
 
-            {/* Data Source Selection */}
+            {/* Broker / Data Source Selector */}
+            <div className="bg-slate-800 p-3 rounded border border-blue-900/50">
+              <label className="block text-xs font-bold text-blue-300 mb-2">
+                📡 Data Broker
+              </label>
+              <select
+                className="w-full bg-slate-900 border border-blue-800 rounded p-2 text-white text-sm"
+                value={params.broker || 'fyers'}
+                onChange={e => setParams({...params, broker: e.target.value})}
+              >
+                <option value="fyers">🔵 Fyers (Live API)</option>
+                <option value="angel_one">🟠 Angel One (Free, Gap-Free)</option>
+              </select>
+              <p className="text-[10px] text-slate-500 mt-1">
+                {(params.broker || 'fyers') === 'angel_one'
+                  ? '✅ Uses Angel One SmartAPI — free, no gaps'
+                  : '🔵 Uses Fyers API — requires active subscription'}
+              </p>
+            </div>
 
 
             {/* 1. General Settings */}
@@ -768,7 +810,7 @@ export default function Backtest() {
                         </select>
                     </div>
                     {/* Conditional Inputs */}
-                    {params.sl_type === 'FIXED' ? (
+                    {params.sl_type === 'FIXED' && !params.use_dynamic_sl && (
                         <>
                             <div>
                                 <label className="block text-xs text-slate-400 mb-1">Fixed SL (Pts)</label>
@@ -783,14 +825,17 @@ export default function Backtest() {
                                     onChange={e => setParams({...params, fixed_tp_points: e.target.value})} />
                             </div>
                         </>
-                    ) : (
-                        <>
-                            <div>
-                                <label className="block text-xs text-slate-400 mb-1">ATR Period</label>
-                                <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                                    value={params.atr_period || 14}
-                                    onChange={e => setParams({...params, atr_period: parseInt(e.target.value) || 14})} />
-                            </div>
+                    )}
+
+                    {/* Only show the ATR inputs if Dynamic SL is ticked for RL, or if it's generic ATR mode */}
+                    {(params.sl_type === 'ATR' || params.use_dynamic_sl) && (
+                      <>
+                        <div>
+                            <label className="block text-xs text-slate-400 mb-1">ATR Period</label>
+                            <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                value={params.atr_period || 14}
+                                onChange={e => setParams({...params, atr_period: parseInt(e.target.value) || 14})} />
+                        </div>
                             <div>
                                 <label className="block text-xs text-slate-400 mb-1">ATR TP Multiplier</label>
                                 <input type="number" step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
@@ -805,8 +850,25 @@ export default function Backtest() {
                                     value={params.atr_sl_mult || 1.8}
                                     onChange={e => setParams({...params, atr_sl_mult: parseFloat(e.target.value)})} />
                             </div>
-                        </>
+                      </>
                     )}
+                    
+                    {params.strategy === 'rl_agent' && (
+                        <div className="col-span-2 flex items-center justify-between bg-blue-900/20 p-2 rounded border border-blue-800/50 mt-1">
+                            <label className="text-sm text-blue-300 font-bold">Use Smart Volatility SL (Advanced)</label>
+                            <input type="checkbox" className="w-4 h-4 accent-blue-500"
+                                checked={params.use_dynamic_sl || false}
+                                onChange={e => setParams({...params, use_dynamic_sl: e.target.checked})} />
+                        </div>
+                    )}
+                    <div>
+                        <label className="block text-xs text-slate-400 mb-1" title="Reject trades with Stop Loss tighter than this value">
+                            Minimum SL Points
+                        </label>
+                        <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                            value={params.min_sl_points !== undefined ? params.min_sl_points : 5}
+                            onChange={e => setParams({...params, min_sl_points: parseInt(e.target.value)})} />
+                    </div>
 
                     {/* Trailing SL Control */}
                     <div className="col-span-2 flex items-center justify-between mt-2 bg-slate-800/50 p-2 rounded border border-slate-700/50">
@@ -935,12 +997,76 @@ export default function Backtest() {
                         </div>
                     )}
 
+                    {/* RL Agent Target Model Dropdown */}
+                    {params.strategy === 'rl_agent' && (
+                        <div className="col-span-2">
+                             <label className="block text-xs text-blue-300 mb-1 font-bold">Target RL Model</label>
+                             <select 
+                                 className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                 value={params.model_file || ''}
+                                 onChange={e => setParams({...params, model_file: e.target.value})}
+                             >
+                                 <option value="">-- Select RL Model --</option>
+                                 {rlModels.map((m, idx) => (
+                                     <option key={idx} value={m.model_file || `${m.model_name || m.symbol}_ppo_final.zip`}>
+                                         {m.model_name ? `${m.model_name} (${m.symbol})` : m.symbol}
+                                     </option>
+                                 ))}
+                             </select>
+                             <div className="text-[10px] text-slate-500 mt-1">
+                                 Select the specific AI model weights to trade natively. Stop Losses are managed purely by the Neural Network.
+                             </div>
+                        </div>
+                    )}
+
+                    {/* RL Agent Risk Controls */}
+                    {params.strategy === 'rl_agent' && (
+                        <div className="col-span-2 mt-1">
+                            <div className="border border-orange-900/50 bg-orange-950/20 rounded-lg p-3">
+                                <div className="text-xs font-bold text-orange-400 mb-2">⚡ RL Safety Controls</div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-1">⏰ Max Hold Candles</label>
+                                        <input type="number" step="1" min="0"
+                                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                            value={params.max_hold_candles ?? 20}
+                                            onChange={e => setParams({...params, max_hold_candles: parseInt(e.target.value) || 0})}
+                                        />
+                                        <div className="text-[10px] text-slate-500 mt-1">Force exit after N candles. 0 = disabled. (20 = ~100 min on 5m)</div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-1">🛑 Adverse Exit (ATR×)</label>
+                                        <input type="number" step="0.5" min="0"
+                                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                            value={params.adverse_atr_mult ?? 3.0}
+                                            onChange={e => setParams({...params, adverse_atr_mult: parseFloat(e.target.value) || 3.0})}
+                                        />
+                                        <div className="text-[10px] text-slate-500 mt-1">Exit if spot moves N×ATR against position. Prevents slow-bleed losses.</div>
+                                    </div>
+                                    <div className="col-span-2 flex items-center justify-between pt-1">
+                                        <div>
+                                            <span className="text-xs text-slate-400">Enable Adverse Spot Move Stop</span>
+                                            <div className="text-[10px] text-slate-500">Catches trades the SL misses (slow drift, open all day)</div>
+                                        </div>
+                                        <input type="checkbox"
+                                            checked={params.adverse_exit_enabled ?? true}
+                                            onChange={e => setParams({...params, adverse_exit_enabled: e.target.checked})}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Dynamic Inputs (Fallback) */}
                     {Object.entries(strategyDefaults[params.strategy] || {}).map(([key, val]) => {
                         // Skip keys we explicitly handled above or internal ones
                         if (['resolution', 'lots', 'trade_start_time', 'trade_end_time', 'max_daily_loss', 'max_single_trade_loss', 'max_trades_per_day', 'max_slippage_percent'].includes(key)) return null;
-                        if (['atr_period', 'atr_tp_mult', 'atr_sl_mult', 'use_trailing_sl', 'trailing_sl_mult'].includes(key)) return null; // Rendered in Risk/Exit Section
+                        if (['atr_period', 'atr_tp_mult', 'atr_sl_mult', 'use_trailing_sl', 'trailing_sl_mult', 'min_sl_points'].includes(key)) return null;
                         if (params.strategy === 'orb_breakout' && ['range_duration_min', 'breakout_buffer_pct'].includes(key)) return null;
+                        // RL Agent: skip keys rendered in dedicated sections above
+                        if (params.strategy === 'rl_agent' && ['model_file', 'max_hold_candles', 'adverse_atr_mult', 'adverse_exit_enabled', 'use_dynamic_sl'].includes(key)) return null;
+
                         if (params.strategy === 'breakout_range' && ['breakout_mode'].includes(key)) return null;
 
                         

@@ -52,11 +52,12 @@ export default function Dashboard() {
       const stateToPass = {
           symbol: symbol,
           strategy: config.strategyName,
-          params: { ...config } // Pass all params from the card
+          params: { ...config } // The 'config' argument here is already the flattened params object
       };
       
       // Remove internal keys if present
       delete stateToPass.params.strategyName;
+      delete stateToPass.params.strategyClass;
       delete stateToPass.params._id;
       delete stateToPass.params.__v;
       delete stateToPass.params.updatedAt;
@@ -393,7 +394,11 @@ export default function Dashboard() {
                                                  Test
                                             </button>
                                             <span className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-gray-400">
-                                                {params.strategyName || 'Legacy Strategy'}
+                                                {params.strategyName === 'rl_agent' ? 'RL Agent' : 
+                                                 params.strategyName === 'mta_ema_crossover' ? 'MTA Crossover' : 
+                                                 params.strategyName === 'vwap_momentum' ? 'VWAP Momentum' : 
+                                                 params.strategyName === 'pos_5ema_scalp' ? 'Power of Stocks' : 
+                                                 (params.strategyName || 'Legacy Strategy')}
                                             </span>
                                         </div>
                                     </div>

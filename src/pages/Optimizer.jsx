@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Activity, Play, TrendingUp, AlertTriangle, Code } from 'lucide-react';
 import { useGlobalState } from '../context/GlobalContext';
 import { io } from 'socket.io-client';
+import { INSTRUMENT_CONFIG } from '../constants';
+import { getExpiriesForSymbol } from '../utils/expiryUtils';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -27,22 +29,13 @@ export default function Optimizer() {
   const [expiryDates, setExpiryDates] = useState([]); // For Options/Futures Expiry Selection
 
   React.useEffect(() => {
-    const fetchExpiries = async () => {
-        if (!config.symbol) return;
-        try {
-            const res = await fetch(`${API_URL}/api/cal/expiries?symbol=${config.symbol}`);
-            const data = await res.json();
-            if (data.expiries && data.expiries.length > 0) {
-                setExpiryDates(data.expiries);
-            } else {
-                setExpiryDates([]);
-            }
-        } catch (err) {
-            console.error("Failed to fetch expiries", err);
-            setExpiryDates([]);
-        }
-    };
-    fetchExpiries();
+    if (!config.symbol) return;
+    const expiries = getExpiriesForSymbol(config.symbol, 4, 1);
+    setExpiryDates(expiries);
+    
+    if (expiries.length > 0 && !config.futures_expiry) {
+        setConfig(c => ({ ...c, futures_expiry: expiries.find(e => !e.isPast)?.date || expiries[0].date }));
+    }
   }, [config.symbol]);
 
   React.useEffect(() => {
@@ -52,17 +45,14 @@ export default function Optimizer() {
         setProgress(data);
     });
 
+    // Use static instruments
+    setInstrumentConfig(INSTRUMENT_CONFIG);
+
     // Fetch strategy defaults
     fetch(`${API_URL}/api/config/strategies/defaults`)
         .then(res => res.json())
         .then(data => setStrategyDefaults(data))
         .catch(err => console.error("Failed to fetch strategy defaults", err));
-
-    // Fetch Instruments
-    fetch(`${API_URL}/api/config/instruments`)
-        .then(res => res.json())
-        .then(data => setInstrumentConfig(data))
-        .catch(err => console.error("Failed to fetch instruments", err));
 
     return () => socket.disconnect();
   }, []);
@@ -194,6 +184,8 @@ export default function Optimizer() {
                 <option value="vwap_momentum">VWAP Momentum Scalper</option>
                 <option value="bb_reversion">Bollinger Band Reversion</option>
                 <option value="inside_bar">Inside Bar Breakout</option>
+                <option value="false_inside_bar">False Inside Bar (Fakey)</option>
+                <option value="hybrid_inside_bar">Hybrid Inside Bar + Fakey</option>
                 <option value="orb_breakout">Open Range Breakout (ORB)</option>
                 <option value="supertrend_adx">SuperTrend + ADX Filter</option>
                 <option value="candlestick_pattern">Candlestick Pattern (Reversal)</option>
