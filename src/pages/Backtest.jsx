@@ -230,7 +230,7 @@ export default function Backtest() {
             strategy: params.strategy,
             params: cleanParams,
             isActive: true, 
-            tradeMode: 'PAPER' 
+            tradeMode: 'LIVE' 
         });
         alert(`🚀 Deployed to Live Bot for ${params.symbol}!`);
     } catch (err) {

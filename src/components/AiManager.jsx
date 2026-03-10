@@ -87,7 +87,7 @@ const AiManager = () => {
             if (res.ok) {
                 const data = await res.json();
                 setRlStatus(data);
-                if (data.status === 'training') {
+                if (data.status === 'running' || data.status === 'training') {
                     setRlTraining(true);
                 } else {
                     setRlTraining(false);
@@ -197,6 +197,28 @@ const AiManager = () => {
         }
     };
 
+    const handleStopRlTrain = async () => {
+        if (!window.confirm("Are you sure you want to stop training? The model trained so far will be saved.")) return;
+        try {
+            const res = await fetch(`${API_BASE}/api/rl/stop-training`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    symbol: rlTrainConfig.symbol,
+                    customName: rlTrainConfig.customName
+                })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                alert("Stop signal sent! Please wait a moment for the process to exit cleanly.");
+            } else {
+                alert("Failed to stop: " + (data.error || "Unknown Error"));
+            }
+        } catch (err) {
+            alert("Failed to stop training: " + err.message);
+        }
+    };
+
     const handleUploadModel = async () => {
         if (!uploadFile) return alert("Please select a .zip file");
         setUploadingModel(true);
@@ -275,6 +297,24 @@ const AiManager = () => {
             setBacktesting(false);
         }
     };
+
+    // Helper to parse training progress from logs
+    const parseProgress = (logs) => {
+        if (!logs) return null;
+        const matches = [...logs.matchAll(/\[Progress\] (.*?) \((.*?)%\) \| Speed: (.*?) steps\/s \| ETA: (.*)/g)];
+        if (matches.length > 0) {
+            const lastMatch = matches[matches.length - 1];
+            return {
+                text: lastMatch[1],
+                percent: parseFloat(lastMatch[2]),
+                speed: lastMatch[3],
+                eta: lastMatch[4]
+            };
+        }
+        return null;
+    };
+
+    const progressData = parseProgress(rlStatus.logs);
 
     return (
         <div className="p-6 bg-slate-900 min-h-screen text-slate-100 font-sans">
@@ -500,17 +540,44 @@ const AiManager = () => {
                                     <p className="text-[10px] text-slate-500 mt-1">Leave blank to auto-generate based on symbol.</p>
                                 </div>
 
-                                <button 
-                                    onClick={handleRlTrain} 
-                                    disabled={rlTraining || rlStatus.status === 'training'}
-                                    className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:cursor-not-allowed py-3 rounded-lg font-bold transition-all flex justify-center items-center gap-2"
-                                >
-                                    {(rlTraining || rlStatus.status === 'training') ? <FaSync className="animate-spin" /> : <FaRobot />}
-                                    {(rlTraining || rlStatus.status === 'training') ? 'Training RL Agent...' : 'Train RL Agent'}
-                                </button>
+                                <div className="flex gap-2">
+                                    <button 
+                                        onClick={handleRlTrain} 
+                                        disabled={rlTraining || rlStatus.status === 'running'}
+                                        className="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:cursor-not-allowed py-3 rounded-lg font-bold transition-all flex justify-center items-center gap-2"
+                                    >
+                                        {(rlTraining || rlStatus.status === 'running') ? <FaSync className="animate-spin" /> : <FaRobot />}
+                                        {(rlTraining || rlStatus.status === 'running') ? 'Training RL Agent...' : 'Train RL Agent'}
+                                    </button>
+                                    
+                                    {(rlTraining || rlStatus.status === 'running') && (
+                                        <button 
+                                            onClick={handleStopRlTrain}
+                                            className="bg-rose-600 hover:bg-rose-500 px-6 py-3 rounded-lg font-bold transition-colors shadow-lg shadow-rose-900/20 whitespace-nowrap"
+                                            title="Stop early and save model"
+                                        >
+                                            Stop Training
+                                        </button>
+                                    )}
+                                </div>
 
                                 <div className="mt-4">
                                     <label className="text-xs text-slate-400 uppercase tracking-wider font-bold mb-1 block">Live Logs</label>
+                                    
+                                    {progressData && (rlTraining || rlStatus.status === 'running') && (
+                                        <div className="mb-2 p-3 bg-slate-950 rounded border border-indigo-500/30">
+                                            <div className="flex justify-between text-xs mb-1">
+                                                <span className="text-indigo-300 font-bold">{progressData.text} Steps</span>
+                                                <span className="text-emerald-400 font-mono">{progressData.speed} steps/s</span>
+                                                <span className="text-amber-400 font-mono">ETA: {progressData.eta}</span>
+                                            </div>
+                                            <div className="w-full bg-slate-800 rounded-full h-2.5">
+                                                <div className="bg-indigo-500 h-2.5 rounded-full transition-all duration-500" style={{ width: `${progressData.percent}%` }}></div>
+                                            </div>
+                                            <div className="text-right text-[10px] text-slate-500 mt-1">{progressData.percent.toFixed(1)}% Complete</div>
+                                        </div>
+                                    )}
+
                                     <div className="h-48 bg-black rounded p-2 overflow-y-auto text-xs font-mono text-slate-300 resize-y border border-slate-700 whitespace-pre-wrap flex flex-col-reverse">
                                         {rlStatus.logs || 'Ready to start training...'}
                                     </div>
