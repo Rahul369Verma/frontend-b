@@ -677,11 +677,13 @@ export default function Dashboard() {
                 <table className="w-full text-left border-collapse text-sm">
                     <thead>
                         <tr className="text-slate-400 border-b border-slate-700">
-                            <th className="p-3">Time</th>
+                            <th className="p-3">Entry Time</th>
+                            <th className="p-3">Exit Time</th>
+                            <th className="p-3">Status</th>
                             <th className="p-3">Symbol</th>
                             <th className="p-3">Action</th>
                             <th className="p-3">Qty</th>
-                            <th className="p-3">Price</th>
+                            <th className="p-3">Price (En/Ex)</th>
                             <th className="p-3">P&L</th>
                             <th className="p-3">Reason</th>
                         </tr>
@@ -689,13 +691,48 @@ export default function Dashboard() {
                     <tbody>
                         {mongoTrades.map((trade, i) => (
                             <tr key={i} className="border-b border-slate-800 hover:bg-slate-800/50">
-                                <td className="p-3 text-slate-300">{new Date(trade.timestamp).toLocaleString()}</td>
+                                {/* Entry Time (Fallback to timestamp for old logs if action is BUY/ENTRY) */}
+                                <td className="p-3 text-slate-300">
+                                    {trade.entryTime 
+                                        ? new Date(trade.entryTime).toLocaleString() 
+                                        : (trade.action === 'ENTRY' || trade.action === 'BUY' ? new Date(trade.timestamp).toLocaleString() : '-')}
+                                </td>
+                                
+                                {/* Exit Time (Fallback to timestamp for old logs if action is EXIT/SELL) */}
+                                <td className="p-3 text-slate-400">
+                                    {trade.exitTime 
+                                        ? new Date(trade.exitTime).toLocaleString() 
+                                        : (trade.action === 'EXIT' || trade.action === 'SELL' ? new Date(trade.timestamp).toLocaleString() : '-')}
+                                </td>
+                                
+                                <td className="p-3">
+                                    {trade.status ? (
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${trade.status === 'OPEN' ? 'bg-blue-500/20 text-blue-400' : 'bg-slate-700 text-slate-300'}`}>
+                                            {trade.status}
+                                        </span>
+                                    ) : (
+                                        <span className="text-slate-500 text-xs italic">Legacy</span>
+                                    )}
+                                </td>
+                                
                                 <td className="p-3 font-medium text-white">{trade.tradingsymbol || trade.symbol}</td>
-                                <td className={`p-3 font-bold ${trade.action === 'BUY' ? 'text-green-500' : 'text-red-500'}`}>{trade.action}</td>
+                                <td className={`p-3 font-bold ${trade.action === 'BUY' || trade.action === 'ENTRY' ? 'text-green-500' : 'text-red-500'}`}>{trade.action}</td>
                                 <td className="p-3 text-slate-300">{trade.quantity}</td>
-                                <td className="p-3 text-slate-300">₹{trade.price}</td>
+                                
+                                {/* Price Column handles both Unified and Legacy */}
+                                <td className="p-3 text-slate-300">
+                                    {trade.status ? (
+                                        <div className="flex flex-col gap-0.5">
+                                            <span className="text-xs text-slate-400">En: ₹{trade.entryPrice || trade.price}</span>
+                                            {trade.exitPrice && <span>Ex: <span className="text-white">₹{trade.exitPrice}</span></span>}
+                                        </div>
+                                    ) : (
+                                        <span>₹{trade.price}</span>
+                                    )}
+                                </td>
+                                
                                 <td className={`p-3 font-bold ${trade.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>₹{trade.pnl}</td>
-                                <td className="p-3 text-slate-400">{trade.reason}</td>
+                                <td className="p-3 text-slate-400 text-xs">{trade.reason}</td>
                             </tr>
                         ))}
                     </tbody>
