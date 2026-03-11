@@ -368,6 +368,32 @@ export default function Dashboard() {
                                                 />
                                                 <div className="w-9 h-5 bg-slate-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-500"></div>
                                             </label>
+
+                                            {/* Trade Mode Toggle (PAPER/LIVE) */}
+                                            <div className="flex items-center ml-4 bg-slate-800/80 px-2 py-1 rounded border border-slate-600/50">
+                                                <span className={`text-xs mr-2 font-bold ${params.tradeMode === 'LIVE' ? 'text-slate-400' : 'text-blue-400'}`}>PAPER</span>
+                                                <label className="relative inline-flex items-center cursor-pointer" title="Toggle Trade Mode (PAPER/LIVE)">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        className="sr-only peer"
+                                                        checked={params.tradeMode === 'LIVE'} 
+                                                        onChange={async (e) => {
+                                                            const newMode = e.target.checked ? 'LIVE' : 'PAPER';
+                                                            try {
+                                                                await axios.post(`${API_URL}/config/symbols/toggle-mode`, { 
+                                                                    symbol, 
+                                                                    tradeMode: newMode 
+                                                                });
+                                                                fetchData();
+                                                            } catch (err) {
+                                                                alert("Failed to toggle trade mode: " + (err.response?.data?.error || err.message));
+                                                            }
+                                                        }}
+                                                    />
+                                                    <div className="w-9 h-5 bg-blue-500/50 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-red-500/80"></div>
+                                                </label>
+                                                <span className={`text-xs ml-2 font-bold ${params.tradeMode === 'LIVE' ? 'text-red-400' : 'text-slate-400'}`}>LIVE</span>
+                                            </div>
                                         </div>
                                         <div className="flex gap-2 items-center">
                                             {/* Context-Aware Mock Trade Buttons */}
