@@ -6,7 +6,7 @@ export const INSTRUMENT_CONFIG = {
     "NSE:NIFTYBANK-INDEX": {
         underlying: "BANKNIFTY",
         exchange: "NSE",
-        lotSize: 30,      // SEBI Nov 2024 Revision
+        lotSize: 30,      // SEBI Jan 2026 Revision
         strikeStep: 100,
         expiryDay: 2,      // Tuesday
         expiryType: "MONTHLY", // Weekly Discontinued
@@ -15,7 +15,7 @@ export const INSTRUMENT_CONFIG = {
     "NSE:FINNIFTY-INDEX": {
         underlying: "FINNIFTY",
         exchange: "NSE",
-        lotSize: 65,      // SEBI Nov 2024 Revision
+        lotSize: 60,
         strikeStep: 50,
         expiryDay: 2,      // Tuesday
         expiryType: "MONTHLY", // Weekly Discontinued
@@ -33,10 +33,10 @@ export const INSTRUMENT_CONFIG = {
     "NSE:NIFTY50-INDEX": {
         underlying: "NIFTY",
         exchange: "NSE",
-        lotSize: 75,      // Standard Revision
+        lotSize: 65,
         strikeStep: 50,
-        expiryDay: 2,      // Tuesday
-        expiryType: "WEEKLY", // Weekly Retained
+        expiryDay: 4,     // Thursday
+        expiryType: "MONTHLY", // Weekly Retained
         min_sl_range: [5, 25] 
     },
     "BSE:SENSEX-INDEX": {
@@ -66,7 +66,7 @@ export const INSTRUMENT_CONFIG = {
     "NSE:TCS-EQ": { underlying: "TCS", exchange: "NSE", lotSize: 175, strikeStep: 50, expiryType: "MONTHLY", min_sl_range: [2, 8] },
     "NSE:TMPV-EQ": { underlying: "TMPV", exchange: "NSE", lotSize: 800, strikeStep: 10, expiryType: "MONTHLY" },
     "NSE:MARUTI-EQ": { underlying: "MARUTI", exchange: "NSE", lotSize: 50, strikeStep: 100, expiryType: "MONTHLY" },
-    "NSE:AXISBANK-EQ": { underlying: "AXISBANK", exchange: "NSE", lotSize: 625, strikeStep: 10, expiryType: "MONTHLY" },
+
     "NSE:BAJFINANCE-EQ": { underlying: "BAJFINANCE", exchange: "NSE", lotSize: 125, strikeStep: 50, expiryType: "MONTHLY" },
     
     // MCX Commodities (Futures)

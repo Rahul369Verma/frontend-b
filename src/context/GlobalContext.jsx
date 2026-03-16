@@ -1,20 +1,25 @@
 import React, { createContext, useContext, useState } from 'react';
+import { INSTRUMENT_CONFIG } from '../constants';
 
 const GlobalContext = createContext();
 
 export function GlobalProvider({ children }) {
   const today = new Date().toISOString().split('T')[0];
   
+  // Derive defaults from constants
+  const defaultSymbol = Object.keys(INSTRUMENT_CONFIG)[0] || 'NSE:NIFTYBANK-INDEX';
+  const defaultLotSize = INSTRUMENT_CONFIG[defaultSymbol]?.lotSize || 30;
+
   // Backtest State
   const [backtestParams, setBacktestParams] = useState({
     strategy: 'mta_ema_crossover',
-    symbol: 'BANKNIFTY',
+    symbol: defaultSymbol,
     start_date: '2025-01-01',
     end_date: today,
     resolution: '5',
     capital: 30000,
     // Initial defaults will be loaded from Backend or Strategy selection
-    lot_size: 35,
+    lot_size: defaultLotSize,
     trade_start_time: "09:30",
     trade_end_time: "15:00",
     max_daily_loss: 2000,
@@ -55,8 +60,8 @@ export function GlobalProvider({ children }) {
   }, []);
   // Optimizer State
   const [optimizerParams, setOptimizerParams] = useState({
-    symbol: 'NSE:NIFTYBANK-INDEX',
-    lot_size: 35,
+    symbol: defaultSymbol,
+    lot_size: defaultLotSize,
     resolution: '1',
     start_date: '2025-06-01',
     end_date: '2026-02-21',

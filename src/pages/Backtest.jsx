@@ -519,7 +519,7 @@ export default function Backtest() {
                   setParams({
                     ...params, 
                     symbol: newSymbol,
-                    lot_size: config ? config.lotSize : 15,
+                    lot_size: config ? config.lotSize : 30,
                     trade_start_time: (config && marketTimings[config.exchange]) ? marketTimings[config.exchange].strategyStart : (marketTimings['NSE']?.strategyStart || "09:30"),
                     trade_end_time: (config && marketTimings[config.exchange]) ? marketTimings[config.exchange].strategyEnd : (marketTimings['NSE']?.strategyEnd || "15:00")
                   });

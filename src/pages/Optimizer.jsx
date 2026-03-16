@@ -206,7 +206,7 @@ export default function Optimizer() {
                     const newSymbol = e.target.value;
                     const result = instrumentConfig[newSymbol];
                     // Dynamic Lot Size from Backend Config
-                    const newLotSize = result ? result.lotSize : 15; 
+                    const newLotSize = result ? result.lotSize : 30; 
                     setConfig({
                         ...config, 
                         symbol: newSymbol,

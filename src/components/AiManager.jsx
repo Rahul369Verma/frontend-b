@@ -572,9 +572,9 @@ const AiManager = () => {
                                                 <span className="text-amber-400 font-mono">ETA: {progressData.eta}</span>
                                             </div>
                                             <div className="w-full bg-slate-800 rounded-full h-2.5">
-                                                <div className="bg-indigo-500 h-2.5 rounded-full transition-all duration-500" style={{ width: `${progressData.percent}%` }}></div>
+                                                <div className="bg-indigo-500 h-2.5 rounded-full transition-all duration-500" style={{ width: `${Math.min(100, progressData.percent)}%` }}></div>
                                             </div>
-                                            <div className="text-right text-[10px] text-slate-500 mt-1">{progressData.percent.toFixed(1)}% Complete</div>
+                                            <div className="text-right text-[10px] text-slate-500 mt-1">{Math.min(100, progressData.percent).toFixed(1)}% Complete</div>
                                         </div>
                                     )}
 
@@ -658,6 +658,13 @@ const AiManager = () => {
                                                                             <span className="text-slate-300 w-8">Sell</span>
                                                                             <span className="text-rose-400">{model.action_distribution.Sell}%</span>
                                                                         </div>
+                                                                        {model.action_distribution.Exit !== undefined && (
+                                                                            <div className="flex items-center gap-1.5 text-[10px] font-medium">
+                                                                                <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                                                                                <span className="text-slate-300 w-8">Exit</span>
+                                                                                <span className="text-amber-400">{model.action_distribution.Exit}%</span>
+                                                                            </div>
+                                                                        )}
                                                                     </div>
                                                                 ) : (
                                                                     <span className="text-slate-500 italic">No Data</span>
