@@ -34,6 +34,16 @@ export default function Dashboard() {
   const [tradesPage, setTradesPage] = useState(1);
   const [tradesTotal, setTradesTotal] = useState(0);
   const [tradesSearch, setTradesSearch] = useState("");
+  const [tradesLimit, setTradesLimit] = useState(10);
+
+  // Refs to track current pagination/search for socket listener (prevents stale closure)
+  const tradesPageRef = React.useRef(1);
+  const tradesSearchRef = React.useRef("");
+
+  useEffect(() => {
+      tradesPageRef.current = tradesPage;
+      tradesSearchRef.current = tradesSearch;
+  }, [tradesPage, tradesSearch]);
   const [globalConfig, setGlobalConfig] = useState(null);
   const [symbolConfig, setSymbolConfig] = useState(null);
   const [activeConfig, setActiveConfig] = useState(null);
@@ -66,21 +76,21 @@ export default function Dashboard() {
       navigate('/backtest', { state: stateToPass });
   };
 
-  const fetchMongoTrades = async () => {
-    try {
-        const response = await axios.get(`${API_URL}/trades?page=${tradesPage}&limit=10&symbol=${tradesSearch}`);
-        if (response.data) {
-             setMongoTrades(response.data.trades || []);
-             setTradesTotal(response.data.total || 0);
-        }
-    } catch (err) {
-        console.error("Failed to fetch paginated trades", err);
-    }
-  };
-
+  
   useEffect(() => {
+      const fetchMongoTrades = async () => {
+        try {
+            const response = await axios.get(`${API_URL}/trades?page=${tradesPage}&limit=${tradesLimit}&symbol=${tradesSearch}`);
+            if (response.data) {
+                 setMongoTrades(response.data.trades || []);
+                 setTradesTotal(response.data.total || 0);
+            }
+        } catch (err) {
+            console.error("Failed to fetch paginated trades", err);
+        }
+      };
       fetchMongoTrades();
-  }, [tradesPage, tradesSearch]); // intentionally not including fetchMongoTrades to avoid cyclic rendering, or we can use eslint-disable
+  }, [tradesPage, tradesSearch, tradesLimit]); 
 
   const fetchData = async () => {
     try {
@@ -149,7 +159,13 @@ export default function Dashboard() {
             setPnl(data.pnl || { daily_pnl: 0, trades_count: 0 });
             setPositions(data.positions || []);
             setOptionChain(data.optionChain || []);
-            setMongoTrades(data.mongoTrades || []);
+            
+            // Only update mongoTrades from socket if we are on page 1 and not searching
+            // This prevents the UI from "jumping" back to the start when paginating
+            // if (tradesPageRef.current === 1 && tradesSearchRef.current === "") {
+            //     setMongoTrades(data.mongoTrades || []);
+            // }
+
             setGlobalConfig(data.config?.globalSettings || {});
             setSymbolConfig(data.config?.symbolConfigs || {});
             setActiveConfig(data.config?.activeParams || {});
@@ -716,16 +732,34 @@ export default function Dashboard() {
               <h3 className="text-xl font-bold flex items-center gap-2">
                 <Database className="w-5 h-5 text-primary" /> Trade History
               </h3>
-              <input 
-                  type="text" 
-                  placeholder="Search Symbol..." 
-                  value={tradesSearch}
-                  onChange={(e) => {
-                      setTradesSearch(e.target.value);
-                      setTradesPage(1); // Reset to page 1 on new search
-                  }}
-                  className="bg-slate-900 border border-slate-700 rounded px-3 py-1 text-sm text-white font-mono focus:border-primary outline-none"
-              />
+              <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-500 font-medium whitespace-nowrap">Show:</span>
+                      <select 
+                          value={tradesLimit}
+                          onChange={(e) => {
+                              setTradesLimit(parseInt(e.target.value));
+                              setTradesPage(1); // Reset to page 1 on limit change
+                          }}
+                          className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm text-white font-mono focus:border-primary outline-none cursor-pointer hover:border-slate-500 transition-colors"
+                      >
+                          <option value={10}>10</option>
+                          <option value={20}>20</option>
+                          <option value={50}>50</option>
+                          <option value={100}>100</option>
+                      </select>
+                  </div>
+                  <input 
+                      type="text" 
+                      placeholder="Search Symbol..." 
+                      value={tradesSearch}
+                      onChange={(e) => {
+                          setTradesSearch(e.target.value);
+                          setTradesPage(1); // Reset to page 1 on new search
+                      }}
+                      className="bg-slate-900 border border-slate-700 rounded px-3 py-1 text-sm text-white font-mono focus:border-primary outline-none"
+                  />
+              </div>
           </div>
           {mongoTrades.length > 0 ? (
             <div className="overflow-x-auto">
@@ -810,12 +844,12 @@ export default function Dashboard() {
                       Previous
                   </button>
                   <span className="text-sm border border-slate-700 bg-slate-800 rounded px-4 py-1 font-mono text-slate-300">
-                      Page {tradesPage} of {Math.max(1, Math.ceil(tradesTotal / 10))}
+                      Page {tradesPage} of {Math.max(1, Math.ceil(tradesTotal / tradesLimit))}
                   </span>
                   <button 
-                      disabled={tradesPage >= Math.ceil(tradesTotal / 10)}
+                      disabled={tradesPage >= Math.ceil(tradesTotal / tradesLimit)}
                       onClick={() => setTradesPage(p => p + 1)}
-                      className={`px-3 py-1 rounded text-sm font-medium ${tradesPage >= Math.ceil(tradesTotal / 10) ? 'bg-slate-800 text-slate-600 cursor-not-allowed' : 'bg-slate-700 hover:bg-slate-600 text-white'}`}
+                      className={`px-3 py-1 rounded text-sm font-medium ${tradesPage >= Math.ceil(tradesTotal / tradesLimit) ? 'bg-slate-800 text-slate-600 cursor-not-allowed' : 'bg-slate-700 hover:bg-slate-600 text-white'}`}
                   >
                       Next
                   </button>
