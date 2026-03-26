@@ -658,7 +658,21 @@ const AiManager = () => {
                                                                             <span className="text-slate-300 w-8">Sell</span>
                                                                             <span className="text-rose-400">{model.action_distribution.Sell}%</span>
                                                                         </div>
-                                                                        {model.action_distribution.Exit !== undefined && (
+                                                                        {model.action_distribution.Exit_Long !== undefined && (
+                                                                            <div className="flex items-center gap-1.5 text-[10px] font-medium">
+                                                                                <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                                                                                <span className="text-slate-300 w-10">ExitL</span>
+                                                                                <span className="text-amber-400">{model.action_distribution.Exit_Long}%</span>
+                                                                            </div>
+                                                                        )}
+                                                                        {model.action_distribution.Exit_Short !== undefined && (
+                                                                            <div className="flex items-center gap-1.5 text-[10px] font-medium">
+                                                                                <span className="w-2 h-2 rounded-full bg-orange-500"></span>
+                                                                                <span className="text-slate-300 w-10">ExitS</span>
+                                                                                <span className="text-orange-400">{model.action_distribution.Exit_Short}%</span>
+                                                                            </div>
+                                                                        )}
+                                                                        {model.action_distribution.Exit !== undefined && model.action_distribution.Exit_Long === undefined && (
                                                                             <div className="flex items-center gap-1.5 text-[10px] font-medium">
                                                                                 <span className="w-2 h-2 rounded-full bg-amber-500"></span>
                                                                                 <span className="text-slate-300 w-8">Exit</span>
