@@ -10,7 +10,7 @@ const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`
 
 import { useLocation } from 'react-router-dom';
 import { INSTRUMENT_CONFIG, MARKET_TIMINGS } from '../constants';
-import { getExpiriesForSymbol } from '../utils/expiryUtils';
+import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 
 export default function Backtest() {
   const { backtestParams: params, setBacktestParams: setParams, backtestResult: result, setBacktestResult: setResult } = useGlobalState();
@@ -27,13 +27,19 @@ export default function Backtest() {
 
   useEffect(() => {
     if (!params.symbol) return;
-    const expiries = getExpiriesForSymbol(params.symbol, 4, 1);
-    setExpiryDates(expiries);
-    
-    // Auto-select first expiry if not present or invalid
-    if (expiries.length > 0 && !params.futures_expiry) {
-         setParams(p => ({ ...p, futures_expiry: expiries.find(e => !e.isPast)?.date || expiries[0].date }));
-    }
+    let cancelled = false;
+
+    const loadExpiries = async () => {
+      const expiries = await fetchExpiriesForSymbol(params.symbol, 4, 1);
+      if (cancelled) return;
+      setExpiryDates(expiries);
+      if (expiries.length > 0) {
+        setParams(p => ({ ...p, futures_expiry: expiries.find(e => !e.isPast)?.date || expiries[0].date }));
+      }
+    };
+
+    loadExpiries();
+    return () => { cancelled = true; };
   }, [params.symbol]);
 
   const fetchModels = async () => {
@@ -784,7 +790,16 @@ export default function Backtest() {
             <div className="border-t border-slate-700 pt-4 space-y-4">
                 <h4 className="text-sm font-bold text-slate-300">🎯 Exit & SL/TP (ATR)</h4>
                 
+                {params.strategy === 'rl_agent' && (
+                    <div className="col-span-2 flex items-start gap-2 bg-violet-900/20 border border-violet-700/40 rounded p-3 mb-2">
+                        <span className="text-violet-400 text-base mt-0.5">🤖</span>
+                        <p className="text-xs text-violet-300 leading-relaxed">
+                            <span className="font-bold">RL model autonomously manages SL &amp; TP</span> via its trained action space (ATR-bin system). Stop-Loss Type and Fixed SL/TP overrides are not applicable. ATR multipliers below act as legacy fallback for old models only.
+                        </p>
+                    </div>
+                )}
                 <div className="grid grid-cols-2 gap-4">
+                    {params.strategy !== 'rl_agent' && (
                     <div>
                         <label className="block text-xs text-slate-400 mb-1">Stop-Loss Type</label>
                         <select className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
@@ -797,6 +812,7 @@ export default function Backtest() {
                             <option value="INDEX_LEVEL">Index Level (Manual)</option>
                         </select>
                     </div>
+                    )}
                     <div>
                         <label className="block text-xs text-slate-400 mb-1">Strike Selection</label>
                         <select className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
@@ -828,7 +844,7 @@ export default function Backtest() {
                     )}
 
                     {/* Only show the ATR inputs if Dynamic SL is ticked for RL, or if it's generic ATR mode */}
-                    {(params.sl_type === 'ATR' || params.use_dynamic_sl) && (
+                    {(params.strategy === 'rl_agent' || params.sl_type === 'ATR' || params.use_dynamic_sl) && (
                       <>
                         <div>
                             <label className="block text-xs text-slate-400 mb-1">ATR Period</label>
@@ -837,14 +853,16 @@ export default function Backtest() {
                                 onChange={e => setParams({...params, atr_period: parseInt(e.target.value) || 14})} />
                         </div>
                             <div>
-                                <label className="block text-xs text-slate-400 mb-1">ATR TP Multiplier</label>
+                                <label className="block text-xs text-slate-400 mb-1">
+                                    {params.strategy === 'rl_agent' ? 'ATR TP Mult (Legacy Fallback)' : 'ATR TP Multiplier'}
+                                </label>
                                 <input type="number" step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
                                     value={params.atr_tp_mult || 3.5}
                                     onChange={e => setParams({...params, atr_tp_mult: parseFloat(e.target.value)})} />
                             </div>
                             <div>
                                 <label className="block text-xs text-slate-400 mb-1">
-                                    {params.sl_type === 'STRATEGY' ? 'ATR SL Mult (Fallback)' : 'ATR SL Multiplier'}
+                                    {params.strategy === 'rl_agent' ? 'ATR SL Mult (Legacy Fallback)' : params.sl_type === 'STRATEGY' ? 'ATR SL Mult (Fallback)' : 'ATR SL Multiplier'}
                                 </label>
                                 <input type="number" step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
                                     value={params.atr_sl_mult || 1.8}

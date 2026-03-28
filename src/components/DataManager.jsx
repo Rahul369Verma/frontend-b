@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FaDatabase, FaCloudDownloadAlt, FaSpinner, FaFolderOpen, FaCheck, FaChevronDown, FaTimes, FaSearch } from 'react-icons/fa';
-import { getExpiriesForSymbol } from '../utils/expiryUtils';
+import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 import { INSTRUMENT_CONFIG } from '../constants';
 
 // --- MultiSelect Component ---
@@ -155,13 +155,21 @@ const DataManager = () => {
             setSelectedExpiry('');
             return;
         }
-        
+
         const symbol = selectedSymbols[0];
-        const expiries = getExpiriesForSymbol(symbol, 4, 1);
-        if (expiries && expiries.length > 0) {
-            setExpiryDates(expiries);
-            setSelectedExpiry(expiries[0].date);
-        }
+        let cancelled = false;
+
+        const loadExpiries = async () => {
+            const expiries = await fetchExpiriesForSymbol(symbol, 4, 1);
+            if (cancelled) return;
+            if (expiries && expiries.length > 0) {
+                setExpiryDates(expiries);
+                setSelectedExpiry(expiries.find(e => !e.isPast)?.date || expiries[0].date);
+            }
+        };
+
+        loadExpiries();
+        return () => { cancelled = true; };
     }, [selectedSymbols]);
 
     const fetchInstruments = async () => {

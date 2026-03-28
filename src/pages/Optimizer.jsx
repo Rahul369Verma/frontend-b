@@ -4,7 +4,7 @@ import { Activity, Play, TrendingUp, AlertTriangle, Code } from 'lucide-react';
 import { useGlobalState } from '../context/GlobalContext';
 import { io } from 'socket.io-client';
 import { INSTRUMENT_CONFIG } from '../constants';
-import { getExpiriesForSymbol } from '../utils/expiryUtils';
+import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -30,12 +30,19 @@ export default function Optimizer() {
 
   React.useEffect(() => {
     if (!config.symbol) return;
-    const expiries = getExpiriesForSymbol(config.symbol, 4, 1);
-    setExpiryDates(expiries);
-    
-    if (expiries.length > 0 && !config.futures_expiry) {
+    let cancelled = false;
+
+    const loadExpiries = async () => {
+      const expiries = await fetchExpiriesForSymbol(config.symbol, 4, 1);
+      if (cancelled) return;
+      setExpiryDates(expiries);
+      if (expiries.length > 0) {
         setConfig(c => ({ ...c, futures_expiry: expiries.find(e => !e.isPast)?.date || expiries[0].date }));
-    }
+      }
+    };
+
+    loadExpiries();
+    return () => { cancelled = true; };
   }, [config.symbol]);
 
   React.useEffect(() => {

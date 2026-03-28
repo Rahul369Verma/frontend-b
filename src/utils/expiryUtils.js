@@ -113,3 +113,47 @@ export const getExpiriesForSymbol = (symbol, nextCount = 4, pastCount = 1) => {
     dates.sort((a,b) => new Date(a.date) - new Date(b.date));
     return dates;
 };
+
+/**
+ * Async version: fetches real expiry dates from the backend API (which pulls from NSE).
+ * Falls back to the synchronous getExpiriesForSymbol if the API call fails or times out.
+ *
+ * @param {string} symbol   e.g. "NSE:FINNIFTY-INDEX"
+ * @param {number} nextCount
+ * @param {number} pastCount
+ * @returns {Promise<Array<{date: string, label: string, isPast: boolean}>>}
+ */
+export const fetchExpiriesForSymbol = async (symbol, nextCount = 4, pastCount = 1) => {
+    if (!symbol) return [];
+
+    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+    const url = `${API_BASE}/api/expiry?symbol=${encodeURIComponent(symbol)}&count=${nextCount}&pastCount=${pastCount}`;
+
+    console.log(`[fetchExpiriesForSymbol] Fetching: ${url}`);
+
+    // Use AbortController for compatibility (AbortSignal.timeout not available in all envs)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const data = await response.json();
+
+        if (data.expiries && Array.isArray(data.expiries) && data.expiries.length > 0) {
+            console.log(`[fetchExpiriesForSymbol] Got ${data.expiries.length} expiries from API (source: ${data.source})`);
+            return data.expiries;
+        }
+
+        throw new Error('Empty expiry list returned');
+
+    } catch (err) {
+        clearTimeout(timeoutId);
+        const reason = err.name === 'AbortError' ? 'timeout' : err.message;
+        console.warn(`[fetchExpiriesForSymbol] API failed for ${symbol} (${reason}). Using computed fallback.`);
+        return getExpiriesForSymbol(symbol, nextCount, pastCount);
+    }
+};
