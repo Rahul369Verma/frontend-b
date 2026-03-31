@@ -170,6 +170,32 @@ export default function Settings() {
                         <option value="FUTURES">Futures Price (Current Month)</option>
                      </select>
                 </div>
+                <div className="p-4 bg-slate-900/50 rounded-lg border border-slate-700 flex items-center justify-between">
+                     <div>
+                        <h4 className="text-white font-medium">Max Daily Loss (₹)</h4>
+                        <p className="text-sm text-slate-400">Circuit breaker: blocks new entries when daily loss hits this limit.</p>
+                     </div>
+                     <div className="flex items-center gap-2">
+                        <span className="text-slate-400 text-sm">₹</span>
+                        <input
+                           type="number"
+                           min="0"
+                           step="100"
+                           value={config?.max_daily_loss ?? 2000}
+                           onChange={(e) => setConfig(prev => ({ ...prev, max_daily_loss: Number(e.target.value) }))}
+                           onBlur={async (e) => {
+                              try {
+                                 const newVal = Number(e.target.value);
+                                 await axios.post(`${API_URL}/settings`, { max_daily_loss: newVal });
+                                 setMessage({ type: 'success', text: `Max Daily Loss set to ₹${newVal}` });
+                              } catch {
+                                 setMessage({ type: 'error', text: 'Failed to update Max Daily Loss' });
+                              }
+                           }}
+                           className="w-28 bg-slate-800 text-white border border-slate-600 rounded px-3 py-2 focus:outline-none focus:border-primary text-right"
+                        />
+                     </div>
+                </div>
               </div>
 
               <hr className="border-slate-700" />

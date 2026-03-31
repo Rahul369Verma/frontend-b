@@ -1076,6 +1076,57 @@ export default function Backtest() {
                         </div>
                     )}
 
+                    {/* RL Ensemble Mode */}
+                    {params.strategy === 'rl_agent' && (
+                        <div className="col-span-2 mt-1">
+                            <div className="border border-purple-900/50 bg-purple-950/20 rounded-lg p-3">
+                                <div className="flex items-center justify-between mb-2">
+                                    <div className="text-xs font-bold text-purple-400">🤝 Ensemble Mode</div>
+                                    <input type="checkbox"
+                                        checked={params.use_ensemble || false}
+                                        onChange={e => setParams({...params, use_ensemble: e.target.checked})}
+                                    />
+                                </div>
+                                {params.use_ensemble && (
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-1">Select 2+ Models for Majority Vote</label>
+                                        <div className="max-h-40 overflow-y-auto bg-slate-900 border border-slate-700 rounded p-2 space-y-1">
+                                            {rlModels.length === 0 && (
+                                                <div className="text-xs text-slate-500 italic">No models available. Train or upload models first.</div>
+                                            )}
+                                            {rlModels.map((m, idx) => {
+                                                const filename = m.model_file || `${m.model_name || m.symbol}_ppo_final.zip`;
+                                                const selected = (params.ensemble_models || []).includes(filename);
+                                                return (
+                                                    <label key={idx} className={`flex items-center gap-2 text-xs p-1 rounded cursor-pointer hover:bg-slate-800 ${selected ? 'bg-purple-900/30 text-purple-300' : 'text-slate-300'}`}>
+                                                        <input type="checkbox"
+                                                            checked={selected}
+                                                            onChange={e => {
+                                                                const current = params.ensemble_models || [];
+                                                                const updated = e.target.checked
+                                                                    ? [...current, filename]
+                                                                    : current.filter(f => f !== filename);
+                                                                setParams({...params, ensemble_models: updated});
+                                                            }}
+                                                        />
+                                                        <span>{m.model_name || m.symbol}</span>
+                                                        <span className="text-slate-500 ml-auto">{filename}</span>
+                                                    </label>
+                                                );
+                                            })}
+                                        </div>
+                                        {(params.ensemble_models || []).length > 0 && (params.ensemble_models || []).length < 2 && (
+                                            <div className="text-[10px] text-orange-400 mt-1">⚠ Select at least 2 models for ensemble voting to work.</div>
+                                        )}
+                                        <div className="text-[10px] text-slate-500 mt-1">
+                                            Ensemble runs all selected models on the same candles, then takes a majority vote on direction. Improves accuracy by reducing single-model bias.
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
                     {/* Dynamic Inputs (Fallback) */}
                     {Object.entries(strategyDefaults[params.strategy] || {}).map(([key, val]) => {
                         // Skip keys we explicitly handled above or internal ones
@@ -1083,7 +1134,7 @@ export default function Backtest() {
                         if (['atr_period', 'atr_tp_mult', 'atr_sl_mult', 'use_trailing_sl', 'trailing_sl_mult', 'min_sl_points'].includes(key)) return null;
                         if (params.strategy === 'orb_breakout' && ['range_duration_min', 'breakout_buffer_pct'].includes(key)) return null;
                         // RL Agent: skip keys rendered in dedicated sections above
-                        if (params.strategy === 'rl_agent' && ['model_file', 'max_hold_candles', 'adverse_atr_mult', 'adverse_exit_enabled', 'use_dynamic_sl'].includes(key)) return null;
+                        if (params.strategy === 'rl_agent' && ['model_file', 'max_hold_candles', 'adverse_atr_mult', 'adverse_exit_enabled', 'use_dynamic_sl', 'use_ensemble', 'ensemble_models'].includes(key)) return null;
 
                         if (params.strategy === 'breakout_range' && ['breakout_mode'].includes(key)) return null;
 
