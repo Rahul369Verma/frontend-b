@@ -32,7 +32,8 @@ const AiManager = () => {
         dataSource: 'AUTO',
         resolution: '1',
         customName: '',
-        broker: 'angel_one'
+        broker: 'angel_one',
+        baseModel: ''
     });
     const [rlTraining, setRlTraining] = useState(false);
     const [rlModelExists, setRlModelExists] = useState(false);
@@ -181,7 +182,8 @@ const AiManager = () => {
                     dataSource: rlTrainConfig.dataSource,
                     resolution: rlTrainConfig.resolution,
                     customName: rlTrainConfig.customName,
-                    broker: rlTrainConfig.broker
+                    broker: rlTrainConfig.broker,
+                    baseModel: rlTrainConfig.baseModel
                 })
             });
             const data = await res.json();
@@ -538,6 +540,23 @@ const AiManager = () => {
                                         className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none placeholder-slate-600" 
                                     />
                                     <p className="text-[10px] text-slate-500 mt-1">Leave blank to auto-generate based on symbol.</p>
+                                </div>
+
+                                <div className="mb-4">
+                                    <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">Base Model (Continual Learning)</label>
+                                    <select 
+                                        value={rlTrainConfig.baseModel}
+                                        onChange={(e) => setRlTrainConfig({...rlTrainConfig, baseModel: e.target.value})}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none"
+                                    >
+                                        <option value="">-- None (Train from scratch) --</option>
+                                        {availableRlModels.map((model, idx) => (
+                                            <option key={idx} value={model.model_file || `${model.symbol}_ppo_final.zip`}>
+                                                {model.model_file || `${model.symbol}_ppo_final.zip`} ({model.trained_at || model.timestamp ? new Date(model.timestamp || model.trained_at).toLocaleDateString() : 'Unknown'})
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <p className="text-[10px] text-slate-500 mt-1">Select an existing model to continue training it with new data.</p>
                                 </div>
 
                                 <div className="flex gap-2">

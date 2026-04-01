@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
-import { Save, Key, Database, Bell, RefreshCw, Trash2, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Key, Bell, RefreshCw, Trash2, CheckCircle, AlertTriangle } from 'lucide-react';
 
 const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
 
@@ -59,33 +59,32 @@ export default function Settings() {
     }
   };
 
-  const handleRefreshToken = async () => {
+  const handleHeadlessLogin = async () => {
     setLoading(true);
-    setMessage(null);
+    setMessage({ type: 'info', text: 'Generating token via TOTP... this may take 10-15 seconds.' });
     try {
-      // Implement refresh endpoint in backend if needed, or just simulate
-      // For now, we'll just show a success message as the logic is in backend
-      await new Promise(r => setTimeout(r, 1000)); 
-      setMessage({ type: 'success', text: 'Token reloaded successfully!' });
+      await axios.post(`${API_URL}/auth/fyers/headless`);
+      setMessage({ type: 'success', text: 'Token generated successfully via TOTP!' });
+      fetchConfig();
     } catch (err) {
-      setMessage({ type: 'error', text: 'Failed to reload token.' });
+      setMessage({ type: 'error', text: 'TOTP login failed: ' + (err.response?.data?.error || err.message) });
     } finally {
       setLoading(false);
     }
   };
 
   const handleDeleteToken = async () => {
-    if (!window.confirm("Are you sure? You will need to re-login.")) return;
+    if (!window.confirm("Delete Fyers token? You will need to re-login.")) return;
     setLoading(true);
     setMessage(null);
     try {
-       // Implement delete endpoint
-       await new Promise(r => setTimeout(r, 1000));
-       setMessage({ type: 'success', text: 'Token deleted. Please re-login.' });
+      await axios.post(`${API_URL}/auth/fyers/delete-token`);
+      setMessage({ type: 'success', text: 'Token deleted. Please re-login.' });
+      fetchConfig();
     } catch (err) {
-       setMessage({ type: 'error', text: 'Failed to delete token.' });
+      setMessage({ type: 'error', text: 'Failed to delete token.' });
     } finally {
-       setLoading(false);
+      setLoading(false);
     }
   };
 
@@ -113,7 +112,9 @@ export default function Settings() {
 
       {message && (
         <div className={`p-4 rounded-lg flex items-center gap-2 ${
-          message.type === 'success' ? 'bg-green-500/10 text-green-500 border border-green-500/20' : 'bg-red-500/10 text-red-500 border border-red-500/20'
+          message.type === 'success' ? 'bg-green-500/10 text-green-500 border border-green-500/20' :
+          message.type === 'info'    ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
+                                       'bg-red-500/10 text-red-500 border border-red-500/20'
         }`}>
           {message.type === 'success' ? <CheckCircle className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
           {message.text}
@@ -210,7 +211,7 @@ export default function Settings() {
                   <div>
                     <label className="block text-sm font-medium text-slate-400 mb-1">App ID</label>
                     <div className="font-mono text-white bg-slate-800 p-2 rounded border border-slate-700">
-                      {config?.fyers_app_id || 'N1JI****-100'}
+                      {config?.fyers_app_id || '7IO8E****-200'}
                     </div>
                   </div>
                   <div>
@@ -230,32 +231,33 @@ export default function Settings() {
                 </div>
 
                 <div className="flex gap-4">
-                  <button 
+                  <button
                     onClick={async () => {
                       try {
                         const res = await axios.get(`${API_URL}/auth/fyers/url`);
                         window.location.href = res.data.url;
                       } catch (err) {
-                        alert("Failed to get login URL");
+                        setMessage({ type: 'error', text: 'Failed to get login URL' });
                       }
                     }}
-                    className="flex-1 bg-primary hover:bg-red-600 text-white py-2 rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    disabled={loading}
+                    className="flex-1 bg-primary hover:bg-red-600 text-white py-2 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
                   >
                     <Key className="w-4 h-4" />
-                    {config?.fyers_connected ? 'Re-Login to Fyers' : 'Login to Fyers'}
+                    {config?.fyers_connected ? 'Re-Login (Browser)' : 'Login to Fyers'}
                   </button>
-                  <button 
-                    onClick={handleRefreshToken}
+                  <button
+                    onClick={handleHeadlessLogin}
                     disabled={loading}
-                    className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
                   >
                     <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                    Refresh Token
+                    Auto Login (TOTP)
                   </button>
-                  <button 
+                  <button
                     onClick={handleDeleteToken}
                     disabled={loading}
-                    className="flex-1 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 py-2 rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    className="flex-1 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 py-2 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
                   >
                     <Trash2 className="w-4 h-4" />
                     Delete Token
