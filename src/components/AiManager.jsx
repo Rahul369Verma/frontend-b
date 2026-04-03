@@ -33,7 +33,8 @@ const AiManager = () => {
         resolution: '1',
         customName: '',
         broker: 'angel_one',
-        baseModel: ''
+        baseModel: '',
+        profile: 'base'
     });
     const [rlTraining, setRlTraining] = useState(false);
     const [rlModelExists, setRlModelExists] = useState(false);
@@ -183,7 +184,8 @@ const AiManager = () => {
                     resolution: rlTrainConfig.resolution,
                     customName: rlTrainConfig.customName,
                     broker: rlTrainConfig.broker,
-                    baseModel: rlTrainConfig.baseModel
+                    baseModel: rlTrainConfig.baseModel,
+                    profile: rlTrainConfig.profile
                 })
             });
             const data = await res.json();
@@ -543,8 +545,35 @@ const AiManager = () => {
                                 </div>
 
                                 <div className="mb-4">
+                                    <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">
+                                        Feature Profile
+                                        <span className="ml-2 text-[10px] text-indigo-400 font-normal normal-case">
+                                            {rlTrainConfig.profile === 'base' && '65 features — balanced default'}
+                                            {rlTrainConfig.profile === 'quantum' && '73 features — physics-inspired'}
+                                            {rlTrainConfig.profile === 'mtf_full' && '77 features — multi-timeframe macro'}
+                                            {rlTrainConfig.profile === 'dow_theory' && '70 features — swing structure'}
+                                            {rlTrainConfig.profile === 'cdl_rich' && '81 features — pattern specialist'}
+                                            {rlTrainConfig.profile === 'comprehensive' && '106 features — all groups'}
+                                        </span>
+                                    </label>
+                                    <select
+                                        value={rlTrainConfig.profile}
+                                        onChange={(e) => setRlTrainConfig({...rlTrainConfig, profile: e.target.value})}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none"
+                                    >
+                                        <option value="base">Base — Core TA + SMC/Wyckoff/OB (65 features)</option>
+                                        <option value="quantum">Quantum — Physics-inspired market state (73 features)</option>
+                                        <option value="mtf_full">MTF Full — 60m + Daily macro bias (77 features)</option>
+                                        <option value="dow_theory">Dow Theory — Swing HH/HL/LH/LL structure (70 features)</option>
+                                        <option value="cdl_rich">CDL Rich — 21 candlestick patterns (81 features)</option>
+                                        <option value="comprehensive">Comprehensive — All features combined (106 features)</option>
+                                    </select>
+                                    <p className="text-[10px] text-slate-500 mt-1">Each profile trains a specialist model. Pick one that matches your trading thesis.</p>
+                                </div>
+
+                                <div className="mb-4">
                                     <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">Base Model (Continual Learning)</label>
-                                    <select 
+                                    <select
                                         value={rlTrainConfig.baseModel}
                                         onChange={(e) => setRlTrainConfig({...rlTrainConfig, baseModel: e.target.value})}
                                         className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none"
@@ -646,6 +675,11 @@ const AiManager = () => {
                                                             <td className="px-4 py-3">
                                                                 <div className="font-bold text-indigo-300 flex items-center gap-2">
                                                                     {model.model_name ? `${model.model_name} (${model.symbol})` : model.symbol}
+                                                                    {model.profile && model.profile !== 'base' && (
+                                                                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-900/60 text-indigo-300 border border-indigo-700/50 font-semibold uppercase tracking-wide">
+                                                                            {model.profile}
+                                                                        </span>
+                                                                    )}
                                                                 </div>
                                                                 <div className="text-slate-500 mt-1 flex gap-2">
                                                                     <span>{new Date(model.timestamp || model.trained_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>

@@ -195,7 +195,10 @@ export default function Backtest() {
       // Remove legacy/system keys that shouldn't go to backend logic if they are redundant
       // 'interval' is legacy for 'resolution'. Backend uses 'resolution'.
       if (clean.interval) delete clean.interval;
-      if (clean.period) delete clean.period; 
+      if (clean.period) delete clean.period;
+
+      // When ensemble mode is active, single model_file is irrelevant — only ensemble_models matters
+      if (clean.use_ensemble) delete clean.model_file;
 
       Object.keys(clean).forEach(key => {
           // Resolution should stay as string if originally string (Backtester expects safe string/number handling but Fyers prefers string)
@@ -445,26 +448,6 @@ export default function Backtest() {
               </select>
             </div>
 
-            {params.strategy === 'rl_agent' && (
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-1">RL Model File</label>
-                  <select 
-                    className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
-                    value={params.model_file || ''}
-                    onChange={e => setParams({...params, model_file: e.target.value})}
-                  >
-                    <option value="">-- Default Auto-Select --</option>
-                    {rlModels.map((m, i) => {
-                        const filename = m.model_file || `${m.symbol}_ppo_final.zip`;
-                        return (
-                           <option key={i} value={filename}>
-                               {m.model_name || m.symbol} ({filename})
-                           </option>
-                        );
-                    })}
-                  </select>
-                </div>
-            )}
 
 
             <div>
@@ -1015,8 +998,8 @@ export default function Backtest() {
                         </div>
                     )}
 
-                    {/* RL Agent Target Model Dropdown */}
-                    {params.strategy === 'rl_agent' && (
+                    {/* RL Agent Target Model Dropdown — hidden when Ensemble Mode is active */}
+                    {params.strategy === 'rl_agent' && !params.use_ensemble && (
                         <div className="col-span-2">
                              <label className="block text-xs text-blue-300 mb-1 font-bold">Target RL Model</label>
                              <select 
