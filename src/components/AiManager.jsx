@@ -571,6 +571,7 @@ const AiManager = () => {
                                             {rlTrainConfig.profile === 'dow_theory' && '70 features — swing structure'}
                                             {rlTrainConfig.profile === 'cdl_rich' && '81 features — pattern specialist'}
                                             {rlTrainConfig.profile === 'comprehensive' && '106 features — all groups'}
+                                            {rlTrainConfig.profile === 'chart_vision' && '86 features — EMA cross + Fib + Trendlines'}
                                         </span>
                                     </label>
                                     <select
@@ -584,6 +585,7 @@ const AiManager = () => {
                                         <option value="dow_theory">Dow Theory — Swing HH/HL/LH/LL structure (70 features)</option>
                                         <option value="cdl_rich">CDL Rich — 21 candlestick patterns (81 features)</option>
                                         <option value="comprehensive">Comprehensive — All features combined (106 features)</option>
+                                        <option value="chart_vision">Chart Vision — EMA cross + Fibonacci + Trendlines (86 features)</option>
                                     </select>
                                     <p className="text-[10px] text-slate-500 mt-1">Each profile trains a specialist model. Pick one that matches your trading thesis.</p>
                                 </div>
