@@ -1059,6 +1059,67 @@ export default function Backtest() {
                         </div>
                     )}
 
+                    {/* RL Daily Risk Rules */}
+                    {params.strategy === 'rl_agent' && (
+                        <div className="col-span-2 mt-1">
+                            <div className="border border-teal-900/50 bg-teal-950/20 rounded-lg p-3">
+                                <div className="text-xs font-bold text-teal-400 mb-2">📅 Daily Risk Rules</div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {/* Daily Profit Lock */}
+                                    <div className="col-span-2 flex items-center justify-between">
+                                        <div>
+                                            <span className="text-xs text-slate-300 font-medium">Daily Profit Lock</span>
+                                            <div className="text-[10px] text-slate-500">Stop entering new trades after hitting daily gain target</div>
+                                        </div>
+                                        <input type="checkbox"
+                                            checked={params.enable_daily_profit_lock ?? true}
+                                            onChange={e => setParams({...params, enable_daily_profit_lock: e.target.checked})}
+                                        />
+                                    </div>
+                                    {(params.enable_daily_profit_lock ?? true) && (
+                                        <div>
+                                            <label className="block text-xs text-slate-400 mb-1">Lock After Gain (%)</label>
+                                            <input type="number" step="0.1" min="0.1" max="10"
+                                                className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                                value={params.daily_profit_lock_pct ?? 0.5}
+                                                onChange={e => setParams({...params, daily_profit_lock_pct: parseFloat(e.target.value) || 0.5})}
+                                            />
+                                            <div className="text-[10px] text-slate-500 mt-1">e.g. 0.5 = lock after 0.5% daily gain</div>
+                                        </div>
+                                    )}
+                                    {/* Daily Loss Filter */}
+                                    <div className="col-span-2 flex items-center justify-between pt-1 border-t border-teal-900/30">
+                                        <div>
+                                            <span className="text-xs text-slate-300 font-medium">Daily Loss Filter</span>
+                                            <div className="text-[10px] text-slate-500">Block low-quality entries after consecutive daily losses</div>
+                                        </div>
+                                        <input type="checkbox"
+                                            checked={params.enable_daily_loss_filter ?? true}
+                                            onChange={e => setParams({...params, enable_daily_loss_filter: e.target.checked})}
+                                        />
+                                    </div>
+                                    {(params.enable_daily_loss_filter ?? true) && (
+                                        <div>
+                                            <label className="block text-xs text-slate-400 mb-1">Max Losses Before Block</label>
+                                            <select
+                                                className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                                value={params.max_daily_losses ?? 3}
+                                                onChange={e => setParams({...params, max_daily_losses: parseInt(e.target.value)})}
+                                            >
+                                                <option value={1}>1 loss → filter entries</option>
+                                                <option value={2}>2 losses → filter entries</option>
+                                                <option value={3}>3 losses → block entries</option>
+                                                <option value={4}>4 losses → block entries</option>
+                                                <option value={99}>Disabled (no cap)</option>
+                                            </select>
+                                            <div className="text-[10px] text-slate-500 mt-1">After this many intra-day losses, new entries are blocked for the day</div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* RL Ensemble Mode */}
                     {params.strategy === 'rl_agent' && (
                         <div className="col-span-2 mt-1">
@@ -1117,7 +1178,7 @@ export default function Backtest() {
                         if (['atr_period', 'atr_tp_mult', 'atr_sl_mult', 'use_trailing_sl', 'trailing_sl_mult', 'min_sl_points'].includes(key)) return null;
                         if (params.strategy === 'orb_breakout' && ['range_duration_min', 'breakout_buffer_pct'].includes(key)) return null;
                         // RL Agent: skip keys rendered in dedicated sections above
-                        if (params.strategy === 'rl_agent' && ['model_file', 'max_hold_candles', 'adverse_atr_mult', 'adverse_exit_enabled', 'use_dynamic_sl', 'use_ensemble', 'ensemble_models'].includes(key)) return null;
+                        if (params.strategy === 'rl_agent' && ['model_file', 'max_hold_candles', 'adverse_atr_mult', 'adverse_exit_enabled', 'use_dynamic_sl', 'use_ensemble', 'ensemble_models', 'enable_daily_profit_lock', 'daily_profit_lock_pct', 'enable_daily_loss_filter', 'max_daily_losses'].includes(key)) return null;
 
                         if (params.strategy === 'breakout_range' && ['breakout_mode'].includes(key)) return null;
 

@@ -250,6 +250,23 @@ const AiManager = () => {
         }
     };
 
+    const handleDownloadModel = (model) => {
+        const zipFilename = model.model_file || `${model.model_name || model.symbol}_ppo_final.zip`;
+        const metaFilename = model._metadata_file || zipFilename.replace(/_ppo_final\.zip$/, '_metadata.json').replace(/\.zip$/, '_metadata.json');
+
+        const triggerDownload = (filename) => {
+            const a = document.createElement('a');
+            a.href = `${API_BASE}/api/rl/models/download/${encodeURIComponent(filename)}`;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        };
+
+        triggerDownload(zipFilename);
+        setTimeout(() => triggerDownload(metaFilename), 600);
+    };
+
     const handleDeleteModel = async (filename) => {
          if (!window.confirm(`Are you sure you want to delete ${filename}?`)) return;
          try {
@@ -739,8 +756,14 @@ const AiManager = () => {
                                                             </td>
                                                             <td className="px-4 py-3 text-right text-slate-400 font-mono flex flex-col items-end gap-2">
                                                                 <span>{model.file_size_kb ? `${model.file_size_kb} KB` : '...'}</span>
-                                                                <button 
-                                                                    onClick={() => handleDeleteModel(model.model_file || `${model.symbol}_ppo_final.zip`)} 
+                                                                <button
+                                                                    onClick={() => handleDownloadModel(model)}
+                                                                    className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                                                                >
+                                                                    Download
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => handleDeleteModel(model.model_file || `${model.symbol}_ppo_final.zip`)}
                                                                     className="text-xs text-rose-500 hover:text-rose-400 transition-colors"
                                                                 >
                                                                     Delete
