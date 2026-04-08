@@ -150,6 +150,8 @@ const AiManager = () => {
     const [availableRlModels, setAvailableRlModels] = useState([]);
     const [uploadFile,      setUploadFile]      = useState(null);
     const [uploadingModel,  setUploadingModel]  = useState(false);
+    const [evaluatingKey,   setEvaluatingKey]   = useState(null);  // '{modelName}_final' | '{modelName}_best'
+    const [evalResults,     setEvalResults]     = useState({});    // key → metrics object
 
     // Backtest
     const [backtestConfig, setBacktestConfig] = useState({
@@ -343,6 +345,35 @@ const AiManager = () => {
         };
         dl(zipFilename);
         setTimeout(() => dl(metaFilename), 600);
+        // Also download best-validation checkpoint if it exists
+        if (model.best_model) setTimeout(() => dl(model.best_model), 1200);
+    };
+
+    const handleEvaluateModel = async (model, variant) => {
+        // variant: 'final' | 'best'
+        const modelFile = variant === 'best' ? model.best_model : model.model_file;
+        const metaFile  = model._metadata_file;
+        if (!modelFile || !metaFile) return;
+
+        const key = `${model.model_name || model.symbol}_${variant}`;
+        setEvaluatingKey(key);
+        try {
+            const res  = await fetch(`${API_BASE}/api/rl/evaluate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model_file: modelFile, metadata_file: metaFile }),
+            });
+            const data = await res.json();
+            if (res.ok && data.metrics) {
+                setEvalResults(prev => ({ ...prev, [key]: data.metrics }));
+            } else {
+                alert(`Evaluation failed: ${data.error || 'unknown error'}`);
+            }
+        } catch (err) {
+            alert(`Evaluation error: ${err.message}`);
+        } finally {
+            setEvaluatingKey(null);
+        }
     };
 
     const handleDeleteModel = async (filename) => {
@@ -669,10 +700,54 @@ const AiManager = () => {
                                                                     </div>
                                                                 ) : <span className="text-slate-500 italic">No Data</span>}
                                                             </td>
-                                                            <td className="px-4 py-3 text-right text-slate-400 font-mono flex flex-col items-end gap-2">
-                                                                <span>{model.file_size_kb ? `${model.file_size_kb} KB` : '...'}</span>
-                                                                <button onClick={() => handleDownloadModel(model)} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">Download</button>
-                                                                <button onClick={() => handleDeleteModel(model.model_file || `${model.symbol}_ppo_final.zip`)} className="text-xs text-rose-500 hover:text-rose-400 transition-colors">Delete</button>
+                                                            <td className="px-4 py-3 text-right text-slate-400 font-mono">
+                                                                <div className="flex flex-col items-end gap-1.5">
+                                                                    <span className="text-xs">{model.file_size_kb ? `${model.file_size_kb} KB` : '...'}</span>
+                                                                    <button onClick={() => handleDownloadModel(model)} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">Download</button>
+                                                                    <button onClick={() => handleDeleteModel(model.model_file || `${model.symbol}_ppo_final.zip`)} className="text-xs text-rose-500 hover:text-rose-400 transition-colors">Delete</button>
+                                                                    {/* OOS Evaluate buttons */}
+                                                                    <div className="border-t border-slate-700/50 pt-1.5 mt-0.5 flex flex-col items-end gap-1">
+                                                                        {(() => {
+                                                                            const modelKey = model.model_name || model.symbol;
+                                                                            const finalKey = `${modelKey}_final`;
+                                                                            const bestKey  = `${modelKey}_best`;
+                                                                            const isFinalEval = evaluatingKey === finalKey;
+                                                                            const isBestEval  = evaluatingKey === bestKey;
+                                                                            const finalResult = evalResults[finalKey];
+                                                                            const bestResult  = evalResults[bestKey];
+                                                                            return (<>
+                                                                                <button
+                                                                                    onClick={() => handleEvaluateModel(model, 'final')}
+                                                                                    disabled={!!evaluatingKey}
+                                                                                    className="text-[10px] text-amber-400 hover:text-amber-300 disabled:text-slate-600 transition-colors"
+                                                                                >{isFinalEval ? '⏳ Evaluating...' : 'Eval Final'}</button>
+                                                                                {model.best_model && (
+                                                                                    <button
+                                                                                        onClick={() => handleEvaluateModel(model, 'best')}
+                                                                                        disabled={!!evaluatingKey}
+                                                                                        className="text-[10px] text-emerald-400 hover:text-emerald-300 disabled:text-slate-600 transition-colors"
+                                                                                    >{isBestEval ? '⏳ Evaluating...' : 'Eval Best'}</button>
+                                                                                )}
+                                                                                {(finalResult || bestResult) && (
+                                                                                    <div className="mt-1 text-[9px] text-left w-full space-y-0.5 border border-slate-700/50 rounded p-1.5 bg-slate-800/60">
+                                                                                        {[['final', finalResult, 'text-amber-300'], ['best', bestResult, 'text-emerald-300']].map(([label, r, cls]) =>
+                                                                                            r && (
+                                                                                                <div key={label}>
+                                                                                                    <span className={`font-bold uppercase ${cls}`}>{label}</span>
+                                                                                                    <span className="text-slate-400"> · {r.n_trades}T · WR </span>
+                                                                                                    <span className={r.win_rate >= 0.5 ? 'text-emerald-400' : 'text-rose-400'}>{(r.win_rate * 100).toFixed(1)}%</span>
+                                                                                                    <span className="text-slate-400"> · </span>
+                                                                                                    <span className={r.total_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{r.total_pnl > 0 ? '+' : ''}{r.total_pnl}</span>
+                                                                                                    <span className="text-slate-500"> · S:{r.sharpe?.toFixed(2)}</span>
+                                                                                                </div>
+                                                                                            )
+                                                                                        )}
+                                                                                    </div>
+                                                                                )}
+                                                                            </>);
+                                                                        })()}
+                                                                    </div>
+                                                                </div>
                                                             </td>
                                                         </tr>
                                                     ))}
