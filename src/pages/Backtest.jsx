@@ -524,11 +524,25 @@ export default function Backtest() {
                           ))}
                   </optgroup>
 
-                  <optgroup label="Commodities (MCX)">
+                  <optgroup label="── Precious Metals (MCX) ──">
                       {Object.entries(instrumentConfig)
-                          .filter(([k]) => k.startsWith('MCX:'))
+                          .filter(([k]) => k.startsWith('MCX:') && ['GOLD','GOLDM','GOLDPETAL','SILVER','SILVERMIC','SILVERM'].includes(instrumentConfig[k].underlying))
                           .map(([key, config]) => (
-                              <option key={key} value={key}>{config.underlying}</option>
+                              <option key={key} value={key}>{config.displayName || config.underlying}</option>
+                          ))}
+                  </optgroup>
+                  <optgroup label="── Energy (MCX) ──">
+                      {Object.entries(instrumentConfig)
+                          .filter(([k]) => k.startsWith('MCX:') && ['CRUDEOIL','NATURALGAS'].includes(instrumentConfig[k].underlying))
+                          .map(([key, config]) => (
+                              <option key={key} value={key}>{config.displayName || config.underlying}</option>
+                          ))}
+                  </optgroup>
+                  <optgroup label="── Base Metals (MCX) ──">
+                      {Object.entries(instrumentConfig)
+                          .filter(([k]) => k.startsWith('MCX:') && ['COPPER','ZINC','ALUMINIUM','LEAD','NICKEL'].includes(instrumentConfig[k].underlying))
+                          .map(([key, config]) => (
+                              <option key={key} value={key}>{config.displayName || config.underlying}</option>
                           ))}
                   </optgroup>
 
@@ -558,13 +572,15 @@ export default function Backtest() {
                 value={params.broker || 'fyers'}
                 onChange={e => setParams({...params, broker: e.target.value})}
               >
-                <option value="fyers">🔵 Fyers (Live API)</option>
-                <option value="angel_one">🟠 Angel One (Free, Gap-Free)</option>
+                <option value="fyers">🔵 Fyers (NSE/BSE/MCX)</option>
+                <option value="angel_one">🟠 Angel One (Free — Recommended for MCX)</option>
               </select>
-              <p className="text-[10px] text-slate-500 mt-1">
-                {(params.broker || 'fyers') === 'angel_one'
-                  ? '✅ Uses Angel One SmartAPI — free, no gaps'
-                  : '🔵 Uses Fyers API — requires active subscription'}
+              <p className="text-[10px] mt-1 leading-relaxed" style={{color: params.symbol?.startsWith('MCX:') ? '#fbbf24' : '#64748b'}}>
+                {params.symbol?.startsWith('MCX:')
+                  ? '⚡ MCX symbol auto-routes to Angel One (contract rolling + tvDatafeed fallback)'
+                  : (params.broker || 'fyers') === 'angel_one'
+                    ? '✅ Angel One SmartAPI — free, no gaps, MCX supported'
+                    : '🔵 Fyers API — requires active subscription'}
               </p>
             </div>
 

@@ -69,10 +69,22 @@ export const INSTRUMENT_CONFIG = {
 
     "NSE:BAJFINANCE-EQ": { underlying: "BAJFINANCE", exchange: "NSE", lotSize: 125, strikeStep: 50, expiryType: "MONTHLY" },
     
-    // MCX Commodities (Futures)
-    "MCX:CRUDEOIL": { underlying: "CRUDEOIL", exchange: "MCX", lotSize: 100, strikeStep: 10, expiryType: "FUTURES" },
-    "MCX:SILVERMIC": { underlying: "SILVERMIC", exchange: "MCX", lotSize: 1, strikeStep: 1, expiryType: "FUTURES" },
-    "MCX:GOLDM": { underlying: "GOLDM", exchange: "MCX", lotSize: 10, strikeStep: 10, expiryType: "FUTURES" }
+    // MCX Commodities (Futures) — Precious Metals
+    "MCX:GOLD":      { underlying: "GOLD",      exchange: "MCX", lotSize: 1,    strikeStep: 100, expiryType: "FUTURES", displayName: "Gold (1kg)" },
+    "MCX:GOLDM":     { underlying: "GOLDM",     exchange: "MCX", lotSize: 10,   strikeStep: 10,  expiryType: "FUTURES", displayName: "Gold Mini (100g)" },
+    "MCX:GOLDPETAL": { underlying: "GOLDPETAL", exchange: "MCX", lotSize: 1,    strikeStep: 1,   expiryType: "FUTURES", displayName: "Gold Petal (1g)" },
+    "MCX:SILVER":    { underlying: "SILVER",    exchange: "MCX", lotSize: 30,   strikeStep: 100, expiryType: "FUTURES", displayName: "Silver (30kg)" },
+    "MCX:SILVERMIC": { underlying: "SILVERMIC", exchange: "MCX", lotSize: 1,    strikeStep: 1,   expiryType: "FUTURES", displayName: "Silver Micro (1kg)" },
+    "MCX:SILVERM":   { underlying: "SILVERM",   exchange: "MCX", lotSize: 5,    strikeStep: 10,  expiryType: "FUTURES", displayName: "Silver Mini (5kg)" },
+    // MCX Commodities (Futures) — Energy
+    "MCX:CRUDEOIL":  { underlying: "CRUDEOIL",  exchange: "MCX", lotSize: 100,  strikeStep: 10,  expiryType: "FUTURES", displayName: "Crude Oil (100 bbl)" },
+    "MCX:NATURALGAS":{ underlying: "NATURALGAS",exchange: "MCX", lotSize: 1250, strikeStep: 1,   expiryType: "FUTURES", displayName: "Natural Gas (1250 mmBTU)" },
+    // MCX Commodities (Futures) — Base Metals
+    "MCX:COPPER":    { underlying: "COPPER",    exchange: "MCX", lotSize: 2500, strikeStep: 0.5, expiryType: "FUTURES", displayName: "Copper (2.5 MT)" },
+    "MCX:ZINC":      { underlying: "ZINC",      exchange: "MCX", lotSize: 5000, strikeStep: 0.5, expiryType: "FUTURES", displayName: "Zinc (5 MT)" },
+    "MCX:ALUMINIUM": { underlying: "ALUMINIUM", exchange: "MCX", lotSize: 5000, strikeStep: 0.5, expiryType: "FUTURES", displayName: "Aluminium (5 MT)" },
+    "MCX:LEAD":      { underlying: "LEAD",      exchange: "MCX", lotSize: 5000, strikeStep: 0.5, expiryType: "FUTURES", displayName: "Lead (5 MT)" },
+    "MCX:NICKEL":    { underlying: "NICKEL",    exchange: "MCX", lotSize: 1500, strikeStep: 1,   expiryType: "FUTURES", displayName: "Nickel (1.5 MT)" }
 };
 
 export const SYMBOL_MAP = {};
