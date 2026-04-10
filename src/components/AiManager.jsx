@@ -336,19 +336,11 @@ const AiManager = () => {
         }
     };
 
-    const handleDownloadModel = (model) => {
-        const zipFilename  = model.model_file || `${model.model_name || model.symbol}_ppo_final.zip`;
-        const metaFilename = model._metadata_file || zipFilename.replace(/_ppo_final\.zip$/, '_metadata.json').replace(/\.zip$/, '_metadata.json');
-        const dl = (f) => {
-            const a = document.createElement('a');
-            a.href = `${API_BASE}/api/rl/models/download/${encodeURIComponent(f)}`;
-            a.download = f;
-            document.body.appendChild(a); a.click(); document.body.removeChild(a);
-        };
-        dl(zipFilename);
-        setTimeout(() => dl(metaFilename), 600);
-        // Also download best-validation checkpoint if it exists
-        if (model.best_model) setTimeout(() => dl(model.best_model), 1200);
+    const downloadFile = (filename) => {
+        const a = document.createElement('a');
+        a.href = `${API_BASE}/api/rl/models/download/${encodeURIComponent(filename)}`;
+        a.download = filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
     };
 
     const handleEvaluateModel = async (model, variant) => {
@@ -686,11 +678,18 @@ const AiManager = () => {
                                     <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">Base Model <span className="text-slate-600 font-normal normal-case">(continual learning)</span></label>
                                     <select value={rlTrainConfig.baseModel} onChange={(e) => setRlTrainConfig({...rlTrainConfig, baseModel: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
                                         <option value="">-- None (Train from scratch) --</option>
-                                        {availableRlModels.map((model, idx) => (
-                                            <option key={idx} value={model.model_file || `${model.symbol}_ppo_final.zip`}>
-                                                {model.model_file || `${model.symbol}_ppo_final.zip`} ({model.trained_at || model.timestamp ? new Date(model.timestamp || model.trained_at).toLocaleDateString() : 'Unknown'})
-                                            </option>
-                                        ))}
+                                        {availableRlModels.flatMap((model, idx) => {
+                                            const finalFile = model.model_file || `${model.symbol}_ppo_final.zip`;
+                                            const date = model.trained_at || model.timestamp ? new Date(model.timestamp || model.trained_at).toLocaleDateString() : 'Unknown';
+                                            const label = model.model_name || model.symbol;
+                                            const opts = [
+                                                <option key={`${idx}_f`} value={finalFile}>{label} — Final ({date})</option>
+                                            ];
+                                            if (model.best_model) opts.push(
+                                                <option key={`${idx}_b`} value={model.best_model}>{label} — Best/Val ({date})</option>
+                                            );
+                                            return opts;
+                                        })}
                                     </select>
                                 </div>
 
@@ -771,7 +770,11 @@ const AiManager = () => {
                                                             <td className="px-4 py-3 text-right text-slate-400 font-mono">
                                                                 <div className="flex flex-col items-end gap-1.5">
                                                                     <span className="text-xs">{model.file_size_kb ? `${model.file_size_kb} KB` : '...'}</span>
-                                                                    <button onClick={() => handleDownloadModel(model)} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">Download</button>
+                                                                    <button onClick={() => downloadFile(model.model_file || `${model.model_name || model.symbol}_ppo_final.zip`)} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">↓ Final</button>
+                                                                    {model.best_model && (
+                                                                        <button onClick={() => downloadFile(model.best_model)} className="text-xs text-violet-400 hover:text-violet-300 transition-colors">↓ Best ({model.best_model_size_kb ? `${model.best_model_size_kb} KB` : '...'})</button>
+                                                                    )}
+                                                                    <button onClick={() => downloadFile(model._metadata_file || (model.model_file || '').replace(/_ppo_final\.zip$/, '_metadata.json').replace(/\.zip$/, '_metadata.json'))} className="text-xs text-slate-400 hover:text-slate-300 transition-colors">↓ Meta</button>
                                                                     <button onClick={() => handleDeleteModel(model.model_file || `${model.symbol}_ppo_final.zip`)} className="text-xs text-rose-500 hover:text-rose-400 transition-colors">Delete</button>
                                                                     {/* OOS Evaluate buttons */}
                                                                     <div className="border-t border-slate-700/50 pt-1.5 mt-0.5 flex flex-col items-end gap-1">

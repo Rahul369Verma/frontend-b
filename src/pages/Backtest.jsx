@@ -1024,11 +1024,17 @@ export default function Backtest() {
                                  onChange={e => setParams({...params, model_file: e.target.value})}
                              >
                                  <option value="">-- Select RL Model --</option>
-                                 {rlModels.map((m, idx) => (
-                                     <option key={idx} value={m.model_file || `${m.model_name || m.symbol}_ppo_final.zip`}>
-                                         {m.model_name ? `${m.model_name} (${m.symbol})` : m.symbol}
-                                     </option>
-                                 ))}
+                                 {rlModels.flatMap((m, idx) => {
+                                     const finalFile = m.model_file || `${m.model_name || m.symbol}_ppo_final.zip`;
+                                     const label = m.model_name ? `${m.model_name} (${m.symbol})` : m.symbol;
+                                     const opts = [
+                                         <option key={`${idx}_f`} value={finalFile}>{label} — Final</option>
+                                     ];
+                                     if (m.best_model) opts.push(
+                                         <option key={`${idx}_b`} value={m.best_model}>{label} — Best (Val)</option>
+                                     );
+                                     return opts;
+                                 })}
                              </select>
                              <div className="text-[10px] text-slate-500 mt-1">
                                  Select the specific AI model weights to trade natively. Stop Losses are managed purely by the Neural Network.
@@ -1154,25 +1160,30 @@ export default function Backtest() {
                                             {rlModels.length === 0 && (
                                                 <div className="text-xs text-slate-500 italic">No models available. Train or upload models first.</div>
                                             )}
-                                            {rlModels.map((m, idx) => {
-                                                const filename = m.model_file || `${m.model_name || m.symbol}_ppo_final.zip`;
-                                                const selected = (params.ensemble_models || []).includes(filename);
-                                                return (
-                                                    <label key={idx} className={`flex items-center gap-2 text-xs p-1 rounded cursor-pointer hover:bg-slate-800 ${selected ? 'bg-purple-900/30 text-purple-300' : 'text-slate-300'}`}>
-                                                        <input type="checkbox"
-                                                            checked={selected}
-                                                            onChange={e => {
-                                                                const current = params.ensemble_models || [];
-                                                                const updated = e.target.checked
-                                                                    ? [...current, filename]
-                                                                    : current.filter(f => f !== filename);
-                                                                setParams({...params, ensemble_models: updated});
-                                                            }}
-                                                        />
-                                                        <span>{m.model_name || m.symbol}</span>
-                                                        <span className="text-slate-500 ml-auto">{filename}</span>
-                                                    </label>
-                                                );
+                                            {rlModels.flatMap((m, idx) => {
+                                                const variants = [
+                                                    { file: m.model_file || `${m.model_name || m.symbol}_ppo_final.zip`, tag: 'Final' },
+                                                    ...(m.best_model ? [{ file: m.best_model, tag: 'Best' }] : []),
+                                                ];
+                                                return variants.map(({ file, tag }) => {
+                                                    const selected = (params.ensemble_models || []).includes(file);
+                                                    return (
+                                                        <label key={`${idx}_${tag}`} className={`flex items-center gap-2 text-xs p-1 rounded cursor-pointer hover:bg-slate-800 ${selected ? 'bg-purple-900/30 text-purple-300' : 'text-slate-300'}`}>
+                                                            <input type="checkbox"
+                                                                checked={selected}
+                                                                onChange={e => {
+                                                                    const current = params.ensemble_models || [];
+                                                                    const updated = e.target.checked
+                                                                        ? [...current, file]
+                                                                        : current.filter(f => f !== file);
+                                                                    setParams({...params, ensemble_models: updated});
+                                                                }}
+                                                            />
+                                                            <span>{m.model_name || m.symbol} <span className="text-slate-500">({tag})</span></span>
+                                                            <span className="text-slate-600 ml-auto text-[10px]">{file}</span>
+                                                        </label>
+                                                    );
+                                                });
                                             })}
                                         </div>
                                         {(params.ensemble_models || []).length > 0 && (params.ensemble_models || []).length < 2 && (
