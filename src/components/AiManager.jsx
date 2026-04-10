@@ -141,7 +141,8 @@ const AiManager = () => {
         symbol: 'NSE:NIFTYBANK-INDEX', timesteps: 100000,
         start_date: '2024-01-01', end_date: '2024-02-01',
         dataSource: 'AUTO', resolution: '1',
-        customName: '', broker: 'angel_one', baseModel: '', profile: 'base'
+        customName: '', broker: 'angel_one', baseModel: '', profile: 'base',
+        intraday: true,
     });
     const [rlJobs,          setRlJobs]          = useState([]);   // all jobs (active + recent)
     const [expandedJobId,   setExpandedJobId]   = useState(null); // which job's logs are open
@@ -274,6 +275,7 @@ const AiManager = () => {
                     broker:     rlTrainConfig.broker,
                     baseModel:  rlTrainConfig.baseModel,
                     profile:    rlTrainConfig.profile,
+                    intraday:   !!rlTrainConfig.intraday,
                 })
             });
             const data = await res.json();
@@ -523,12 +525,78 @@ const AiManager = () => {
                                 {/* Symbol */}
                                 <div>
                                     <label className="text-xs text-slate-400 uppercase tracking-wider font-bold">Symbol</label>
-                                    <select value={rlTrainConfig.symbol} onChange={(e) => setRlTrainConfig({...rlTrainConfig, symbol: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 mt-1 text-sm focus:border-indigo-500 outline-none">
+                                    <select
+                                        value={rlTrainConfig.symbol}
+                                        onChange={(e) => {
+                                            const sym = e.target.value;
+                                            const isMcx = sym.startsWith('MCX:');
+                                            setRlTrainConfig({
+                                                ...rlTrainConfig,
+                                                symbol: sym,
+                                                // MCX has no SPOT — auto-switch data source to FUTURES
+                                                dataSource: isMcx ? 'FUTURES' : rlTrainConfig.dataSource,
+                                                broker: isMcx ? 'angel_one' : rlTrainConfig.broker,
+                                                // MCX intraday recommended (no overnight futures risk)
+                                                intraday: isMcx ? true : rlTrainConfig.intraday,
+                                            });
+                                        }}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded p-2 mt-1 text-sm focus:border-indigo-500 outline-none"
+                                    >
                                         <option value="" disabled>-- Select Symbol --</option>
-                                        {Object.keys(instrumentConfig).length > 0 && Object.entries(instrumentConfig).filter(([k]) => !k.includes('-EQ') && !k.startsWith('MCX:')).map(([key, config]) => (
-                                            <option key={key} value={key}>{config.underlying || key}</option>
-                                        ))}
+                                        {Object.keys(instrumentConfig).length > 0 && (
+                                            <>
+                                                <optgroup label="── NSE / BSE Indices">
+                                                    {Object.entries(instrumentConfig)
+                                                        .filter(([k]) => !k.includes('-EQ') && !k.startsWith('MCX:'))
+                                                        .map(([key, config]) => (
+                                                            <option key={key} value={key}>{config.underlying || key}</option>
+                                                        ))}
+                                                </optgroup>
+                                                <optgroup label="── NSE Stocks">
+                                                    {Object.entries(instrumentConfig)
+                                                        .filter(([k]) => k.includes('-EQ'))
+                                                        .map(([key, config]) => (
+                                                            <option key={key} value={key}>{config.underlying || key}</option>
+                                                        ))}
+                                                </optgroup>
+                                                <optgroup label="── MCX Commodities (Futures)">
+                                                    {Object.entries(instrumentConfig)
+                                                        .filter(([k]) => k.startsWith('MCX:'))
+                                                        .map(([key, config]) => (
+                                                            <option key={key} value={key}>{config.displayName || config.underlying || key}</option>
+                                                        ))}
+                                                </optgroup>
+                                            </>
+                                        )}
                                     </select>
+                                    {rlTrainConfig.symbol.startsWith('MCX:') && (
+                                        <p className="text-xs text-amber-400 mt-1">
+                                            MCX commodity — data source set to FUTURES (continuous contract). Broker: Angel One. Intraday mode auto-enabled.
+                                        </p>
+                                    )}
+                                </div>
+
+                                {/* Intraday Mode toggle */}
+                                <div className="flex items-start gap-3 p-3 rounded-lg bg-slate-800/60 border border-slate-700">
+                                    <input
+                                        type="checkbox"
+                                        id="rl-intraday-toggle"
+                                        checked={!!rlTrainConfig.intraday}
+                                        onChange={(e) => setRlTrainConfig({ ...rlTrainConfig, intraday: e.target.checked })}
+                                        className="mt-0.5 w-4 h-4 accent-indigo-500 cursor-pointer flex-shrink-0"
+                                    />
+                                    <label htmlFor="rl-intraday-toggle" className="cursor-pointer">
+                                        <span className="text-sm font-semibold text-slate-200">Intraday Mode</span>
+                                        <p className="text-xs text-slate-400 mt-0.5">
+                                            Each training episode = one trading session. Positions are force-closed at session end with a penalty — the agent learns to exit before close instead of holding overnight.
+                                            {rlTrainConfig.symbol.startsWith('MCX:') && (
+                                                <span className="text-amber-400"> Auto-enabled for MCX (14.5h session, no overnight carry).</span>
+                                            )}
+                                            {!rlTrainConfig.symbol.startsWith('MCX:') && (
+                                                <span className="text-slate-500"> Recommended ON for NSE options — overnight theta decay and gap risk make holding across sessions unprofitable.</span>
+                                            )}
+                                        </p>
+                                    </label>
                                 </div>
 
                                 {/* Timesteps */}

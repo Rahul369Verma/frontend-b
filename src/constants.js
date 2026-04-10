@@ -70,21 +70,29 @@ export const INSTRUMENT_CONFIG = {
     "NSE:BAJFINANCE-EQ": { underlying: "BAJFINANCE", exchange: "NSE", lotSize: 125, strikeStep: 50, expiryType: "MONTHLY" },
     
     // MCX Commodities (Futures) — Precious Metals
-    "MCX:GOLD":      { underlying: "GOLD",      exchange: "MCX", lotSize: 1,    strikeStep: 100, expiryType: "FUTURES", displayName: "Gold (1kg)" },
-    "MCX:GOLDM":     { underlying: "GOLDM",     exchange: "MCX", lotSize: 10,   strikeStep: 10,  expiryType: "FUTURES", displayName: "Gold Mini (100g)" },
-    "MCX:GOLDPETAL": { underlying: "GOLDPETAL", exchange: "MCX", lotSize: 1,    strikeStep: 1,   expiryType: "FUTURES", displayName: "Gold Petal (1g)" },
-    "MCX:SILVER":    { underlying: "SILVER",    exchange: "MCX", lotSize: 30,   strikeStep: 100, expiryType: "FUTURES", displayName: "Silver (30kg)" },
-    "MCX:SILVERMIC": { underlying: "SILVERMIC", exchange: "MCX", lotSize: 1,    strikeStep: 1,   expiryType: "FUTURES", displayName: "Silver Micro (1kg)" },
-    "MCX:SILVERM":   { underlying: "SILVERM",   exchange: "MCX", lotSize: 5,    strikeStep: 10,  expiryType: "FUTURES", displayName: "Silver Mini (5kg)" },
+    // lotSize = P&L multiplier per lot per ₹1 price move
+    // GOLD: price quoted in ₹/10g, 1 lot = 1 kg = 100 × 10g → lotSize = 100
+    // GOLDM: price in ₹/10g, 1 lot = 100g = 10 × 10g → lotSize = 10
+    // GOLDPETAL: price in ₹/g, 1 lot = 1g → lotSize = 1
+    // SILVER/SILVERMIC/SILVERM: price in ₹/kg, lot in kg → lotSize = kg quantity
+    // tickSize: minimum price move on MCX exchange
+    // marginPerLot: approx SPAN + Exposure margin (varies with volatility)
+    // rollCostPct: approx % of entry price deducted per contract roll (contango/basis)
+    "MCX:GOLD":      { underlying: "GOLD",      exchange: "MCX", lotSize: 100,  tickSize: 1,    marginPerLot: 55000,  rollCostPct: 0.15, strikeStep: 100, expiryType: "FUTURES", displayName: "Gold (1kg)" },
+    "MCX:GOLDM":     { underlying: "GOLDM",     exchange: "MCX", lotSize: 10,   tickSize: 1,    marginPerLot: 5500,   rollCostPct: 0.15, strikeStep: 10,  expiryType: "FUTURES", displayName: "Gold Mini (100g)" },
+    "MCX:GOLDPETAL": { underlying: "GOLDPETAL", exchange: "MCX", lotSize: 1,    tickSize: 0.5,  marginPerLot: 550,    rollCostPct: 0.15, strikeStep: 1,   expiryType: "FUTURES", displayName: "Gold Petal (1g)" },
+    "MCX:SILVER":    { underlying: "SILVER",    exchange: "MCX", lotSize: 30,   tickSize: 1,    marginPerLot: 40000,  rollCostPct: 0.12, strikeStep: 100, expiryType: "FUTURES", displayName: "Silver (30kg)" },
+    "MCX:SILVERMIC": { underlying: "SILVERMIC", exchange: "MCX", lotSize: 1,    tickSize: 1,    marginPerLot: 1400,   rollCostPct: 0.12, strikeStep: 1,   expiryType: "FUTURES", displayName: "Silver Micro (1kg)" },
+    "MCX:SILVERM":   { underlying: "SILVERM",   exchange: "MCX", lotSize: 5,    tickSize: 1,    marginPerLot: 7000,   rollCostPct: 0.12, strikeStep: 10,  expiryType: "FUTURES", displayName: "Silver Mini (5kg)" },
     // MCX Commodities (Futures) — Energy
-    "MCX:CRUDEOIL":  { underlying: "CRUDEOIL",  exchange: "MCX", lotSize: 100,  strikeStep: 10,  expiryType: "FUTURES", displayName: "Crude Oil (100 bbl)" },
-    "MCX:NATURALGAS":{ underlying: "NATURALGAS",exchange: "MCX", lotSize: 1250, strikeStep: 1,   expiryType: "FUTURES", displayName: "Natural Gas (1250 mmBTU)" },
+    "MCX:CRUDEOIL":  { underlying: "CRUDEOIL",  exchange: "MCX", lotSize: 100,  tickSize: 1,    marginPerLot: 42000,  rollCostPct: 0.20, strikeStep: 10,  expiryType: "FUTURES", displayName: "Crude Oil (100 bbl)" },
+    "MCX:NATURALGAS":{ underlying: "NATURALGAS",exchange: "MCX", lotSize: 1250, tickSize: 0.10, marginPerLot: 15000,  rollCostPct: 0.30, strikeStep: 1,   expiryType: "FUTURES", displayName: "Natural Gas (1250 mmBTU)" },
     // MCX Commodities (Futures) — Base Metals
-    "MCX:COPPER":    { underlying: "COPPER",    exchange: "MCX", lotSize: 2500, strikeStep: 0.5, expiryType: "FUTURES", displayName: "Copper (2.5 MT)" },
-    "MCX:ZINC":      { underlying: "ZINC",      exchange: "MCX", lotSize: 5000, strikeStep: 0.5, expiryType: "FUTURES", displayName: "Zinc (5 MT)" },
-    "MCX:ALUMINIUM": { underlying: "ALUMINIUM", exchange: "MCX", lotSize: 5000, strikeStep: 0.5, expiryType: "FUTURES", displayName: "Aluminium (5 MT)" },
-    "MCX:LEAD":      { underlying: "LEAD",      exchange: "MCX", lotSize: 5000, strikeStep: 0.5, expiryType: "FUTURES", displayName: "Lead (5 MT)" },
-    "MCX:NICKEL":    { underlying: "NICKEL",    exchange: "MCX", lotSize: 1500, strikeStep: 1,   expiryType: "FUTURES", displayName: "Nickel (1.5 MT)" }
+    "MCX:COPPER":    { underlying: "COPPER",    exchange: "MCX", lotSize: 2500, tickSize: 0.05, marginPerLot: 35000,  rollCostPct: 0.10, strikeStep: 0.5, expiryType: "FUTURES", displayName: "Copper (2.5 MT)" },
+    "MCX:ZINC":      { underlying: "ZINC",      exchange: "MCX", lotSize: 5000, tickSize: 0.05, marginPerLot: 12000,  rollCostPct: 0.10, strikeStep: 0.5, expiryType: "FUTURES", displayName: "Zinc (5 MT)" },
+    "MCX:ALUMINIUM": { underlying: "ALUMINIUM", exchange: "MCX", lotSize: 5000, tickSize: 0.05, marginPerLot: 10000,  rollCostPct: 0.10, strikeStep: 0.5, expiryType: "FUTURES", displayName: "Aluminium (5 MT)" },
+    "MCX:LEAD":      { underlying: "LEAD",      exchange: "MCX", lotSize: 5000, tickSize: 0.05, marginPerLot: 10000,  rollCostPct: 0.10, strikeStep: 0.5, expiryType: "FUTURES", displayName: "Lead (5 MT)" },
+    "MCX:NICKEL":    { underlying: "NICKEL",    exchange: "MCX", lotSize: 1500, tickSize: 0.10, marginPerLot: 20000,  rollCostPct: 0.10, strikeStep: 1,   expiryType: "FUTURES", displayName: "Nickel (1.5 MT)" }
 };
 
 export const SYMBOL_MAP = {};
