@@ -652,23 +652,31 @@ const AiManager = () => {
                                     <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">
                                         Feature Profile
                                         <span className="ml-2 text-[10px] text-indigo-400 font-normal normal-case">
-                                            {rlTrainConfig.profile === 'base'          && '65 features — balanced default'}
-                                            {rlTrainConfig.profile === 'quantum'       && '73 features — physics-inspired'}
-                                            {rlTrainConfig.profile === 'mtf_full'      && '77 features — multi-timeframe macro'}
-                                            {rlTrainConfig.profile === 'dow_theory'    && '70 features — swing structure'}
-                                            {rlTrainConfig.profile === 'cdl_rich'      && '81 features — pattern specialist'}
-                                            {rlTrainConfig.profile === 'comprehensive' && '106 features — all groups'}
-                                            {rlTrainConfig.profile === 'chart_vision'  && '86 features — EMA cross + Fib + Trendlines'}
+                                            {rlTrainConfig.profile === 'lean'          && '56 features — best signal:noise ratio'}
+                                            {rlTrainConfig.profile === 'lean_mtf'      && '68 features — lean + 60m/1D macro'}
+                                            {rlTrainConfig.profile === 'lean_cdl'      && '72 features — lean + 16 candlesticks'}
+                                            {rlTrainConfig.profile === 'smart_money'   && '68 features — SL hunts + liquidity pools + institutional'}
+                                            {rlTrainConfig.profile === 'base'          && '71 features — balanced default'}
+                                            {rlTrainConfig.profile === 'quantum'       && '79 features — physics-inspired'}
+                                            {rlTrainConfig.profile === 'mtf_full'      && '83 features — multi-timeframe macro'}
+                                            {rlTrainConfig.profile === 'dow_theory'    && '76 features — swing structure'}
+                                            {rlTrainConfig.profile === 'cdl_rich'      && '87 features — pattern specialist'}
+                                            {rlTrainConfig.profile === 'comprehensive' && '112 features — all groups'}
+                                            {rlTrainConfig.profile === 'chart_vision'  && '92 features — EMA cross + Fib + Trendlines'}
                                         </span>
                                     </label>
                                     <select value={rlTrainConfig.profile} onChange={(e) => setRlTrainConfig({...rlTrainConfig, profile: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
-                                        <option value="base">Base — Core TA + SMC/Wyckoff/OB (65 features)</option>
-                                        <option value="quantum">Quantum — Physics-inspired market state (73 features)</option>
-                                        <option value="mtf_full">MTF Full — 60m + Daily macro bias (77 features)</option>
-                                        <option value="dow_theory">Dow Theory — Swing HH/HL/LH/LL structure (70 features)</option>
-                                        <option value="cdl_rich">CDL Rich — 21 candlestick patterns (81 features)</option>
-                                        <option value="comprehensive">Comprehensive — All features combined (106 features)</option>
-                                        <option value="chart_vision">Chart Vision — EMA cross + Fibonacci + Trendlines (86 features)</option>
+                                        <option value="lean">Lean — Best signal:noise, no BB/SuperTrend/OB (56 features)</option>
+                                        <option value="lean_mtf">Lean MTF — Lean + 60m/1D macro bias (68 features)</option>
+                                        <option value="lean_cdl">Lean CDL — Lean + 16 extra candlestick patterns (72 features)</option>
+                                        <option value="smart_money">Smart Money — SL hunts + liquidity pools + institutional flow (68 features)</option>
+                                        <option value="base">Base — Core TA + SMC/Wyckoff/OB (71 features)</option>
+                                        <option value="quantum">Quantum — Physics-inspired market state (79 features)</option>
+                                        <option value="mtf_full">MTF Full — 60m + Daily macro bias (83 features)</option>
+                                        <option value="dow_theory">Dow Theory — Swing HH/HL/LH/LL structure (76 features)</option>
+                                        <option value="cdl_rich">CDL Rich — 21 candlestick patterns (87 features)</option>
+                                        <option value="comprehensive">Comprehensive — All features combined (112 features)</option>
+                                        <option value="chart_vision">Chart Vision — EMA cross + Fibonacci + Trendlines (92 features)</option>
                                     </select>
                                     <p className="text-[10px] text-slate-500 mt-1">Each profile trains a specialist model — you can run multiple profiles simultaneously.</p>
                                 </div>
