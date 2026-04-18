@@ -19,16 +19,29 @@ function parseProgress(logs) {
 }
 
 function isActive(status) {
-    return status === 'training' || status === 'running';
+    return status === 'training' || status === 'running' || status === 'fetching_data';
+}
+
+function statusLabel(status) {
+    const map = {
+        fetching_data: 'Fetching Data',
+        training:      'Training',
+        running:       'Running',
+        completed:     'Completed',
+        failed:        'Failed',
+        idle:          'Idle',
+    };
+    return map[status] || status;
 }
 
 function statusBadge(status) {
     const map = {
-        training:  'bg-indigo-500/20 text-indigo-300 border-indigo-500/40',
-        running:   'bg-indigo-500/20 text-indigo-300 border-indigo-500/40',
-        completed: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
-        failed:    'bg-rose-500/20 text-rose-300 border-rose-500/40',
-        idle:      'bg-slate-500/20 text-slate-400 border-slate-500/40',
+        fetching_data: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+        training:      'bg-indigo-500/20 text-indigo-300 border-indigo-500/40',
+        running:       'bg-indigo-500/20 text-indigo-300 border-indigo-500/40',
+        completed:     'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+        failed:        'bg-rose-500/20 text-rose-300 border-rose-500/40',
+        idle:          'bg-slate-500/20 text-slate-400 border-slate-500/40',
     };
     return map[status] || map.idle;
 }
@@ -49,7 +62,7 @@ function JobCard({ job, onStop, expanded, onToggleExpand }) {
         <div className={`border rounded-xl overflow-hidden transition-all ${active ? 'border-indigo-500/40 bg-slate-900/80' : 'border-slate-700 bg-slate-900/40'}`}>
             {/* Header row */}
             <div className="flex items-center gap-3 p-4">
-                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${active ? 'bg-indigo-400 animate-pulse' : job.status === 'completed' ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${job.status === 'fetching_data' ? 'bg-amber-400 animate-pulse' : active ? 'bg-indigo-400 animate-pulse' : job.status === 'completed' ? 'bg-emerald-400' : 'bg-rose-400'}`} />
 
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -63,7 +76,7 @@ function JobCard({ job, onStop, expanded, onToggleExpand }) {
                             </span>
                         )}
                         <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold uppercase tracking-wide ${statusBadge(job.status)}`}>
-                            {job.status}
+                            {statusLabel(job.status)}
                         </span>
                     </div>
                     <div className="text-xs text-slate-500 mt-0.5">
@@ -652,31 +665,31 @@ const AiManager = () => {
                                     <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">
                                         Feature Profile
                                         <span className="ml-2 text-[10px] text-indigo-400 font-normal normal-case">
-                                            {rlTrainConfig.profile === 'lean'          && '56 features — best signal:noise ratio'}
-                                            {rlTrainConfig.profile === 'lean_mtf'      && '68 features — lean + 60m/1D macro'}
-                                            {rlTrainConfig.profile === 'lean_cdl'      && '72 features — lean + 16 candlesticks'}
-                                            {rlTrainConfig.profile === 'smart_money'   && '68 features — SL hunts + liquidity pools + institutional'}
-                                            {rlTrainConfig.profile === 'base'          && '71 features — balanced default'}
-                                            {rlTrainConfig.profile === 'quantum'       && '79 features — physics-inspired'}
-                                            {rlTrainConfig.profile === 'mtf_full'      && '83 features — multi-timeframe macro'}
-                                            {rlTrainConfig.profile === 'dow_theory'    && '76 features — swing structure'}
-                                            {rlTrainConfig.profile === 'cdl_rich'      && '87 features — pattern specialist'}
-                                            {rlTrainConfig.profile === 'comprehensive' && '112 features — all groups'}
-                                            {rlTrainConfig.profile === 'chart_vision'  && '92 features — EMA cross + Fib + Trendlines'}
+                                            {rlTrainConfig.profile === 'lean'          && '61 features — best signal:noise ratio'}
+                                            {rlTrainConfig.profile === 'lean_mtf'      && '73 features — lean + 60m/1D macro · MTF Transformer'}
+                                            {rlTrainConfig.profile === 'lean_cdl'      && '77 features — lean + 16 candlesticks'}
+                                            {rlTrainConfig.profile === 'smart_money'   && '73 features — SL hunts + liquidity pools + institutional'}
+                                            {rlTrainConfig.profile === 'base'          && '76 features — balanced default'}
+                                            {rlTrainConfig.profile === 'quantum'       && '84 features — physics-inspired'}
+                                            {rlTrainConfig.profile === 'mtf_full'      && '88 features — separate Transformer per TF (15m/60m/1D)'}
+                                            {rlTrainConfig.profile === 'dow_theory'    && '81 features — swing structure'}
+                                            {rlTrainConfig.profile === 'cdl_rich'      && '92 features — pattern specialist'}
+                                            {rlTrainConfig.profile === 'comprehensive' && '117 features — all groups · MTF Transformer'}
+                                            {rlTrainConfig.profile === 'chart_vision'  && '97 features — EMA cross + Fib + Trendlines'}
                                         </span>
                                     </label>
                                     <select value={rlTrainConfig.profile} onChange={(e) => setRlTrainConfig({...rlTrainConfig, profile: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
-                                        <option value="lean">Lean — Best signal:noise, no BB/SuperTrend/OB (56 features)</option>
-                                        <option value="lean_mtf">Lean MTF — Lean + 60m/1D macro bias (68 features)</option>
-                                        <option value="lean_cdl">Lean CDL — Lean + 16 extra candlestick patterns (72 features)</option>
-                                        <option value="smart_money">Smart Money — SL hunts + liquidity pools + institutional flow (68 features)</option>
-                                        <option value="base">Base — Core TA + SMC/Wyckoff/OB (71 features)</option>
-                                        <option value="quantum">Quantum — Physics-inspired market state (79 features)</option>
-                                        <option value="mtf_full">MTF Full — 60m + Daily macro bias (83 features)</option>
-                                        <option value="dow_theory">Dow Theory — Swing HH/HL/LH/LL structure (76 features)</option>
-                                        <option value="cdl_rich">CDL Rich — 21 candlestick patterns (87 features)</option>
-                                        <option value="comprehensive">Comprehensive — All features combined (112 features)</option>
-                                        <option value="chart_vision">Chart Vision — EMA cross + Fibonacci + Trendlines (92 features)</option>
+                                        <option value="lean">Lean — Best signal:noise, no BB/SuperTrend/OB (61 features)</option>
+                                        <option value="lean_mtf">Lean MTF — Lean + 60m/1D macro bias · MTF Transformer (73 features)</option>
+                                        <option value="lean_cdl">Lean CDL — Lean + 16 extra candlestick patterns (77 features)</option>
+                                        <option value="smart_money">Smart Money — SL hunts + liquidity pools + institutional flow (73 features)</option>
+                                        <option value="base">Base — Core TA + SMC/Wyckoff/OB (76 features)</option>
+                                        <option value="quantum">Quantum — Physics-inspired market state (84 features)</option>
+                                        <option value="mtf_full">MTF Full — Separate Transformer per TF: 15m/60m/1D (88 features)</option>
+                                        <option value="dow_theory">Dow Theory — Swing HH/HL/LH/LL structure (81 features)</option>
+                                        <option value="cdl_rich">CDL Rich — 21 candlestick patterns (92 features)</option>
+                                        <option value="comprehensive">Comprehensive — All features · MTF Transformer (117 features)</option>
+                                        <option value="chart_vision">Chart Vision — EMA cross + Fibonacci + Trendlines (97 features)</option>
                                     </select>
                                     <p className="text-[10px] text-slate-500 mt-1">Each profile trains a specialist model — you can run multiple profiles simultaneously.</p>
                                 </div>
