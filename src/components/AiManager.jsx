@@ -155,7 +155,11 @@ const AiManager = () => {
         start_date: '2024-01-01', end_date: '2024-02-01',
         dataSource: 'AUTO', resolution: '1',
         customName: '', broker: 'angel_one', baseModel: '', profile: 'base',
-        intraday: true,
+        intraday: true, windowSize: 100, batchSize: 0,
+        lrInitial: 0.0003, lrFinal: 0.0001,
+        nEpochs: 10, gaeLambda: 0.95, gamma: 0.99,
+        entP1Start: 0.10, entP1End: 0.04, entP2End: 0.015, entP3End: 0.005,
+        curriculum: '30/30/40',
     });
     const [rlJobs,          setRlJobs]          = useState([]);   // all jobs (active + recent)
     const [expandedJobId,   setExpandedJobId]   = useState(null); // which job's logs are open
@@ -286,9 +290,21 @@ const AiManager = () => {
                     resolution: rlTrainConfig.resolution,
                     customName: rlTrainConfig.customName,
                     broker:     rlTrainConfig.broker,
-                    baseModel:  rlTrainConfig.baseModel,
-                    profile:    rlTrainConfig.profile,
-                    intraday:   !!rlTrainConfig.intraday,
+                    baseModel:    rlTrainConfig.baseModel,
+                    profile:      rlTrainConfig.profile,
+                    intraday:     !!rlTrainConfig.intraday,
+                    window_size:  rlTrainConfig.windowSize,
+                    batch_size:   rlTrainConfig.batchSize,
+                    lr_initial:   rlTrainConfig.lrInitial,
+                    lr_final:     rlTrainConfig.lrFinal,
+                    n_epochs:     rlTrainConfig.nEpochs,
+                    gae_lambda:   rlTrainConfig.gaeLambda,
+                    gamma:        rlTrainConfig.gamma,
+                    ent_p1_start: rlTrainConfig.entP1Start,
+                    ent_p1_end:   rlTrainConfig.entP1End,
+                    ent_p2_end:   rlTrainConfig.entP2End,
+                    ent_p3_end:   rlTrainConfig.entP3End,
+                    curriculum:   rlTrainConfig.curriculum,
                 })
             });
             const data = await res.json();
@@ -604,11 +620,35 @@ const AiManager = () => {
                                     </label>
                                 </div>
 
-                                {/* Timesteps */}
-                                <div>
-                                    <label className="text-xs text-slate-400 uppercase tracking-wider font-bold">Timesteps</label>
-                                    <input type="number" value={rlTrainConfig.timesteps} onChange={(e) => setRlTrainConfig({...rlTrainConfig, timesteps: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 mt-1 text-sm focus:border-indigo-500 outline-none" />
-                                    <p className="text-xs text-slate-500 mt-1">Recommended: 100,000+ for stable learning.</p>
+                                {/* Timesteps + Window Size */}
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="text-xs text-slate-400 uppercase tracking-wider font-bold">Timesteps</label>
+                                        <input type="number" value={rlTrainConfig.timesteps} onChange={(e) => setRlTrainConfig({...rlTrainConfig, timesteps: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 mt-1 text-sm focus:border-indigo-500 outline-none" />
+                                        <p className="text-xs text-slate-500 mt-1">100,000+ for stable learning.</p>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">
+                                            Window Size
+                                            <span className="ml-2 text-[10px] text-indigo-400 font-normal normal-case">
+                                                {rlTrainConfig.windowSize === 50  && '5m: 4.2h context'}
+                                                {rlTrainConfig.windowSize === 100 && '5m: 8.3h · 1m: 1.7h'}
+                                                {rlTrainConfig.windowSize === 150 && '5m: 12.5h · 1m: 2.5h'}
+                                                {rlTrainConfig.windowSize === 200 && '5m: 16.7h · 1m: 3.3h'}
+                                                {rlTrainConfig.windowSize === 300 && '5m: 25h · 1m: 5h (scalping)'}
+                                                {rlTrainConfig.windowSize === 500 && '5m: 41.7h · 1m: 8.3h (slow)'}
+                                            </span>
+                                        </label>
+                                        <select value={rlTrainConfig.windowSize} onChange={(e) => setRlTrainConfig({...rlTrainConfig, windowSize: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                                            <option value={50}>50 — Fastest training, short context</option>
+                                            <option value={100}>100 — Default · 8.3h on 5m</option>
+                                            <option value={150}>150 — Extended · 12.5h on 5m</option>
+                                            <option value={200}>200 — Deep context · 16.7h on 5m</option>
+                                            <option value={300}>300 — 1m scalping · 5h on 1m</option>
+                                            <option value={500}>500 — Max context (slow)</option>
+                                        </select>
+                                        <p className="text-xs text-slate-500 mt-1">Larger = more context, more memory, slower training.</p>
+                                    </div>
                                 </div>
 
                                 {/* Date range */}
@@ -676,6 +716,7 @@ const AiManager = () => {
                                             {rlTrainConfig.profile === 'cdl_rich'      && '92 features — pattern specialist'}
                                             {rlTrainConfig.profile === 'comprehensive' && '117 features — all groups · MTF Transformer'}
                                             {rlTrainConfig.profile === 'chart_vision'  && '97 features — EMA cross + Fib + Trendlines'}
+                                            {rlTrainConfig.profile === 'focused_mtf'   && '44 features — importance-filtered, no volume/CCI/ATR/BB'}
                                         </span>
                                     </label>
                                     <select value={rlTrainConfig.profile} onChange={(e) => setRlTrainConfig({...rlTrainConfig, profile: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
@@ -690,9 +731,158 @@ const AiManager = () => {
                                         <option value="cdl_rich">CDL Rich — 21 candlestick patterns (92 features)</option>
                                         <option value="comprehensive">Comprehensive — All features · MTF Transformer (117 features)</option>
                                         <option value="chart_vision">Chart Vision — EMA cross + Fibonacci + Trendlines (97 features)</option>
+                                        <option value="focused_mtf">Focused MTF — Importance winners only: MTF+SuperTrend+SMC+MACD (44 features)</option>
                                     </select>
                                     <p className="text-[10px] text-slate-500 mt-1">Each profile trains a specialist model — you can run multiple profiles simultaneously.</p>
                                 </div>
+
+                                {/* ── Advanced Hyperparameters ── */}
+                                <details className="group">
+                                    <summary className="cursor-pointer text-xs text-slate-400 uppercase tracking-wider font-bold flex items-center gap-2 select-none">
+                                        <span className="group-open:rotate-90 transition-transform inline-block">▶</span>
+                                        Advanced Hyperparameters
+                                        <span className="text-[10px] text-slate-600 font-normal normal-case">LR · Epochs · GAE · Gamma · Entropy · Curriculum · Batch</span>
+                                    </summary>
+
+                                    <div className="mt-3 space-y-4 pl-2 border-l border-slate-700">
+
+                                        {/* Learning Rate */}
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="text-xs text-slate-400 font-semibold block mb-1">LR Start
+                                                    <span className="ml-1 text-[10px] text-slate-600 font-normal">initial learning rate</span>
+                                                </label>
+                                                <select value={rlTrainConfig.lrInitial} onChange={(e) => setRlTrainConfig({...rlTrainConfig, lrInitial: parseFloat(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                                                    <option value={0.001}>1e-3 — Aggressive (fast but unstable)</option>
+                                                    <option value={0.0005}>5e-4 — Fast learning</option>
+                                                    <option value={0.0003}>3e-4 — Default ✓</option>
+                                                    <option value={0.0001}>1e-4 — Conservative</option>
+                                                    <option value={0.00003}>3e-5 — Very slow (fine-tuning)</option>
+                                                </select>
+                                                <p className="text-[10px] text-slate-500 mt-1">Too high = policy collapses. Too low = never converges.</p>
+                                            </div>
+                                            <div>
+                                                <label className="text-xs text-slate-400 font-semibold block mb-1">LR End
+                                                    <span className="ml-1 text-[10px] text-slate-600 font-normal">final learning rate</span>
+                                                </label>
+                                                <select value={rlTrainConfig.lrFinal} onChange={(e) => setRlTrainConfig({...rlTrainConfig, lrFinal: parseFloat(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                                                    <option value={0.0003}>3e-4 — No decay</option>
+                                                    <option value={0.0001}>1e-4 — Default ✓</option>
+                                                    <option value={0.00003}>3e-5 — Strong decay</option>
+                                                    <option value={0.00001}>1e-5 — Very strong decay</option>
+                                                </select>
+                                                <p className="text-[10px] text-slate-500 mt-1">LR decays linearly from Start → End over all timesteps.</p>
+                                            </div>
+                                        </div>
+
+                                        {/* n_epochs + GAE lambda */}
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="text-xs text-slate-400 font-semibold block mb-1">PPO Epochs
+                                                    <span className="ml-1 text-[10px] text-slate-600 font-normal">gradient passes per rollout</span>
+                                                </label>
+                                                <select value={rlTrainConfig.nEpochs} onChange={(e) => setRlTrainConfig({...rlTrainConfig, nEpochs: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                                                    <option value={5}>5 — Stable, less efficient</option>
+                                                    <option value={8}>8 — Slightly conservative</option>
+                                                    <option value={10}>10 — Default ✓</option>
+                                                    <option value={15}>15 — More learning per batch</option>
+                                                    <option value={20}>20 — Max (risk of divergence)</option>
+                                                </select>
+                                                <p className="text-[10px] text-slate-500 mt-1">Higher = more efficient use of data. Too high = clips trigger, policy drifts.</p>
+                                            </div>
+                                            <div>
+                                                <label className="text-xs text-slate-400 font-semibold block mb-1">GAE Lambda
+                                                    <span className="ml-1 text-[10px] text-slate-600 font-normal">bias/variance tradeoff</span>
+                                                </label>
+                                                <select value={rlTrainConfig.gaeLambda} onChange={(e) => setRlTrainConfig({...rlTrainConfig, gaeLambda: parseFloat(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                                                    <option value={0.90}>0.90 — Low variance · scalping</option>
+                                                    <option value={0.92}>0.92 — Scalping lean</option>
+                                                    <option value={0.95}>0.95 — Default ✓ · balanced</option>
+                                                    <option value={0.97}>0.97 — Swing trading</option>
+                                                    <option value={0.99}>0.99 — Long horizon · low bias</option>
+                                                </select>
+                                                <p className="text-[10px] text-slate-500 mt-1">Lower for scalping (short holds). Higher for swing (multi-hour trades).</p>
+                                            </div>
+                                        </div>
+
+                                        {/* Gamma */}
+                                        <div>
+                                            <label className="text-xs text-slate-400 font-semibold block mb-1">Gamma (Discount Factor)
+                                                <span className="ml-1 text-[10px] text-slate-600 font-normal">how much future rewards matter</span>
+                                            </label>
+                                            <select value={rlTrainConfig.gamma} onChange={(e) => setRlTrainConfig({...rlTrainConfig, gamma: parseFloat(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                                                <option value={0.95}>0.95 — Scalping: focus on immediate P&L</option>
+                                                <option value={0.97}>0.97 — Intraday short holds</option>
+                                                <option value={0.99}>0.99 — Default ✓ · balanced intraday</option>
+                                                <option value={0.995}>0.995 — Swing: cares about final trade outcome</option>
+                                                <option value={0.999}>0.999 — Long horizon (slow to converge)</option>
+                                            </select>
+                                            <p className="text-[10px] text-slate-500 mt-1">0.99 means a reward 100 steps away is worth 37% of an immediate one. Lower = more present-focused.</p>
+                                        </div>
+
+                                        {/* Entropy */}
+                                        <div>
+                                            <label className="text-xs text-slate-400 font-semibold block mb-1">Entropy Schedule
+                                                <span className="ml-1 text-[10px] text-slate-600 font-normal">exploration → exploitation across phases</span>
+                                            </label>
+                                            <div className="grid grid-cols-4 gap-2">
+                                                {[
+                                                    { key: 'entP1Start', label: 'P1 Start', default: 0.10, tip: 'High = more random early exploration' },
+                                                    { key: 'entP1End',   label: 'P1 End',   default: 0.04, tip: 'P2 starts from this value' },
+                                                    { key: 'entP2End',   label: 'P2 End',   default: 0.015, tip: 'P3 starts from this value' },
+                                                    { key: 'entP3End',   label: 'P3 End',   default: 0.005, tip: 'Final exploitation level' },
+                                                ].map(({ key, label }) => (
+                                                    <div key={key}>
+                                                        <label className="text-[10px] text-slate-500 block mb-1">{label}</label>
+                                                        <input
+                                                            type="number" step="0.001" min="0.001" max="0.5"
+                                                            value={rlTrainConfig[key]}
+                                                            onChange={(e) => setRlTrainConfig({...rlTrainConfig, [key]: parseFloat(e.target.value)})}
+                                                            className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-xs focus:border-indigo-500 outline-none"
+                                                        />
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <p className="text-[10px] text-slate-500 mt-1">Higher values = more exploration (random actions). Decays across phases: P1→P2→P3. Raise P1 Start if model collapses to Hold-only.</p>
+                                        </div>
+
+                                        {/* Curriculum */}
+                                        <div>
+                                            <label className="text-xs text-slate-400 font-semibold block mb-1">Curriculum Split (P1/P2/P3 %)
+                                                <span className="ml-1 text-[10px] text-slate-600 font-normal">must sum to 100</span>
+                                            </label>
+                                            <select value={rlTrainConfig.curriculum} onChange={(e) => setRlTrainConfig({...rlTrainConfig, curriculum: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                                                <option value="20/20/60">20/20/60 — Max final-phase (best for long datasets)</option>
+                                                <option value="20/30/50">20/30/50 — More recent data emphasis</option>
+                                                <option value="30/30/40">30/30/40 — Default ✓ · balanced</option>
+                                                <option value="33/33/34">33/33/34 — Equal phases</option>
+                                                <option value="40/30/30">40/30/30 — More historical (crash/recovery learning)</option>
+                                                <option value="50/25/25">50/25/25 — Heavy historical emphasis</option>
+                                            </select>
+                                            <p className="text-[10px] text-slate-500 mt-1">
+                                                P1 = oldest {rlTrainConfig.curriculum.split('/')[0]}% of training rows (historical patterns).
+                                                P2 = oldest {parseInt(rlTrainConfig.curriculum.split('/')[0]) + parseInt(rlTrainConfig.curriculum.split('/')[1])}% (expanding window).
+                                                P3 = full training set (all regimes).
+                                            </p>
+                                        </div>
+
+                                        {/* Batch Size */}
+                                        <div>
+                                            <label className="text-xs text-slate-400 font-semibold block mb-1">Batch Size
+                                                <span className="ml-1 text-[10px] text-slate-600 font-normal">mini-batch per gradient step (0 = auto)</span>
+                                            </label>
+                                            <select value={rlTrainConfig.batchSize} onChange={(e) => setRlTrainConfig({...rlTrainConfig, batchSize: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                                                <option value={0}>0 — Auto (recommended: 512)</option>
+                                                <option value={256}>256 — Smaller · noisier gradients, more updates</option>
+                                                <option value={512}>512 — Gold Standard · good bias-variance balance</option>
+                                                <option value={1024}>1024 — Larger · stable but slower to improve</option>
+                                                <option value={2048}>2048 — Max (= full rollout, no mini-batching)</option>
+                                            </select>
+                                            <p className="text-[10px] text-slate-500 mt-1">Pool = n_envs × n_steps. Batch must divide evenly into pool. Auto uses 512.</p>
+                                        </div>
+
+                                    </div>
+                                </details>
 
                                 {/* Base model (continual learning) */}
                                 <div>
