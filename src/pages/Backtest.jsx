@@ -348,7 +348,7 @@ export default function Backtest() {
       
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Controls */}
-        <div className="bg-surface p-6 rounded-xl border border-slate-700 space-y-6">
+        <div className="bg-surface p-6 rounded-xl border border-slate-700 space-y-6 sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto">
           <h3 className="text-xl font-bold">Configuration</h3>
           
           <div className="space-y-4">
@@ -672,10 +672,10 @@ export default function Backtest() {
 
                 {/* Selling Parameters (Conditional) */}
                 {(params.trade_mode === 'SELL' || params.trade_mode === 'HEDGE_SELL') && (
-                     <div className="col-span-1 lg:col-span-2 bg-slate-800/50 p-3 rounded border border-purple-500/30 grid grid-cols-3 gap-3">
+                     <div className={`bg-slate-800/50 p-3 rounded border border-purple-500/30 grid gap-3 ${params.trade_mode === 'HEDGE_SELL' ? 'grid-cols-3' : 'grid-cols-2'}`}>
                          <div>
                              <label className="block text-xs text-purple-300 mb-1">Margin / Lot (₹)</label>
-                             <input type="number" 
+                             <input type="number"
                                 className="w-full bg-slate-900 border border-purple-700/50 rounded p-2 text-white text-xs"
                                 value={params.margin_per_lot || 120000}
                                 onChange={e => setParams({...params, margin_per_lot: parseFloat(e.target.value)})}
@@ -683,7 +683,7 @@ export default function Backtest() {
                          </div>
                          <div>
                              <label className="block text-xs text-purple-300 mb-1">Theta Gain / Day (Pts)</label>
-                             <input type="number" 
+                             <input type="number"
                                 className="w-full bg-slate-900 border border-purple-700/50 rounded p-2 text-white text-xs"
                                 value={params.theta_decay || 20}
                                 onChange={e => setParams({...params, theta_decay: parseFloat(e.target.value)})}
@@ -692,7 +692,7 @@ export default function Backtest() {
                          {params.trade_mode === 'HEDGE_SELL' && (
                              <div>
                                  <label className="block text-xs text-purple-300 mb-1">Hedge Cost (Pts)</label>
-                                 <input type="number" 
+                                 <input type="number"
                                     className="w-full bg-slate-900 border border-purple-700/50 rounded p-2 text-white text-xs"
                                     value={params.hedge_cost || 10}
                                     onChange={e => setParams({...params, hedge_cost: parseFloat(e.target.value)})}
@@ -1237,17 +1237,6 @@ export default function Backtest() {
             
 
 
-            {/* AI Training Controls Moved to AI Manager */}
-            <div className="flex gap-2">
-                <button
-                    onClick={runBacktest}
-                    disabled={loading}
-                    className="flex-1 bg-primary hover:bg-blue-600 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors"
-                >
-                    {loading ? 'Running...' : <><Play className="w-4 h-4" /> Run Backtest</>}
-                </button>
-            </div>
-
          <div className="grid grid-cols-2 gap-2 mt-auto">
             <button 
                 onClick={handleSaveDefault}
@@ -1276,10 +1265,29 @@ export default function Backtest() {
 
         {/* Results */}
         <div className="lg:col-span-2 bg-surface p-6 rounded-xl border border-slate-700 min-h-[500px]">
-          <h3 className="text-xl font-bold mb-6">Results</h3>
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-xl font-bold">Results</h3>
+            <button
+                onClick={runBacktest}
+                disabled={loading}
+                className="bg-primary hover:bg-blue-600 disabled:opacity-50 text-white font-bold py-2 px-5 rounded-lg flex items-center gap-2 transition-colors text-sm"
+            >
+                {loading ? 'Running...' : <><Play className="w-4 h-4" /> Run Backtest</>}
+            </button>
+          </div>
           
           {result ? (
             <div className="space-y-8">
+              {result.warnings && result.warnings.length > 0 && (
+                <div className="space-y-2">
+                  {result.warnings.map((w, i) => (
+                    <div key={i} className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/40 text-amber-300 rounded-lg px-4 py-3 text-sm">
+                      <span className="mt-0.5">⚠️</span>
+                      <span>{w}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 <div className="p-4 bg-slate-800 rounded-lg">
                   <p className="text-slate-400 text-sm">Total P&L</p>
