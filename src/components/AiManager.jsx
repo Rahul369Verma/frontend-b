@@ -9,13 +9,59 @@ import { INSTRUMENT_CONFIG } from '../constants';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Parse the last [Progress] line from a log string into { percent, speed, eta, text } */
-function parseProgress(logs) {
+function formatEta(seconds) {
+    if (seconds == null || seconds <= 0) return '--';
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    const m = Math.floor(seconds / 60);
+    const s = Math.round(seconds % 60);
+    if (m < 60) return `${m}m ${s.toString().padStart(2, '0')}s`;
+    const h = Math.floor(m / 60);
+    return `${h}h ${(m % 60)}m`;
+}
+
+/** Wall-clock ETA: if percent% took elapsed seconds, remaining = elapsed*(100-pct)/pct */
+function computeEta(startedAt, percent) {
+    if (!startedAt || percent < 0.5) return null;
+    const elapsed = (Date.now() - new Date(startedAt).getTime()) / 1000;
+    if (elapsed <= 0) return null;
+    return formatEta(elapsed * (100 - percent) / percent);
+}
+
+/** Parse the last progress line from a log string into { percent, speed, eta, text, isNitro } */
+function parseProgress(logs, startedAt) {
     if (!logs) return null;
+
+    // NITRO: last JSON telemetry line with phase/update fields
+    const nitroLines = logs.split('\n').filter(l => {
+        const t = l.trim();
+        return t.startsWith('{') && t.includes('"NITRO"') && t.includes('"update"');
+    });
+    if (nitroLines.length) {
+        try {
+            const d = JSON.parse(nitroLines[nitroLines.length - 1].trim());
+            const percent = Math.min(99, ((d.phase - 1) + d.update / Math.max(d.total_updates, 1)) / 3 * 100);
+            return {
+                text:    `Phase ${d.phase} · ${d.update}/${d.total_updates} updates`,
+                percent,
+                speed:   (d.mean_reward ?? 0).toFixed(5),
+                eta:     computeEta(startedAt, percent) || '--',
+                entropy: (d.entropy ?? 0).toFixed(3),
+                isNitro: true,
+                actDist: (d.act_H != null)
+                    ? { H: d.act_H, B: d.act_B, S: d.act_S, ExL: d.act_ExL, ExS: d.act_ExS }
+                    : null,
+            };
+        } catch {
+            // malformed JSON telemetry line — skip
+        }
+    }
+
+    // STANDARD: [Progress] text line — override log ETA with wall-clock ETA
     const matches = [...logs.matchAll(/\[Progress\] (.*?) \((.*?)%\) \| Speed: (.*?) steps\/s \| ETA: (.*)/g)];
     if (!matches.length) return null;
     const m = matches[matches.length - 1];
-    return { text: m[1], percent: parseFloat(m[2]), speed: m[3], eta: m[4] };
+    const percent = parseFloat(m[2]);
+    return { text: m[1], percent, speed: m[3], eta: computeEta(startedAt, percent) || m[4] };
 }
 
 function isActive(status) {
@@ -48,7 +94,7 @@ function statusBadge(status) {
 
 // ── Job Card ─────────────────────────────────────────────────────────────────
 function JobCard({ job, onStop, expanded, onToggleExpand }) {
-    const progress  = parseProgress(job.logs);
+    const progress  = parseProgress(job.logs, job.startedAt);
     const active    = isActive(job.status);
     const logEndRef = useRef(null);
 
@@ -73,6 +119,16 @@ function JobCard({ job, onStop, expanded, onToggleExpand }) {
                         {job.profile && job.profile !== 'base' && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded border bg-indigo-900/60 text-indigo-300 border-indigo-700/50 font-semibold uppercase tracking-wide">
                                 {job.profile}
+                            </span>
+                        )}
+                        {job.engineMode === 'NITRO' && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded border bg-amber-500/20 text-amber-300 border-amber-500/40 font-semibold tracking-wide">
+                                ⚡ NITRO
+                            </span>
+                        )}
+                        {job.agentVersion && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded border bg-slate-800 text-slate-500 border-slate-700 font-mono tracking-wide">
+                                v{job.agentVersion}
                             </span>
                         )}
                         <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold uppercase tracking-wide ${statusBadge(job.status)}`}>
@@ -108,8 +164,8 @@ function JobCard({ job, onStop, expanded, onToggleExpand }) {
             {progress && active && (
                 <div className="px-4 pb-3">
                     <div className="flex justify-between text-[10px] mb-1">
-                        <span className="text-indigo-300 font-mono">{progress.text} steps</span>
-                        <span className="text-emerald-400 font-mono">{progress.speed} steps/s</span>
+                        <span className="text-indigo-300 font-mono">{progress.text}{progress.isNitro ? '' : ' steps'}</span>
+                        <span className="text-emerald-400 font-mono">{progress.isNitro ? `reward ${progress.speed}` : `${progress.speed} steps/s`}</span>
                         <span className="text-amber-400 font-mono">ETA: {progress.eta}</span>
                     </div>
                     <div className="w-full bg-slate-800 rounded-full h-1.5">
@@ -118,8 +174,16 @@ function JobCard({ job, onStop, expanded, onToggleExpand }) {
                             style={{ width: `${Math.min(100, progress.percent)}%` }}
                         />
                     </div>
-                    <div className="text-right text-[10px] text-slate-500 mt-0.5">
-                        {Math.min(100, progress.percent).toFixed(1)}%
+                    <div className="flex justify-between text-[10px] text-slate-500 mt-0.5">
+                        {progress.actDist ? (
+                            <span className="font-mono text-slate-400">
+                                {Object.entries(progress.actDist).map(([k, v]) =>
+                                    <span key={k} className="mr-2">{k}:<span className="text-slate-300">{v?.toFixed(1)}%</span></span>
+                                )}
+                                {progress.entropy && <span className="ml-1 text-slate-500">ent:<span className="text-slate-400">{progress.entropy}</span></span>}
+                            </span>
+                        ) : <span />}
+                        <span>{Math.min(100, progress.percent).toFixed(1)}%</span>
                     </div>
                 </div>
             )}
@@ -160,6 +224,9 @@ const AiManager = () => {
         nEpochs: 10, gaeLambda: 0.95, gamma: 0.99,
         entP1Start: 0.10, entP1End: 0.04, entP2End: 0.015, entP3End: 0.005,
         curriculum: '30/30/40',
+        engineMode: 'STANDARD',
+        nitroNEnvs: 256, nitroNSteps: 128,
+        exitCooldown: 0, exoCsv: '',
     });
     const [rlJobs,          setRlJobs]          = useState([]);   // all jobs (active + recent)
     const [expandedJobId,   setExpandedJobId]   = useState(null); // which job's logs are open
@@ -170,6 +237,8 @@ const AiManager = () => {
     const [uploadingModel,  setUploadingModel]  = useState(false);
     const [evaluatingKey,   setEvaluatingKey]   = useState(null);  // '{modelName}_final' | '{modelName}_best'
     const [evalResults,     setEvalResults]     = useState({});    // key → metrics object
+    const [checkpoints,     setCheckpoints]     = useState([]);    // resumable checkpoints
+    const [resumingModel,   setResumingModel]   = useState(null);  // model_name being resumed
 
     // Backtest
     const [backtestConfig, setBacktestConfig] = useState({
@@ -197,7 +266,12 @@ const AiManager = () => {
             const data = await res.json();
             // Backend returns { jobs: [...] }; handle legacy { status, logs } gracefully
             if (Array.isArray(data.jobs)) {
-                setRlJobs(data.jobs);
+                // Normalise snake_case agent_version (Flask) → camelCase agentVersion
+                setRlJobs(data.jobs.map(j => ({
+                    ...j,
+                    agentVersion: j.agentVersion || j.agent_version || null,
+                    engineMode:   j.engineMode   || j.engine_mode   || 'STANDARD',
+                })));
             } else if (data.status) {
                 setRlJobs([{ jobId: 'legacy', symbol: rlTrainConfig.symbol, modelName: rlTrainConfig.symbol, profile: 'base', status: data.status, logs: data.logs, startedAt: null }]);
             }
@@ -225,6 +299,15 @@ const AiManager = () => {
         }
     }, []);
 
+    const fetchCheckpoints = useCallback(async () => {
+        try {
+            const res = await fetch(`${API_BASE}/api/rl/checkpoints`);
+            if (res.ok) setCheckpoints((await res.json()).checkpoints || []);
+        } catch (err) {
+            console.error("fetchCheckpoints:", err);
+        }
+    }, []);
+
     // Poll job status while any job is running
     useEffect(() => {
         let interval;
@@ -240,8 +323,9 @@ const AiManager = () => {
             fetchRlStatus();
             checkRlModel(rlTrainConfig.symbol);
             fetchRlModels();
+            fetchCheckpoints();
         }
-    }, [activeTab, rlTrainConfig.symbol, fetchRlStatus, checkRlModel, fetchRlModels]);
+    }, [activeTab, rlTrainConfig.symbol, fetchRlStatus, checkRlModel, fetchRlModels, fetchCheckpoints]);
 
     const fetchStatus = async () => {
         setLoadingStatus(true);
@@ -305,6 +389,11 @@ const AiManager = () => {
                     ent_p2_end:   rlTrainConfig.entP2End,
                     ent_p3_end:   rlTrainConfig.entP3End,
                     curriculum:   rlTrainConfig.curriculum,
+                    engine_mode:   rlTrainConfig.engineMode,
+                    nitro_n_envs:  rlTrainConfig.nitroNEnvs,
+                    nitro_n_steps: rlTrainConfig.nitroNSteps,
+                    exit_cooldown: rlTrainConfig.exitCooldown || 0,
+                    exo_csv:       rlTrainConfig.exoCsv       || '',
                 })
             });
             const data = await res.json();
@@ -316,7 +405,9 @@ const AiManager = () => {
                     : rlTrainConfig.symbol.replace(/:/g, '_');
                 setRlJobs(prev => [{
                     jobId, symbol: rlTrainConfig.symbol, modelName,
-                    profile: rlTrainConfig.profile, timesteps: rlTrainConfig.timesteps,
+                    profile: rlTrainConfig.profile, engineMode: rlTrainConfig.engineMode,
+                    agentVersion: data.agent_version || null,
+                    timesteps: rlTrainConfig.timesteps,
                     status: 'training', startedAt: new Date().toISOString(), logs: 'Initializing...',
                 }, ...prev]);
                 setExpandedJobId(jobId); // auto-expand the new job
@@ -327,6 +418,29 @@ const AiManager = () => {
             alert("RL Training Failed: " + err.message);
         } finally {
             setLaunchingJob(false);
+        }
+    };
+
+    // ── Resume a training run from its last checkpoint ───────────────────────
+    const handleResumeTraining = async (ckpt) => {
+        if (!window.confirm(`Resume "${ckpt.model_name}" from step ${ckpt.step.toLocaleString()} (${ckpt.pct_complete}% complete)?`)) return;
+        setResumingModel(ckpt.model_name);
+        try {
+            const res  = await fetch(`${API_BASE}/api/rl/resume`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model_name: ckpt.model_name }),
+            });
+            const data = await res.json();
+            if (res.ok) {
+                setCheckpoints(prev => prev.filter(c => c.model_name !== ckpt.model_name));
+                fetchRlStatus();
+            } else {
+                alert("Resume failed: " + (data.error || "Unknown error"));
+            }
+        } catch (err) {
+            alert("Resume failed: " + err.message);
+        } finally {
+            setResumingModel(null);
         }
     };
 
@@ -597,6 +711,100 @@ const AiManager = () => {
                                     )}
                                 </div>
 
+                                {/* Engine Mode selector */}
+                                <div className="space-y-1.5">
+                                    <label className="text-xs text-slate-400 uppercase tracking-wider font-bold flex items-center gap-2">
+                                        Training Engine
+                                        {rlTrainConfig.engineMode === 'NITRO' && (
+                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold">EXPERIMENTAL</span>
+                                        )}
+                                    </label>
+                                    <div className="flex gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setRlTrainConfig({ ...rlTrainConfig, engineMode: 'STANDARD', nEpochs: 10, batchSize: 0 })}
+                                            className={`flex-1 py-2 px-3 rounded-lg border text-sm font-semibold transition-all ${
+                                                rlTrainConfig.engineMode === 'STANDARD'
+                                                    ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200'
+                                                    : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:border-slate-600'
+                                            }`}
+                                        >
+                                            <span className="block text-base leading-none mb-0.5">⚙️</span>
+                                            Standard
+                                            <span className="block text-[10px] font-normal text-slate-500 mt-0.5">SB3 · PyTorch</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setRlTrainConfig({ ...rlTrainConfig, engineMode: 'NITRO', nEpochs: 4, batchSize: 0, lrFinal: 0.0003 })}
+                                            className={`flex-1 py-2 px-3 rounded-lg border text-sm font-semibold transition-all ${
+                                                rlTrainConfig.engineMode === 'NITRO'
+                                                    ? 'bg-amber-500/20 border-amber-500 text-amber-200'
+                                                    : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:border-slate-600'
+                                            }`}
+                                        >
+                                            <span className="block text-base leading-none mb-0.5">⚡</span>
+                                            Nitro
+                                            <span className="block text-[10px] font-normal text-slate-500 mt-0.5">JAX · XLA · GPU</span>
+                                        </button>
+                                    </div>
+                                    <p className="text-[10px] text-slate-500">
+                                        {rlTrainConfig.engineMode === 'STANDARD'
+                                            ? 'Stable Baselines3 — production-ready, well-tested SB3 PPO.'
+                                            : 'JAX Nitro — vectorized environments, JIT-compiled PPO. Requires JAX CUDA build in training container.'}
+                                    </p>
+                                </div>
+
+                                {/* Nitro-specific params — only visible when NITRO selected */}
+                                {rlTrainConfig.engineMode === 'NITRO' && (
+                                    <div className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/30 space-y-3">
+                                        <p className="text-[10px] text-amber-400 font-semibold uppercase tracking-wider">⚡ Nitro Parallelism</p>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="text-xs text-slate-400 font-semibold block mb-1">
+                                                    Parallel Envs
+                                                    <span className="ml-1 text-[10px] text-slate-600 font-normal">(n_envs · vmap)</span>
+                                                </label>
+                                                <select
+                                                    value={rlTrainConfig.nitroNEnvs}
+                                                    onChange={(e) => setRlTrainConfig({...rlTrainConfig, nitroNEnvs: parseInt(e.target.value)})}
+                                                    className="w-full bg-slate-900 border border-amber-700/50 rounded p-2 text-sm focus:border-amber-500 outline-none"
+                                                >
+                                                    <option value={16}>16 — Minimal · CPU test</option>
+                                                    <option value={32}>32 — Small · debug</option>
+                                                    <option value={64}>64 — Light · low VRAM</option>
+                                                    <option value={128}>128 — Balanced</option>
+                                                    <option value={256}>256 — Default · GPU optimal</option>
+                                                    <option value={512}>512 — High · multi-GPU</option>
+                                                    <option value={1024}>1024 — Max · 8-GPU cluster</option>
+                                                </select>
+                                                <p className="text-[10px] text-slate-600 mt-1">More envs = more diverse rollouts per update.</p>
+                                            </div>
+                                            <div>
+                                                <label className="text-xs text-slate-400 font-semibold block mb-1">
+                                                    Steps / Env
+                                                    <span className="ml-1 text-[10px] text-slate-600 font-normal">(n_steps)</span>
+                                                </label>
+                                                <select
+                                                    value={rlTrainConfig.nitroNSteps}
+                                                    onChange={(e) => setRlTrainConfig({...rlTrainConfig, nitroNSteps: parseInt(e.target.value)})}
+                                                    className="w-full bg-slate-900 border border-amber-700/50 rounded p-2 text-sm focus:border-amber-500 outline-none"
+                                                >
+                                                    <option value={16}>16 — Minimal · CPU test</option>
+                                                    <option value={32}>32 — Small · debug</option>
+                                                    <option value={64}>64 — Short rollouts</option>
+                                                    <option value={128}>128 — Default</option>
+                                                    <option value={256}>256 — Longer horizon</option>
+                                                    <option value={512}>512 — Max horizon</option>
+                                                </select>
+                                                <p className="text-[10px] text-slate-600 mt-1">Pool = n_envs × n_steps transitions.</p>
+                                            </div>
+                                        </div>
+                                        <p className="text-[10px] text-amber-500/70">
+                                            Pool size: {(rlTrainConfig.nitroNEnvs * rlTrainConfig.nitroNSteps).toLocaleString()} transitions/update
+                                        </p>
+                                    </div>
+                                )}
+
                                 {/* Intraday Mode toggle */}
                                 <div className="flex items-start gap-3 p-3 rounded-lg bg-slate-800/60 border border-slate-700">
                                     <input
@@ -741,39 +949,59 @@ const AiManager = () => {
                                     <summary className="cursor-pointer text-xs text-slate-400 uppercase tracking-wider font-bold flex items-center gap-2 select-none">
                                         <span className="group-open:rotate-90 transition-transform inline-block">▶</span>
                                         Advanced Hyperparameters
-                                        <span className="text-[10px] text-slate-600 font-normal normal-case">LR · Epochs · GAE · Gamma · Entropy · Curriculum · Batch</span>
+                                        <span className="text-[10px] text-slate-600 font-normal normal-case">
+                                            {rlTrainConfig.engineMode === 'NITRO'
+                                                ? 'LR (fixed) · Epochs · GAE · Gamma · Entropy · Curriculum · Minibatch'
+                                                : 'LR · Epochs · GAE · Gamma · Entropy · Curriculum · Batch'}
+                                        </span>
                                     </summary>
 
                                     <div className="mt-3 space-y-4 pl-2 border-l border-slate-700">
 
-                                        {/* Learning Rate */}
-                                        <div className="grid grid-cols-2 gap-4">
+                                        {/* Learning Rate — single field for NITRO (fixed), two for STANDARD (decaying) */}
+                                        {rlTrainConfig.engineMode === 'NITRO' ? (
                                             <div>
-                                                <label className="text-xs text-slate-400 font-semibold block mb-1">LR Start
-                                                    <span className="ml-1 text-[10px] text-slate-600 font-normal">initial learning rate</span>
+                                                <label className="text-xs text-slate-400 font-semibold block mb-1">Learning Rate
+                                                    <span className="ml-1 text-[10px] text-amber-600 font-normal">fixed · no decay in Nitro</span>
                                                 </label>
-                                                <select value={rlTrainConfig.lrInitial} onChange={(e) => setRlTrainConfig({...rlTrainConfig, lrInitial: parseFloat(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                                                <select value={rlTrainConfig.lrInitial} onChange={(e) => setRlTrainConfig({...rlTrainConfig, lrInitial: parseFloat(e.target.value)})} className="w-full bg-slate-900 border border-amber-700/50 rounded p-2 text-sm focus:border-amber-500 outline-none">
                                                     <option value={0.001}>1e-3 — Aggressive (fast but unstable)</option>
                                                     <option value={0.0005}>5e-4 — Fast learning</option>
                                                     <option value={0.0003}>3e-4 — Default ✓</option>
                                                     <option value={0.0001}>1e-4 — Conservative</option>
                                                     <option value={0.00003}>3e-5 — Very slow (fine-tuning)</option>
                                                 </select>
-                                                <p className="text-[10px] text-slate-500 mt-1">Too high = policy collapses. Too low = never converges.</p>
+                                                <p className="text-[10px] text-amber-500/70 mt-1">JAX Nitro applies a constant LR across all phases — LR End / linear decay is not used.</p>
                                             </div>
-                                            <div>
-                                                <label className="text-xs text-slate-400 font-semibold block mb-1">LR End
-                                                    <span className="ml-1 text-[10px] text-slate-600 font-normal">final learning rate</span>
-                                                </label>
-                                                <select value={rlTrainConfig.lrFinal} onChange={(e) => setRlTrainConfig({...rlTrainConfig, lrFinal: parseFloat(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
-                                                    <option value={0.0003}>3e-4 — No decay</option>
-                                                    <option value={0.0001}>1e-4 — Default ✓</option>
-                                                    <option value={0.00003}>3e-5 — Strong decay</option>
-                                                    <option value={0.00001}>1e-5 — Very strong decay</option>
-                                                </select>
-                                                <p className="text-[10px] text-slate-500 mt-1">LR decays linearly from Start → End over all timesteps.</p>
+                                        ) : (
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="text-xs text-slate-400 font-semibold block mb-1">LR Start
+                                                        <span className="ml-1 text-[10px] text-slate-600 font-normal">initial learning rate</span>
+                                                    </label>
+                                                    <select value={rlTrainConfig.lrInitial} onChange={(e) => setRlTrainConfig({...rlTrainConfig, lrInitial: parseFloat(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                                                        <option value={0.001}>1e-3 — Aggressive (fast but unstable)</option>
+                                                        <option value={0.0005}>5e-4 — Fast learning</option>
+                                                        <option value={0.0003}>3e-4 — Default ✓</option>
+                                                        <option value={0.0001}>1e-4 — Conservative</option>
+                                                        <option value={0.00003}>3e-5 — Very slow (fine-tuning)</option>
+                                                    </select>
+                                                    <p className="text-[10px] text-slate-500 mt-1">Too high = policy collapses. Too low = never converges.</p>
+                                                </div>
+                                                <div>
+                                                    <label className="text-xs text-slate-400 font-semibold block mb-1">LR End
+                                                        <span className="ml-1 text-[10px] text-slate-600 font-normal">final learning rate</span>
+                                                    </label>
+                                                    <select value={rlTrainConfig.lrFinal} onChange={(e) => setRlTrainConfig({...rlTrainConfig, lrFinal: parseFloat(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                                                        <option value={0.0003}>3e-4 — No decay</option>
+                                                        <option value={0.0001}>1e-4 — Default ✓</option>
+                                                        <option value={0.00003}>3e-5 — Strong decay</option>
+                                                        <option value={0.00001}>1e-5 — Very strong decay</option>
+                                                    </select>
+                                                    <p className="text-[10px] text-slate-500 mt-1">LR decays linearly from Start → End over all timesteps.</p>
+                                                </div>
                                             </div>
-                                        </div>
+                                        )}
 
                                         {/* n_epochs + GAE lambda */}
                                         <div className="grid grid-cols-2 gap-4">
@@ -781,14 +1009,28 @@ const AiManager = () => {
                                                 <label className="text-xs text-slate-400 font-semibold block mb-1">PPO Epochs
                                                     <span className="ml-1 text-[10px] text-slate-600 font-normal">gradient passes per rollout</span>
                                                 </label>
-                                                <select value={rlTrainConfig.nEpochs} onChange={(e) => setRlTrainConfig({...rlTrainConfig, nEpochs: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
-                                                    <option value={5}>5 — Stable, less efficient</option>
-                                                    <option value={8}>8 — Slightly conservative</option>
-                                                    <option value={10}>10 — Default ✓</option>
-                                                    <option value={15}>15 — More learning per batch</option>
-                                                    <option value={20}>20 — Max (risk of divergence)</option>
-                                                </select>
-                                                <p className="text-[10px] text-slate-500 mt-1">Higher = more efficient use of data. Too high = clips trigger, policy drifts.</p>
+                                                {rlTrainConfig.engineMode === 'NITRO' ? (
+                                                    <select value={rlTrainConfig.nEpochs} onChange={(e) => setRlTrainConfig({...rlTrainConfig, nEpochs: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-amber-700/50 rounded p-2 text-sm focus:border-amber-500 outline-none">
+                                                        <option value={1}>1 — Single pass · maximum stability</option>
+                                                        <option value={2}>2 — Conservative</option>
+                                                        <option value={4}>4 — Default ✓ · JAX optimal</option>
+                                                        <option value={6}>6 — More gradient steps</option>
+                                                        <option value={8}>8 — Max (watch KL divergence)</option>
+                                                    </select>
+                                                ) : (
+                                                    <select value={rlTrainConfig.nEpochs} onChange={(e) => setRlTrainConfig({...rlTrainConfig, nEpochs: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                                                        <option value={5}>5 — Stable, less efficient</option>
+                                                        <option value={8}>8 — Slightly conservative</option>
+                                                        <option value={10}>10 — Default ✓</option>
+                                                        <option value={15}>15 — More learning per batch</option>
+                                                        <option value={20}>20 — Max (risk of divergence)</option>
+                                                    </select>
+                                                )}
+                                                <p className="text-[10px] text-slate-500 mt-1">
+                                                    {rlTrainConfig.engineMode === 'NITRO'
+                                                        ? 'Nitro pool is large — fewer epochs prevent policy drift on stale data.'
+                                                        : 'Higher = more efficient use of data. Too high = clips trigger, policy drifts.'}
+                                                </p>
                                             </div>
                                             <div>
                                                 <label className="text-xs text-slate-400 font-semibold block mb-1">GAE Lambda
@@ -866,23 +1108,69 @@ const AiManager = () => {
                                             </p>
                                         </div>
 
-                                        {/* Batch Size */}
+                                        {/* Batch Size — options differ by engine because pool sizes differ */}
                                         <div>
-                                            <label className="text-xs text-slate-400 font-semibold block mb-1">Batch Size
-                                                <span className="ml-1 text-[10px] text-slate-600 font-normal">mini-batch per gradient step (0 = auto)</span>
+                                            <label className="text-xs text-slate-400 font-semibold block mb-1">
+                                                {rlTrainConfig.engineMode === 'NITRO' ? 'Minibatch Size' : 'Batch Size'}
+                                                <span className="ml-1 text-[10px] text-slate-600 font-normal">gradient step size (0 = auto)</span>
                                             </label>
-                                            <select value={rlTrainConfig.batchSize} onChange={(e) => setRlTrainConfig({...rlTrainConfig, batchSize: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
-                                                <option value={0}>0 — Auto (recommended: 512)</option>
-                                                <option value={256}>256 — Smaller · noisier gradients, more updates</option>
-                                                <option value={512}>512 — Gold Standard · good bias-variance balance</option>
-                                                <option value={1024}>1024 — Larger · stable but slower to improve</option>
-                                                <option value={2048}>2048 — Max (= full rollout, no mini-batching)</option>
-                                            </select>
-                                            <p className="text-[10px] text-slate-500 mt-1">Pool = n_envs × n_steps. Batch must divide evenly into pool. Auto uses 512.</p>
+                                            {rlTrainConfig.engineMode === 'NITRO' ? (
+                                                <select value={rlTrainConfig.batchSize} onChange={(e) => setRlTrainConfig({...rlTrainConfig, batchSize: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-amber-700/50 rounded p-2 text-sm focus:border-amber-500 outline-none">
+                                                    <option value={0}>0 — Auto (pool ÷ 64)</option>
+                                                    <option value={512}>512 — Small · many gradient steps</option>
+                                                    <option value={1024}>1024 — Default ✓ · JAX optimal</option>
+                                                    <option value={2048}>2048 — Large · stable, fewer steps</option>
+                                                    <option value={4096}>4096 — Very large · best for 8-GPU</option>
+                                                    <option value={8192}>8192 — Max (≈ ¼ of default pool)</option>
+                                                </select>
+                                            ) : (
+                                                <select value={rlTrainConfig.batchSize} onChange={(e) => setRlTrainConfig({...rlTrainConfig, batchSize: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                                                    <option value={0}>0 — Auto (recommended: 512)</option>
+                                                    <option value={256}>256 — Smaller · noisier gradients, more updates</option>
+                                                    <option value={512}>512 — Gold Standard ✓ · good bias-variance balance</option>
+                                                    <option value={1024}>1024 — Larger · stable but slower to improve</option>
+                                                    <option value={2048}>2048 — Max (= full rollout, no mini-batching)</option>
+                                                </select>
+                                            )}
+                                            <p className="text-[10px] text-slate-500 mt-1">
+                                                {rlTrainConfig.engineMode === 'NITRO'
+                                                    ? `Pool = ${rlTrainConfig.nitroNEnvs} envs × ${rlTrainConfig.nitroNSteps} steps = ${(rlTrainConfig.nitroNEnvs * rlTrainConfig.nitroNSteps).toLocaleString()} transitions. Minibatch must divide evenly into pool.`
+                                                    : 'Pool = n_envs × n_steps (auto-sized per hardware). Batch must divide evenly into pool.'}
+                                            </p>
                                         </div>
 
                                     </div>
                                 </details>
+
+                                {/* v6.18 — Exit Cooldown */}
+                                <div>
+                                    <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">
+                                        Exit Cooldown <span className="text-slate-500 font-normal normal-case">(bars after exit before re-entry)</span>
+                                    </label>
+                                    <select value={rlTrainConfig.exitCooldown} onChange={(e) => setRlTrainConfig({...rlTrainConfig, exitCooldown: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                                        <option value={0}>0 — Disabled (no cooldown)</option>
+                                        <option value={3}>3 — Light (15 min on 5m bars)</option>
+                                        <option value={5}>5 — Moderate ✓ (25 min)</option>
+                                        <option value={7}>7 — Standard (35 min)</option>
+                                        <option value={10}>10 — Aggressive (50 min)</option>
+                                    </select>
+                                    <p className="text-[10px] text-slate-500 mt-1">Prevents rapid exit/re-entry spam. Adds proportional penalty for re-entering within cooldown window.</p>
+                                </div>
+
+                                {/* v6.18 — Exogenous CSV */}
+                                <div>
+                                    <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">
+                                        Exo CSV Path <span className="text-slate-500 font-normal normal-case">(optional leading indicator)</span>
+                                    </label>
+                                    <input
+                                        type="text"
+                                        placeholder="/data/XAUUSD_5m.csv"
+                                        value={rlTrainConfig.exoCsv}
+                                        onChange={(e) => setRlTrainConfig({...rlTrainConfig, exoCsv: e.target.value})}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-indigo-500 outline-none font-mono"
+                                    />
+                                    <p className="text-[10px] text-slate-500 mt-1">Path to exogenous CSV (e.g. XAUUSD spot) inside the training container. Must have datetime index + close column. Merged as <code className="text-slate-400">exo_close_norm</code>.</p>
+                                </div>
 
                                 {/* Base model (continual learning) */}
                                 <div>
@@ -1126,6 +1414,51 @@ const AiManager = () => {
                                 expanded={expandedJobId === job.jobId}
                                 onToggleExpand={() => setExpandedJobId(prev => prev === job.jobId ? null : job.jobId)}
                             />
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* ── Resumable Checkpoints ── */}
+            {activeTab === 'rl' && checkpoints.length > 0 && (
+                <div className="mt-6">
+                    <div className="flex items-center justify-between mb-3">
+                        <h2 className="text-base font-bold text-slate-300 flex items-center gap-2">
+                            <FaSync className="text-amber-400" />
+                            Resumable Training
+                            <span className="text-xs text-slate-500 font-normal">({checkpoints.length} interrupted)</span>
+                        </h2>
+                        <button onClick={fetchCheckpoints} className="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition-colors">
+                            <FaSync className="w-3 h-3" /> Refresh
+                        </button>
+                    </div>
+                    <div className="space-y-2">
+                        {checkpoints.map(ckpt => (
+                            <div key={ckpt.model_name} className="flex items-center gap-4 bg-slate-800/60 border border-amber-500/20 rounded-xl px-4 py-3">
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <span className="font-semibold text-sm text-white truncate">{ckpt.model_name}</span>
+                                        <span className="text-xs text-amber-400 font-mono">{ckpt.pct_complete}%</span>
+                                    </div>
+                                    <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                        <div
+                                            className="h-full bg-amber-500 rounded-full transition-all"
+                                            style={{ width: `${ckpt.pct_complete}%` }}
+                                        />
+                                    </div>
+                                    <div className="flex gap-3 mt-1 text-xs text-slate-500">
+                                        <span>Step {ckpt.step.toLocaleString()} / {ckpt.total_timesteps.toLocaleString()}</span>
+                                        <span>{new Date(ckpt.timestamp).toLocaleString()}</span>
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={() => handleResumeTraining(ckpt)}
+                                    disabled={resumingModel === ckpt.model_name}
+                                    className="shrink-0 px-4 py-1.5 rounded-lg text-sm font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                >
+                                    {resumingModel === ckpt.model_name ? 'Resuming…' : 'Resume'}
+                                </button>
+                            </div>
                         ))}
                     </div>
                 </div>

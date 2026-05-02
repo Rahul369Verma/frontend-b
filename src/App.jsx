@@ -8,6 +8,7 @@ import SettingsPage from './pages/Settings';
 import Callback from './pages/Callback';
 import AiManager from './components/AiManager'; // New Component
 import DataManager from './components/DataManager'; // New Component
+import ParityAuditDashboard from './components/ParityAuditDashboard';
 
 function Sidebar() {
   const location = useLocation();
@@ -18,6 +19,7 @@ function Sidebar() {
     { path: '/backtest', icon: LineChart, label: 'Backtest' },
     { path: '/optimizer', icon: Activity, label: 'Optimizer' },
     { path: '/ai-manager', icon: Terminal, label: 'AI Manager' }, // New Item
+    { path: '/parity-audit', icon: Activity, label: 'Parity Audit' },
     { path: '/data-manager', icon: Square, label: 'Data Manager' }, // Archiving
     { path: '/settings', icon: Settings, label: 'Settings' },
   ];
@@ -79,6 +81,7 @@ function App() {
               <Route path="/backtest" element={<Backtest />} />
               <Route path="/optimizer" element={<Optimizer />} />
               <Route path="/ai-manager" element={<AiManager />} />
+              <Route path="/parity-audit" element={<ParityAuditDashboard />} />
               <Route path="/data-manager" element={<DataManager />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/callback" element={<Callback />} />
