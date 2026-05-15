@@ -23,7 +23,10 @@ export function GlobalProvider({ children }) {
     trade_start_time: "09:30",
     trade_end_time: "15:00",
     max_daily_loss: 2000,
-    max_trades_per_day: 10
+    max_trades_per_day: 10,
+    ai_enable_reentry: true,
+    ai_follow_sl_tp: true,
+    ai_follow_strategy_exits: false,
   });
   const [backtestResult, setBacktestResult] = useState(null);
 

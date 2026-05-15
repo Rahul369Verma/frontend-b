@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
-import { Play, Activity } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { Play, Activity, ChevronDown, ChevronUp, Bot, Copy, Check } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useGlobalState } from '../context/GlobalContext';
 
 const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
@@ -11,6 +11,33 @@ const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`
 import { useLocation } from 'react-router-dom';
 import { INSTRUMENT_CONFIG, MARKET_TIMINGS } from '../constants';
 import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
+
+// Fallback model list — used only if /api/ai-confirmation/models fails.
+// Live list comes from Python's MODEL_REGISTRY via the API.
+const FALLBACK_GEMINI_MODELS = [
+    { id: 'gemini-3-flash-preview',         label: 'Gemini 3 Flash Preview ⭐',  quota: '1.5K/day', group: '⭐ Recommended (1.5K RPD + JSON)' },
+    { id: 'gemini-3.1-flash-lite-preview',  label: 'Gemini 3.1 Flash Lite ⭐',   quota: '1.5K/day', group: '⭐ Recommended (1.5K RPD + JSON)' },
+    { id: 'gemini-2.5-flash',               label: 'Gemini 2.5 Flash ⭐',        quota: '1.5K/day', group: '⭐ Recommended (1.5K RPD + JSON)' },
+    { id: 'gemma-4-31b-it',                 label: 'Gemma 4 31B IT',             quota: '132/day',  group: '🔥 Gemma 4 (verbose JSON)' },
+    { id: 'claude-haiku-4-5-20251001',      label: 'Claude Haiku 4.5 ⚡',        quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
+    { id: 'claude-sonnet-4-6',              label: 'Claude Sonnet 4.6 ⭐',       quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
+    { id: 'claude-opus-4-7',               label: 'Claude Opus 4.7 🎯',          quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
+];
+
+// Group resolver — maps model ID prefix → user-friendly group label.
+function modelGroupFor(id) {
+    if (id.startsWith('claude-')) return '🤖 Claude (Anthropic)';
+    if (id === 'gemini-3-flash-preview' || id === 'gemini-3.1-flash-lite-preview' || id === 'gemini-2.5-flash') {
+        return '⭐ Recommended (1.5K RPD + JSON)';
+    }
+    if (id.endsWith('-latest')) return '🔄 Alias models';
+    if (id.startsWith('gemma-4')) return '🔥 Gemma 4 (verbose JSON)';
+    if (id.startsWith('gemini-3.1-pro') || id.startsWith('gemini-2.5-pro')) return '🎯 Pro (low RPM)';
+    if (id.startsWith('gemini-3')) return '🚀 Gemini 3';
+    if (id.startsWith('gemini-2.5')) return '✨ Gemini 2.5';
+    if (id.startsWith('gemini-2.0')) return '💎 Gemini 2.0';
+    return '📦 Other';
+}
 
 export default function Backtest() {
   const { backtestParams: params, setBacktestParams: setParams, backtestResult: result, setBacktestResult: setResult } = useGlobalState();
@@ -22,8 +49,104 @@ export default function Backtest() {
   const [liveConfigs, setLiveConfigs] = useState([]);
   const [aiModels, setAiModels] = useState([]); // List of available models
   const [rlModels, setRlModels] = useState([]); // List of available RL Models
+  const [geminiModels, setGeminiModels] = useState(FALLBACK_GEMINI_MODELS); // AI confirmation models
   const [marketTimings, setMarketTimings] = useState({});
   const [expiryDates, setExpiryDates] = useState([]); // For Futures Expiry Selection
+  const [aiPanelOpen, setAiPanelOpen] = useState(true);
+  const [aiJobId, setAiJobId] = useState(null);
+  const [aiPolling, setAiPolling] = useState(false);
+  const [aiProgress, setAiProgress] = useState({ done: 0, total: 0 });
+  const [showSpotView, setShowSpotView] = useState(false);
+  const [showAiSim, setShowAiSim] = useState(false);
+  const [backtestResultId, setBacktestResultId] = useState(null);
+  // Server-calculated accurate AI resim: Map of tradeIdx → { ai_pnl, ai_exit }
+  const [aiResimMap, setAiResimMap] = useState(null);
+  // Re-entry second AI pass
+  const [aiReentryJobId, setAiReentryJobId] = useState(null);
+  const [aiReentryPolling, setAiReentryPolling] = useState(false);
+  const [aiReentryProgress, setAiReentryProgress] = useState({ done: 0, total: 0 });
+  // Maps position-in-reentry-signals-array → original trade index (set when job starts)
+  const [aiReentryIndexMap, setAiReentryIndexMap] = useState([]);
+  // Re-entry Black-Scholes resim results: Map<tradeIdx, {exit_time, exit_spot, exit_pnl, exit_reason, entry_time, entry_spot}>
+  const [aiReentryResimMap, setAiReentryResimMap] = useState(null);
+  // Prompt copy feedback: key = 'first_<idx>' or 'reentry_<idx>', value = 'copying'|'done'|'error'
+  const [promptCopyState, setPromptCopyState] = useState({});
+
+  // Build aiSimData from server-accurate resim results (aiResimMap) when available.
+  // Falls back to delta approximation only if server hasn't responded yet.
+  const aiSimData = useMemo(() => {
+    if (!showAiSim || !result?.trades?.length) return null;
+    const trades = result.trades;
+    const hasAiData = trades.some(t => t.aiConfirmation?.suggested_sl);
+    if (!hasAiData) return null;
+
+    const allPnl = trades.reduce((s, t) => s + (t.pnl || 0), 0);
+    const startBal = (result.finalBalance || 0) - allPnl;
+
+    const simTrades = trades.map((trade, idx) => {
+      const serverSim = aiResimMap?.get(idx);
+      if (serverSim) {
+        // REJECT trades are not taken in the AI scenario → equity curve uses 0.
+        // We still keep ai_sim_exit so the table can show the "what-if" exit spot/reason.
+        const isReject = trade.ai_decision === 'REJECT';
+        return {
+          ...trade,
+          ai_sim_exit: serverSim.ai_exit,
+          ai_sim_pnl: isReject ? 0 : serverSim.ai_pnl,
+        };
+      }
+      // REJECT → trade not taken in AI scenario (contributes 0 to equity curve)
+      if (trade.ai_decision === 'REJECT') {
+        return { ...trade, ai_sim_exit: null, ai_sim_pnl: 0 };
+      }
+      // CONFIRM but no resim data yet → keep original P&L as placeholder
+      return { ...trade, ai_sim_exit: null, ai_sim_pnl: trade.pnl };
+    });
+
+    let origBal = startBal, aiBal = startBal;
+    const curve = simTrades.map((t, idx) => {
+      origBal += trades[idx].pnl;
+      aiBal += t.ai_sim_pnl;
+      return { t: idx + 1, date: t.exitTime, original: +origBal.toFixed(2), ai_sim: +aiBal.toFixed(2) };
+    });
+
+    const totalAiPnl = simTrades.reduce((s, t) => s + t.ai_sim_pnl, 0);
+    const confirmedTrades = simTrades.filter(t => t.ai_decision === 'CONFIRM');
+    const wins = confirmedTrades.filter(t => t.ai_sim_pnl > 0).length;
+
+    // Max drawdown on AI equity curve
+    let ddPeak = startBal, maxDD = 0;
+    for (const p of curve) {
+      if (p.ai_sim > ddPeak) ddPeak = p.ai_sim;
+      if (ddPeak > 0) { const dd = ((ddPeak - p.ai_sim) / ddPeak) * 100; if (dd > maxDD) maxDD = dd; }
+    }
+
+    // Sharpe from daily AI equity (annualised, zero risk-free rate)
+    const dailyMap = new Map();
+    for (const p of curve) { const d = (p.date || '').slice(0, 10); if (d) dailyMap.set(d, p.ai_sim); }
+    const dailyVals = [...dailyMap.values()];
+    let sharpe = 0;
+    if (dailyVals.length > 1) {
+      const dr = dailyVals.slice(1).map((v, i) => v - dailyVals[i]);
+      const mean = dr.reduce((s, r) => s + r, 0) / dr.length;
+      const std = Math.sqrt(dr.reduce((s, r) => s + (r - mean) ** 2, 0) / dr.length);
+      sharpe = std > 0 ? +(mean / std * Math.sqrt(252)).toFixed(2) : 0;
+    }
+
+    const rejectedCount = simTrades.length - confirmedTrades.length;
+    return {
+      trades: simTrades,
+      curve,
+      totalPnl: +totalAiPnl.toFixed(2),
+      originalPnl: +trades.reduce((s, t) => s + t.pnl, 0).toFixed(2),
+      totalTrades: confirmedTrades.length,
+      rejectedCount,
+      wins,
+      winRate: confirmedTrades.length > 0 ? +((wins / confirmedTrades.length) * 100).toFixed(1) : 0,
+      maxDrawdown: +maxDD.toFixed(1),
+      sharpe,
+    };
+  }, [result, showAiSim, aiResimMap]);
 
   useEffect(() => {
     if (!params.symbol) return;
@@ -53,6 +176,23 @@ export default function Backtest() {
           setRlModels(rlRes.data);
       } catch (err) {
           console.error("Failed to fetch models", err);
+      }
+
+      // Fetch AI Confirmation models from Python MODEL_REGISTRY
+      try {
+          const aiConfRes = await axios.get(`${API_URL}/ai-confirmation/models`);
+          const dynamicModels = (aiConfRes.data?.models || []).map(m => ({
+              id: m.id,
+              label: m.display || m.id,
+              quota: m.daily_limit ? `${m.daily_limit}/day` : 'Unlimited',
+              rpm: m.rpm,
+              group: modelGroupFor(m.id),
+          }));
+          if (dynamicModels.length > 0) {
+              setGeminiModels(dynamicModels);
+          }
+      } catch (err) {
+          console.error("Failed to fetch AI confirmation models — using fallback", err);
       }
   };
 
@@ -247,11 +387,37 @@ export default function Backtest() {
     }
   };
 
+  const copyPrompt = async (tradeIdx, type) => {
+    const key = `${type}_${tradeIdx}`;
+    setPromptCopyState(s => ({ ...s, [key]: 'copying' }));
+    try {
+      const { data } = await axios.get(`${API_URL}/backtest/signal-prompt`, {
+        params: { resultId: backtestResultId, tradeIdx, type },
+      });
+      await navigator.clipboard.writeText(data.prompt);
+      setPromptCopyState(s => ({ ...s, [key]: 'done' }));
+      setTimeout(() => setPromptCopyState(s => { const n = { ...s }; delete n[key]; return n; }), 2000);
+    } catch {
+      setPromptCopyState(s => ({ ...s, [key]: 'error' }));
+      setTimeout(() => setPromptCopyState(s => { const n = { ...s }; delete n[key]; return n; }), 2000);
+    }
+  };
+
   const runBacktest = async () => {
     setLoading(true);
     setResult(null);
+    setAiJobId(null);
+    setAiPolling(false);
+    setAiProgress({ done: 0, total: 0 });
+    setShowAiSim(false);
+    setBacktestResultId(null);
+    setAiResimMap(null);
+    setAiReentryJobId(null);
+    setAiReentryPolling(false);
+    setAiReentryProgress({ done: 0, total: 0 });
+    setAiReentryIndexMap([]);
+    setAiReentryResimMap(null);
     try {
-      // Clean params before executing
       const cleanParams = preparePayload(params);
       const res = await axios.post(`${API_URL}/engine/backtest/run`, cleanParams);
       if (res.data.error) {
@@ -259,6 +425,11 @@ export default function Backtest() {
         setResult(null);
       } else {
         setResult(res.data);
+        if (res.data.resultId) setBacktestResultId(res.data.resultId);
+        if (res.data.ai_job_id) {
+          setAiJobId(res.data.ai_job_id);
+          setAiPolling(true);
+        }
       }
     } catch (err) {
       alert("Backtest failed: " + err.message);
@@ -266,6 +437,227 @@ export default function Backtest() {
       setLoading(false);
     }
   };
+
+  // Poll for async AI confirmation results — delta-aware incremental updates
+  useEffect(() => {
+    if (!aiPolling || !aiJobId) return;
+    let cancelled = false;
+
+    // decisions keys are 0,1,2... in CHRONOLOGICAL order (oldest=0).
+    // result.trades is REVERSED (newest=0). Map: display idx → chronological idx = (N-1-idx).
+    const totalTrades = result?.trades?.length ?? 0;
+    const chronIdx = (displayIdx) => totalTrades - 1 - displayIdx;
+
+    // Track what we've already seen so we skip no-op polls and only send delta to state.
+    let lastDone = 0;                // last known completed count
+    const allDecisions = {};         // full accumulated decisions (for resim at the end)
+    const pollStartTime = Date.now();
+
+    // Apply ONLY new/delta decisions to React state — avoids mapping unchanged trades.
+    const applyDelta = (newDecisions, done, total) => {
+      setAiProgress({ done, total });
+      if (!Object.keys(newDecisions).length) return;  // nothing new — skip state update
+      setResult(prev => {
+        if (!prev) return prev;
+        let changed = false;
+        const n = (prev.trades || []).length;
+        const updatedTrades = (prev.trades || []).map((trade, idx) => {
+          const d = newDecisions[String(n - 1 - idx)];
+          if (!d || trade.ai_decision === d.decision) return trade;
+          changed = true;
+          return {
+            ...trade,
+            aiConfirmation: d,
+            ai_confidence: (d.confidence || 0) / 100,
+            ai_decision: d.decision,
+            ai_reentry_suggested: d.reentry_suggested || false,
+            ai_reentry_level: d.reentry_level || null,
+            ai_reentry_note: d.reentry_note || null,
+          };
+        });
+        return changed ? { ...prev, trades: updatedTrades } : prev;
+      });
+    };
+
+    // After all AI decisions arrive, ask Node to re-simulate using Black-Scholes.
+    // Uses allDecisions (full set), not a single poll's delta.
+    const runAccurateResim = async (decisions, resultId) => {
+      try {
+        const followAiSlTp = params?.ai_follow_sl_tp !== false;
+        const followStrategyExits = params?.ai_follow_strategy_exits === true;
+        const aiDecisions = Object.entries(decisions)
+          .filter(([, d]) => followAiSlTp ? (d.suggested_sl && d.suggested_tp) : d.decision === 'CONFIRM')
+          .map(([ci, d]) => ({ tradeIdx: chronIdx(parseInt(ci)), suggested_sl: d.suggested_sl, suggested_tp: d.suggested_tp }));
+        if (!aiDecisions.length) return;
+        const res = await axios.post(`${API_URL}/backtest/ai-resim`, { resultId, aiDecisions, followAiSlTp, followStrategyExits });
+        const map = new Map();
+        for (const s of res.data.simTrades) map.set(s.tradeIdx, s);
+        setAiResimMap(map);
+      } catch (err) {
+        console.error('AI resim failed:', err.message);
+      }
+    };
+
+    const triggerReentryFlow = async (decisions, resultId) => {
+      try {
+        const candidates = Object.entries(decisions)
+          .filter(([, d]) => d.reentry_suggested && d.reentry_level && d.decision === 'REJECT')
+          .map(([ci, d]) => ({
+            tradeIdx: chronIdx(parseInt(ci)),
+            reentry_level: d.reentry_level,
+            ai_decision: d.decision,
+            ai_reasoning: d.reasoning || '',
+            reentry_note: d.reentry_note || '',
+          }));
+        if (!candidates.length) return;
+        const aiModels = params?.ai_models?.length ? params.ai_models : ['gemini-2.0-flash'];
+        const ctxRes = await axios.post(`${API_URL}/backtest/reentry-contexts`, {
+          resultId, candidates, aiModels, aiConcurrency: params?.ai_concurrency ?? 1,
+        });
+        const { job_id, found, touched_data = [] } = ctxRes.data;
+        const touchedIndices = touched_data.map(t => t.tradeIdx);
+        const touchedSet = new Set(touchedIndices);
+        setResult(prev => {
+          if (!prev) return prev;
+          const updatedTrades = (prev.trades || []).map((trade, idx) => {
+            const td = touched_data.find(t => t.tradeIdx === idx);
+            if (td) return { ...trade, ai_reentry_entry_time: td.touchTime, ai_reentry_entry_price: td.touchPrice, ai_reentry_level_reached: true };
+            const isCandidate = candidates.some(c => c.tradeIdx === idx);
+            if (isCandidate && !touchedSet.has(idx)) return { ...trade, ai_reentry_level_reached: false };
+            return trade;
+          });
+          return { ...prev, trades: updatedTrades };
+        });
+        if (!job_id || !found) return;
+        setAiReentryIndexMap(touchedIndices);
+        setAiReentryJobId(job_id);
+        setAiReentryPolling(true);
+      } catch (err) {
+        console.error('Re-entry flow failed:', err.message);
+      }
+    };
+
+    const poll = async () => {
+      try {
+        // Pass `since` so the server only returns decisions we haven't seen yet.
+        const res = await axios.get(`${API_URL}/ai-confirmation/status/${aiJobId}?since=${lastDone}`);
+        if (cancelled) return;
+        const { status, decisions: newDecisions = {}, done = 0, total = 0 } = res.data;
+
+        if (done > lastDone) {
+          // New decisions arrived — merge into accumulator and update state.
+          Object.assign(allDecisions, newDecisions);
+          lastDone = done;
+          applyDelta(newDecisions, done, total);
+        } else {
+          // No progress — just keep the progress bar in sync, skip state clone.
+          setAiProgress({ done, total });
+        }
+
+        if (status === 'complete') {
+          setAiPolling(false);
+          if (backtestResultId) {
+            runAccurateResim(allDecisions, backtestResultId);
+            if (params?.ai_enable_reentry !== false) {
+              triggerReentryFlow(allDecisions, backtestResultId);
+            }
+          }
+        } else if (status === 'error') {
+          setAiPolling(false);
+          console.error('AI job failed:', res.data.error);
+        } else {
+          // Adaptive interval: 3 s for the first 2 min, 5 s after that.
+          const elapsed = Date.now() - pollStartTime;
+          const interval = elapsed > 2 * 60 * 1000 ? 5000 : 3000;
+          setTimeout(poll, interval);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error('AI status poll failed:', err.message);
+          setTimeout(poll, 8000);
+        }
+      }
+    };
+    poll();
+    return () => { cancelled = true; };
+  }, [aiPolling, aiJobId, backtestResultId, setResult, params]);
+
+  // Poll for re-entry AI job (second pass — only runs after first job suggests re-entry levels)
+  useEffect(() => {
+    if (!aiReentryPolling || !aiReentryJobId) return;
+    let cancelled = false;
+
+    const applyReentryDecisions = (decisions, done, total) => {
+      setAiReentryProgress({ done, total });
+      setResult(prev => {
+        if (!prev) return prev;
+        let changed = false;
+        // decisions keyed 0,1,2... = position in re-entry signals array
+        // aiReentryIndexMap[i] = original tradeIdx for that position
+        const updatedTrades = (prev.trades || []).map((trade, idx) => {
+          const position = aiReentryIndexMap.indexOf(idx);
+          if (position < 0) return trade;
+          const d = decisions[String(position)];
+          if (!d) return trade;
+          changed = true;
+          return {
+            ...trade,
+            ai_reentry_decision: d.decision,
+            ai_reentry_confidence: d.confidence || 0,
+            ai_reentry_reasoning: d.reasoning || '',
+            ai_reentry_sl: d.suggested_sl || null,
+            ai_reentry_tp: d.suggested_tp || null,
+            ai_reentry_level_reached: true,
+          };
+        });
+        return changed ? { ...prev, trades: updatedTrades } : prev;
+      });
+    };
+
+    const runReentryResim = async (decisions, resultId) => {
+      try {
+        const reentryDecisions = aiReentryIndexMap
+          .map((tradeIdx, pos) => {
+            const d = decisions[String(pos)];
+            if (!d || d.decision !== 'CONFIRM') return null;
+            return { tradeIdx, suggested_sl: d.suggested_sl, suggested_tp: d.suggested_tp };
+          })
+          .filter(Boolean);
+        if (!reentryDecisions.length) return;
+        const simRes = await axios.post(`${API_URL}/backtest/reentry-resim`, { resultId, reentryDecisions });
+        const map = new Map();
+        for (const s of simRes.data.simTrades) map.set(s.tradeIdx, s);
+        setAiReentryResimMap(map);
+      } catch (err) {
+        console.error('Re-entry resim failed:', err.message);
+      }
+    };
+
+    const poll = async () => {
+      try {
+        const res = await axios.get(`${API_URL}/ai-confirmation/status/${aiReentryJobId}`);
+        if (cancelled) return;
+        const { status, decisions = {}, done = 0, total = 0 } = res.data;
+        applyReentryDecisions(decisions, done, total);
+        if (status === 'complete' || status === 'error') {
+          setAiReentryPolling(false);
+          if (status === 'complete' && backtestResultId) {
+            runReentryResim(decisions, backtestResultId);
+          }
+          if (status === 'error') console.error('AI re-entry job failed');
+        } else {
+          setTimeout(poll, 2500);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error('AI re-entry poll failed:', err.message);
+          setTimeout(poll, 6000);
+        }
+      }
+    };
+    poll();
+    return () => { cancelled = true; };
+  }, [aiReentryPolling, aiReentryJobId, aiReentryIndexMap, backtestResultId, setResult]);
 
   // Auto-fetch defaults on mount if strategy is set but empty params
   // Or handle change
@@ -473,10 +865,10 @@ export default function Backtest() {
             </div>
             
             {/* AI Confirmation (Universal) */}
-            <div className="bg-purple-900/10 border border-purple-800/30 p-2 rounded mt-2">
+            <div className="bg-purple-900/10 border border-purple-800/30 p-2 rounded mt-2 space-y-2">
                  <div className="flex items-center justify-between">
                      <label className="text-sm text-purple-200">🤖 AI Confirmation</label>
-                     <input 
+                     <input
                         type="checkbox"
                         className="w-4 h-4 accent-purple-500"
                         checked={params.use_ai_confirmation || false}
@@ -486,7 +878,7 @@ export default function Backtest() {
                  {params.use_ai_confirmation && (
                      <div className="mt-2 flex items-center justify-between">
                          <label className="text-xs text-slate-400">Min Conf (%)</label>
-                         <input 
+                         <input
                             type="number"
                             step="5"
                             className="w-16 bg-slate-900 border border-slate-700 rounded p-1 text-xs text-white text-right"
@@ -495,6 +887,20 @@ export default function Backtest() {
                          />
                      </div>
                  )}
+
+                 {/* Gemini Risk Filter */}
+                 <div className="border-t border-purple-800/20 pt-2 flex items-center justify-between">
+                     <div>
+                         <label className="text-sm text-purple-200">✨ Gemini Risk Filter</label>
+                         <p className="text-[10px] text-slate-500 leading-tight">Batch confirms signals via Gemma 3 27B</p>
+                     </div>
+                     <input
+                        type="checkbox"
+                        className="w-4 h-4 accent-purple-400 cursor-pointer"
+                        checked={params.enable_ai_confirmation || false}
+                        onChange={e => setParams({...params, enable_ai_confirmation: e.target.checked})}
+                     />
+                 </div>
             </div>
             
             <div>
@@ -824,6 +1230,46 @@ export default function Backtest() {
                             <option value="OTM_1">OTM 1 Step (Risky / Delta ~0.4)</option>
                         </select>
                     </div>
+                    {/* SL/TP Reference Chart — Spot ATR vs Swing Structure */}
+                    {params.strategy !== 'rl_agent' && params.backtest_mode !== 'Real Option Data' && (
+                      <div className="col-span-2">
+                        <label className="block text-xs text-slate-400 mb-1">SL/TP Reference Chart</label>
+                        <select
+                          className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                          value={params.sl_tp_type || 'SPOT_ATR'}
+                          onChange={e => setParams({...params, sl_tp_type: e.target.value})}
+                        >
+                          <option value="SPOT_ATR">Spot Index — ATR Based (Standard)</option>
+                          <option value="SPOT_SWING">Spot Index — Swing Structure</option>
+                        </select>
+                        <p className="text-[10px] text-slate-500 mt-0.5">
+                          {params.sl_tp_type === 'SPOT_SWING'
+                            ? 'SL at last swing low/high; TP at R:R multiple — all prices in index terms'
+                            : 'SL & TP set via ATR multiplier on the underlying index chart'}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Swing SL parameters */}
+                    {params.sl_tp_type === 'SPOT_SWING' && params.strategy !== 'rl_agent' && (
+                      <>
+                        <div>
+                          <label className="block text-xs text-slate-400 mb-1">Swing Lookback (candles)</label>
+                          <input type="number" min="3" max="50"
+                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                            value={params.swing_lookback || 10}
+                            onChange={e => setParams({...params, swing_lookback: parseInt(e.target.value) || 10})} />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-400 mb-1">Risk : Reward Ratio</label>
+                          <input type="number" step="0.5" min="1"
+                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                            value={params.rr_ratio || 2.0}
+                            onChange={e => setParams({...params, rr_ratio: parseFloat(e.target.value) || 2.0})} />
+                        </div>
+                      </>
+                    )}
+
                     {/* Conditional Inputs */}
                     {params.sl_type === 'FIXED' && !params.use_dynamic_sl && (
                         <>
@@ -916,54 +1362,239 @@ export default function Backtest() {
 
 
             {/* AI Confirmation Section */}
-            <div className="border-t border-slate-700 pt-4">
-                <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-sm font-bold text-slate-300 flex items-center gap-2">
-                        <Activity className="w-4 h-4 text-purple-400" /> 
-                        AI Confirmation 
-                        <span className="text-[10px] bg-purple-900/40 text-purple-300 px-1 rounded ml-1">Beta</span>
-                    </h4>
-                    <input 
-                      type="checkbox" 
-                      className="w-4 h-4 accent-purple-500 cursor-pointer"
-                      checked={params.use_ai_confirmation || false}
-                      onChange={e => setParams({...params, use_ai_confirmation: e.target.checked})}
-                    />
-                </div>
-                
-                {params.use_ai_confirmation && (
-                    <div className="bg-slate-800/50 p-3 rounded border border-purple-900/30 space-y-3">
-                         <div>
-                             <label className="block text-xs text-slate-400 mb-1">Select AI Model</label>
-                             <select
-                                className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
-                                value={params.modelName || ''}
-                                onChange={e => setParams({...params, modelName: e.target.value})}
-                             >
-                                 <option value="">-- {params.symbol ? `Auto (${params.symbol})` : 'Auto-Detect'} --</option>
-                                 {aiModels.map((m, idx) => (
-                                     <option key={idx} value={m.name || m.symbol}>
-                                         {m.name ? `${m.name} (${m.symbol})` : m.symbol}
-                                     </option>
-                                 ))}
-                             </select>
-                             <div className="text-[10px] text-slate-500 mt-1">
-                                 Select a specific trained model or leave Auto to find model by symbol.
-                             </div>
-                         </div>
-                         
-                         <div className="flex items-center justify-between">
-                             <label className="text-xs text-slate-400">Min Confidence (%)</label>
-                             <input 
-                                type="number"
-                                step="5"
-                                className="w-16 bg-slate-900 border border-slate-700 rounded p-1 text-xs text-white text-right"
-                                value={(params.ai_confidence_threshold || 0.60) * 100}
-                                onChange={e => setParams({...params, ai_confidence_threshold: parseFloat(e.target.value) / 100})}
-                             />
-                         </div>
+            <div className="border-t border-slate-700 pt-4 space-y-3">
+                {/* ── Internal ML model filter ── */}
+                <div>
+                    <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-sm font-bold text-slate-300 flex items-center gap-2">
+                            <Activity className="w-4 h-4 text-purple-400" />
+                            AI Confirmation
+                            <span className="text-[10px] bg-purple-900/40 text-purple-300 px-1 rounded ml-1">Beta</span>
+                        </h4>
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4 accent-purple-500 cursor-pointer"
+                          checked={params.use_ai_confirmation || false}
+                          onChange={e => setParams({...params, use_ai_confirmation: e.target.checked})}
+                        />
                     </div>
-                )}
+
+                    {params.use_ai_confirmation && (
+                        <div className="bg-slate-800/50 p-3 rounded border border-purple-900/30 space-y-3">
+                             <div>
+                                 <label className="block text-xs text-slate-400 mb-1">Select AI Model</label>
+                                 <select
+                                    className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                    value={params.modelName || ''}
+                                    onChange={e => setParams({...params, modelName: e.target.value})}
+                                 >
+                                     <option value="">-- {params.symbol ? `Auto (${params.symbol})` : 'Auto-Detect'} --</option>
+                                     {aiModels.map((m, idx) => (
+                                         <option key={idx} value={m.name || m.symbol}>
+                                             {m.name ? `${m.name} (${m.symbol})` : m.symbol}
+                                         </option>
+                                     ))}
+                                 </select>
+                                 <div className="text-[10px] text-slate-500 mt-1">
+                                     Select a specific trained model or leave Auto to find model by symbol.
+                                 </div>
+                             </div>
+
+                             <div className="flex items-center justify-between">
+                                 <label className="text-xs text-slate-400">Min Confidence (%)</label>
+                                 <input
+                                    type="number"
+                                    step="5"
+                                    className="w-16 bg-slate-900 border border-slate-700 rounded p-1 text-xs text-white text-right"
+                                    value={(params.ai_confidence_threshold || 0.60) * 100}
+                                    onChange={e => setParams({...params, ai_confidence_threshold: parseFloat(e.target.value) / 100})}
+                                 />
+                             </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* ── AI Risk Filter (Multi-Model) ── */}
+                <div className="bg-slate-800/40 rounded border border-purple-900/40 p-3">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h4 className="text-sm font-bold text-purple-300 flex items-center gap-1">
+                                ✨ AI Risk Filter
+                                <span className="text-[10px] bg-purple-900/50 text-purple-400 px-1 rounded ml-1">Multi-Model</span>
+                            </h4>
+                            <p className="text-[10px] text-slate-500 mt-0.5 leading-tight">
+                                Confirms every signal via AI before PnL. Select multiple models to split<br/>
+                                signals across them in parallel — faster than a single model for large runs.
+                            </p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          id="enable_ai_confirmation"
+                          className="w-4 h-4 accent-purple-400 cursor-pointer flex-shrink-0 ml-3"
+                          checked={params.enable_ai_confirmation || false}
+                          onChange={e => setParams({...params, enable_ai_confirmation: e.target.checked})}
+                        />
+                    </div>
+
+                    {params.enable_ai_confirmation && (
+                        <div className="mt-2 pt-2 border-t border-purple-900/30 space-y-3">
+                            <div className="flex items-center gap-1.5 text-[10px] text-amber-400/80">
+                                <span>⚠</span>
+                                <span>Ensure <code className="bg-slate-900 px-1 rounded">GOOGLE_AI_STUDIO_API_KEY</code> is set in <code className="bg-slate-900 px-1 rounded">.env</code>.</span>
+                            </div>
+
+                            {/* Model multi-select */}
+                            <div>
+                                <div className="flex items-center justify-between mb-1.5">
+                                    <label className="text-[10px] text-slate-300 font-medium">Select Models</label>
+                                    {(params.ai_models || []).length > 1 && (
+                                        <span className="text-[10px] text-green-400">
+                                            ⚡ Parallel — signals split across {(params.ai_models || []).length} models
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="bg-slate-900/60 rounded border border-purple-900/30 overflow-hidden">
+                                    {(() => {
+                                        const selectedModels = params.ai_models || [];
+                                        const rows = [];
+                                        let lastGroup = null;
+                                        geminiModels.forEach(m => {
+                                            if (m.group !== lastGroup) {
+                                                lastGroup = m.group;
+                                                rows.push(
+                                                    <div key={`g-${m.group}`} className="px-2 pt-2 pb-0.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+                                                        {m.group}
+                                                    </div>
+                                                );
+                                            }
+                                            const selected = selectedModels.includes(m.id);
+                                            rows.push(
+                                                <label
+                                                    key={m.id}
+                                                    className={`flex items-center gap-2 text-xs px-2 py-1 cursor-pointer hover:bg-slate-800 ${selected ? 'bg-purple-900/20' : ''}`}
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        className="w-3.5 h-3.5 accent-purple-400 flex-shrink-0"
+                                                        checked={selected}
+                                                        onChange={e => {
+                                                            const updated = e.target.checked
+                                                                ? [...selectedModels, m.id]
+                                                                : selectedModels.filter(id => id !== m.id);
+                                                            setParams({...params, ai_models: updated});
+                                                        }}
+                                                    />
+                                                    <span className={selected ? 'text-purple-200' : 'text-slate-400'}>{m.label}</span>
+                                                    <span className="text-[10px] text-slate-600 ml-auto">{m.quota}</span>
+                                                </label>
+                                            );
+                                        });
+                                        return rows;
+                                    })()}
+                                </div>
+                                {(params.ai_models || []).length === 0 && (
+                                    <p className="text-[10px] text-red-400 mt-1">⚠ Select at least one model</p>
+                                )}
+                                {(params.ai_models || []).length > 1 && (
+                                    <p className="text-[10px] text-green-400/80 mt-1">
+                                        ~{Math.ceil(100 / (params.ai_models || []).length)}% of signals per model — total time ≈ single-model time.
+                                    </p>
+                                )}
+                            </div>
+
+                            {/* Max signals cap + Parallel workers — side by side */}
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-[10px] text-slate-400 mb-1">
+                                        Max signals to evaluate
+                                        <span className="text-slate-500 ml-1">(blank = all)</span>
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        placeholder="e.g. 50"
+                                        className="w-full bg-slate-900 border border-purple-800/40 rounded p-1.5 text-white text-xs"
+                                        value={params.ai_max_signals || ''}
+                                        onChange={e => setParams({...params, ai_max_signals: e.target.value ? parseInt(e.target.value) : null})}
+                                    />
+                                    <p className="text-[10px] text-slate-500 mt-0.5">Others are auto-confirmed when cap is set.</p>
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] text-slate-400 mb-1">
+                                        Parallel workers
+                                        <span className="text-slate-500 ml-1">(per model)</span>
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        max="10"
+                                        placeholder="1"
+                                        className="w-full bg-slate-900 border border-purple-800/40 rounded p-1.5 text-white text-xs"
+                                        value={params.ai_concurrency || 1}
+                                        onChange={e => setParams({...params, ai_concurrency: Math.max(1, parseInt(e.target.value) || 1)})}
+                                    />
+                                    <p className="text-[10px] text-slate-500 mt-0.5">
+                                        {(params.ai_concurrency || 1) > 1
+                                            ? <span className="text-amber-400/80">⚡ {params.ai_concurrency}× faster — use only for Claude/unlimited models</span>
+                                            : 'Safe for all models. Increase for Claude (no quota).'}
+                                    </p>
+                                </div>
+                            </div>
+
+                            {/* Re-entry check toggle */}
+                            <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+                                <input
+                                    type="checkbox"
+                                    className="w-3.5 h-3.5 accent-violet-500"
+                                    checked={params.ai_enable_reentry !== false}
+                                    onChange={e => setParams({ ...params, ai_enable_reentry: e.target.checked })}
+                                />
+                                <span className="text-[11px] text-slate-300 font-medium">Re-entry checks</span>
+                                <span className="text-[10px] text-slate-500">
+                                    {params.ai_enable_reentry !== false
+                                        ? 'AI re-evaluates rejected trades at suggested watch levels'
+                                        : 'Disabled — first-pass AI only, no re-entry second pass'}
+                                </span>
+                            </label>
+
+                            <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+                                <input
+                                    type="checkbox"
+                                    className="w-3.5 h-3.5 accent-violet-500"
+                                    checked={params.ai_follow_sl_tp !== false}
+                                    onChange={e => setParams({ ...params, ai_follow_sl_tp: e.target.checked })}
+                                />
+                                <span className="text-[11px] text-slate-300 font-medium">Follow AI SL/TP</span>
+                                <span className="text-[10px] text-slate-500">
+                                    {params.ai_follow_sl_tp !== false
+                                        ? 'Simulation uses AI suggested SL/TP levels'
+                                        : 'Simulation uses strategy SL/TP — AI filters trades only'}
+                                </span>
+                            </label>
+
+                            <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+                                <input
+                                    type="checkbox"
+                                    className="w-3.5 h-3.5 accent-violet-500"
+                                    checked={params.ai_follow_strategy_exits === true}
+                                    onChange={e => setParams({ ...params, ai_follow_strategy_exits: e.target.checked })}
+                                />
+                                <span className="text-[11px] text-slate-300 font-medium">Follow Strategy Exits</span>
+                                <span className="text-[10px] text-slate-500">
+                                    {params.ai_follow_strategy_exits === true
+                                        ? 'Simulation honours strategy exit signals — resim stops when strategy closed'
+                                        : 'Simulation holds until SL/TP hit (ignores strategy exit time)'}
+                                </span>
+                            </label>
+
+                            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-slate-400">
+                                <span>• Anonymised OHLCV (T-0 … T-25)</span>
+                                <span>• RSI / ATR / ADX context</span>
+                                <span>• Suggests SL &amp; TP levels</span>
+                            </div>
+                        </div>
+                    )}
+                </div>
             </div>
 
             {/* 4. Strategy Specific Params */}
@@ -1321,96 +1952,518 @@ export default function Backtest() {
                 </div>
               </div>
               
-              <div className="h-96 bg-slate-800 rounded-lg p-4">
-                <h4 className="text-slate-400 mb-4">Equity Curve</h4>
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={result.equityCurve}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis 
-                      dataKey="date" 
-                      stroke="#94a3b8" 
-                      tickFormatter={(str) => new Date(str).toLocaleDateString()}
-                    />
-                    <YAxis stroke="#94a3b8" domain={['auto', 'auto']} />
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155' }}
-                      itemStyle={{ color: '#fff' }}
-                      labelFormatter={(label) => new Date(label).toLocaleString()}
-                    />
-                    <Line 
-                      type="monotone" 
-                      dataKey="balance" 
-                      stroke="#3b82f6" 
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
+              {/* AI Confirmation Status Banner */}
+              {aiPolling && (
+                <div className="bg-violet-900/30 border border-violet-500/40 rounded-lg px-4 py-3 flex items-center gap-3 text-sm">
+                  <Bot className="w-4 h-4 shrink-0 text-violet-400 animate-pulse" />
+                  <span className="text-violet-300 flex-1">
+                    AI analyzing trades live
+                    {aiProgress.total > 0 && (
+                      <span className="ml-2 font-mono text-violet-200">
+                        {aiProgress.done} / {aiProgress.total}
+                      </span>
+                    )}
+                  </span>
+                  {aiProgress.total > 0 && (
+                    <div className="flex-1 max-w-[180px] bg-slate-700 rounded-full h-1.5">
+                      <div
+                        className="bg-violet-500 h-1.5 rounded-full transition-all duration-500"
+                        style={{ width: `${Math.round((aiProgress.done / aiProgress.total) * 100)}%` }}
+                      />
+                    </div>
+                  )}
+                  <button
+                    className="ml-1 px-2.5 py-1 text-xs bg-red-800/60 hover:bg-red-700 text-red-200 rounded border border-red-600/50 transition-colors whitespace-nowrap"
+                    title="Stop AI processing — keeps decisions received so far"
+                    onClick={async () => {
+                      setAiPolling(false);
+                      if (aiJobId) {
+                        try { await axios.post(`${API_URL}/ai-confirmation/cancel/${aiJobId}`); }
+                        catch (_) {}
+                      }
+                    }}
+                  >
+                    ⛔ Stop
+                  </button>
+                </div>
+              )}
+
+              {/* Re-entry AI progress banner */}
+              {aiReentryPolling && (
+                <div className="flex items-center gap-3 bg-amber-900/20 border border-amber-500/30 rounded-lg px-4 py-2 text-xs">
+                  <span className="text-amber-300 animate-pulse">⏳</span>
+                  <span className="text-amber-200 flex-1">
+                    Re-entry check in progress
+                    {aiReentryProgress.total > 0 && (
+                      <span className="ml-2 font-mono text-amber-100">{aiReentryProgress.done} / {aiReentryProgress.total}</span>
+                    )}
+                  </span>
+                  {aiReentryProgress.total > 0 && (
+                    <div className="flex-1 max-w-[180px] bg-slate-700 rounded-full h-1.5">
+                      <div
+                        className="bg-amber-500 h-1.5 rounded-full transition-all duration-500"
+                        style={{ width: `${Math.round((aiReentryProgress.done / aiReentryProgress.total) * 100)}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* AI Summary Panel */}
+              {result.ai_summary && (
+                <div className="bg-slate-800 rounded-lg overflow-hidden border border-violet-500/30">
+                  <button
+                    onClick={() => setAiPanelOpen(o => !o)}
+                    className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-700/50 transition-colors"
+                  >
+                    <div className="flex items-center gap-2 text-violet-400 font-medium">
+                      <Bot className="w-4 h-4" />
+                      AI Strategy Analysis
+                    </div>
+                    {aiPanelOpen ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                  </button>
+                  {aiPanelOpen && (
+                    <div className="px-5 pb-5 pt-1 border-t border-slate-700">
+                      <div className="prose prose-invert prose-sm max-w-none text-slate-300 leading-relaxed whitespace-pre-wrap text-sm">
+                        {result.ai_summary}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {(() => {
+                const hasAiSimAvail = (aiResimMap && aiResimMap.size > 0) || result.trades.some(t => t.aiConfirmation?.suggested_sl);
+                const chartData = showAiSim && aiSimData ? aiSimData.curve : result.equityCurve;
+                const isComparison = showAiSim && !!aiSimData;
+                return (
+                <div className="bg-slate-800 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-slate-400">Equity Curve</h4>
+                    {hasAiSimAvail && (
+                      <button
+                        className={`text-xs px-3 py-1 rounded border transition-colors ${showAiSim ? 'bg-green-800/60 border-green-600 text-green-200' : 'bg-slate-700 border-slate-600 text-slate-300 hover:border-green-600 hover:text-green-300'}`}
+                        onClick={() => setShowAiSim(s => !s)}
+                      >
+                        📊 {showAiSim ? 'AI SL/TP View ✓' : 'Compare AI SL/TP'}
+                      </button>
+                    )}
+                  </div>
+
+                  {isComparison && (() => {
+                    const diff = aiSimData.totalPnl - aiSimData.originalPnl;
+                    return (
+                      <div className="space-y-1.5 mb-3">
+                        {/* Row 1 — P&L comparison */}
+                        <div className="grid grid-cols-4 gap-2 text-center">
+                          <div className="bg-slate-700/60 rounded p-2">
+                            <p className="text-[10px] text-slate-400">Strategy P&L</p>
+                            <p className={`text-sm font-bold ${aiSimData.originalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                              ₹{aiSimData.originalPnl.toFixed(0)}
+                            </p>
+                          </div>
+                          <div className="bg-green-900/30 border border-green-700/40 rounded p-2">
+                            <p className="text-[10px] text-slate-400">AI SL/TP P&L</p>
+                            <p className={`text-sm font-bold ${aiSimData.totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                              ₹{aiSimData.totalPnl.toFixed(0)}
+                            </p>
+                          </div>
+                          <div className="bg-slate-700/60 rounded p-2">
+                            <p className="text-[10px] text-slate-400">Difference</p>
+                            <p className={`text-sm font-bold ${diff >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                              {diff >= 0 ? '+' : ''}₹{diff.toFixed(0)}
+                            </p>
+                          </div>
+                          <div className="bg-slate-700/60 rounded p-2">
+                            <p className="text-[10px] text-slate-400">Confirmed Win Rate</p>
+                            <p className="text-sm font-bold text-white">{aiSimData.winRate}%</p>
+                          </div>
+                        </div>
+                        {/* Row 2 — totals + risk metrics */}
+                        <div className="grid grid-cols-4 gap-2 text-center">
+                          <div className="bg-slate-700/60 rounded p-2">
+                            <p className="text-[10px] text-slate-400">Confirmed Trades</p>
+                            <p className="text-sm font-bold text-white">{aiSimData.totalTrades}</p>
+                          </div>
+                          <div className="bg-slate-700/60 rounded p-2">
+                            <p className="text-[10px] text-slate-400">Rejected Trades</p>
+                            <p className="text-sm font-bold text-red-400/80">{aiSimData.rejectedCount}</p>
+                          </div>
+                          <div className="bg-slate-700/60 rounded p-2">
+                            <p className="text-[10px] text-slate-400">AI Sharpe</p>
+                            <p className={`text-sm font-bold ${aiSimData.sharpe >= 1 ? 'text-green-400' : aiSimData.sharpe > 0 ? 'text-yellow-400' : 'text-red-400'}`}>
+                              {aiSimData.sharpe}
+                            </p>
+                          </div>
+                          <div className="bg-slate-700/60 rounded p-2">
+                            <p className="text-[10px] text-slate-400">AI Max DD</p>
+                            <p className={`text-sm font-bold ${aiSimData.maxDrawdown > 20 ? 'text-red-400' : aiSimData.maxDrawdown > 10 ? 'text-yellow-400' : 'text-green-400'}`}>
+                              -{aiSimData.maxDrawdown}%
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  {isComparison && (
+                    <p className="text-[10px] text-slate-500 mb-2">
+                      Est. using delta ~0.5. Actual premium moves may differ due to IV & time decay.
+                    </p>
+                  )}
+
+                  <div className="h-72">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                      <XAxis
+                        dataKey={isComparison ? 't' : 'date'}
+                        stroke="#94a3b8"
+                        tickFormatter={isComparison ? (v) => `T${v}` : (s) => new Date(s).toLocaleDateString()}
+                      />
+                      <YAxis stroke="#94a3b8" domain={['auto', 'auto']} />
+                      <Tooltip
+                        contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155' }}
+                        itemStyle={{ color: '#fff' }}
+                        labelFormatter={isComparison ? (v) => `Trade #${v}` : (l) => new Date(l).toLocaleString()}
+                      />
+                      {isComparison ? (
+                        <>
+                          <Legend wrapperStyle={{ fontSize: '11px' }} />
+                          <Line type="monotone" dataKey="original" stroke="#3b82f6" name="Strategy" dot={false} strokeWidth={2} />
+                          <Line type="monotone" dataKey="ai_sim" stroke="#4ade80" name="AI SL/TP" dot={false} strokeWidth={2} strokeDasharray="5 3" />
+                        </>
+                      ) : (
+                        <Line type="monotone" dataKey="balance" stroke="#3b82f6" strokeWidth={2} dot={false} />
+                      )}
+                    </LineChart>
+                  </ResponsiveContainer>
+                  </div>
+                </div>
+                );
+              })()}
 
               {/* Trades Table */}
-              <div className="bg-slate-800 rounded-lg p-4 overflow-hidden">
-                <h4 className="text-slate-400 mb-4">All Trades ({result.trades.length})</h4>
-                <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+              {(() => {
+                const hasSpotData = result.trades.length > 0 && result.trades[0].spot_sl != null;
+                const isSwingMode = result.trades.length > 0 && result.trades[0].sl_tp_type === 'SPOT_SWING';
+                const hasReentryData = result.trades.some(t => t.ai_reentry_entry_time || t.ai_reentry_decision);
+                return (
+                <div className="bg-slate-800 rounded-lg p-4 overflow-hidden">
+                  <div className="flex items-center justify-between mb-4">
+                    <h4 className="text-slate-400">All Trades ({result.trades.length})</h4>
+                    {hasSpotData && (
+                      <div className="flex items-center gap-2">
+                        {isSwingMode && (
+                          <span className="text-[10px] bg-blue-900/40 text-blue-300 border border-blue-700/40 px-2 py-0.5 rounded-full">
+                            Swing SL Mode
+                          </span>
+                        )}
+                        <div className="flex rounded overflow-hidden border border-slate-600 text-xs">
+                          <button
+                            className={`px-3 py-1 transition-colors ${!showSpotView ? 'bg-slate-600 text-white' : 'bg-transparent text-slate-400 hover:text-white'}`}
+                            onClick={() => setShowSpotView(false)}
+                          >Premium</button>
+                          <button
+                            className={`px-3 py-1 transition-colors ${showSpotView ? 'bg-blue-700 text-white' : 'bg-transparent text-slate-400 hover:text-white'}`}
+                            onClick={() => setShowSpotView(true)}
+                          >Spot Index</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {showSpotView && hasSpotData && (
+                    <p className="text-[10px] text-blue-400/70 mb-2">
+                      Showing index price levels. Entry &amp; Exit = underlying index price at signal/exit bar. SL/TP = index levels used as exit triggers. P&amp;L is still based on option premium.
+                    </p>
+                  )}
+                  <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
                   <table className="w-full text-sm text-left text-slate-300">
                     <thead className="text-xs text-slate-400 uppercase bg-slate-700/50 sticky top-0 z-10">
                       <tr>
                         <th className="px-4 py-3 bg-slate-800">Entry Time</th>
                         <th className="px-4 py-3 bg-slate-800">Symbol</th>
                         <th className="px-4 py-3 bg-slate-800">Volume</th>
-                        <th className="px-4 py-3 bg-slate-800">Underlying</th>
                         <th className="px-4 py-3 bg-slate-800">Avg Vol</th>
                         <th className="px-4 py-3 bg-slate-800">Type</th>
-                        <th className="px-4 py-3 bg-slate-800">AI Conf</th>
-                        <th className="px-4 py-3 bg-slate-800">Price</th>
-                        <th className="px-4 py-3 bg-slate-800">SL</th>
-                        <th className="px-4 py-3 bg-slate-800">TP</th>
+                        <th className="px-4 py-3 bg-slate-800">AI</th>
+                        <th className="px-4 py-3 bg-slate-800">
+                          {showSpotView && hasSpotData ? <span className="text-blue-400">Spot Entry</span> : 'Prem Entry'}
+                        </th>
+                        <th className="px-4 py-3 bg-slate-800">
+                          {showSpotView && hasSpotData ? <span className="text-blue-400">Spot SL</span> : 'Spot SL'}
+                        </th>
+                        <th className="px-4 py-3 bg-slate-800">
+                          {showSpotView && hasSpotData ? <span className="text-blue-400">Spot TP</span> : 'Spot TP'}
+                        </th>
                         <th className="px-4 py-3 bg-slate-800">Invested</th>
                         <th className="px-4 py-3 bg-slate-800">Exit Time</th>
-                        <th className="px-4 py-3 bg-slate-800">Exit Price</th>
+                        <th className="px-4 py-3 bg-slate-800">
+                          {showSpotView && hasSpotData ? <span className="text-blue-400">Spot Exit</span> : 'Prem Exit'}
+                        </th>
                         <th className="px-4 py-3 bg-slate-800">PnL</th>
                         <th className="px-4 py-3 bg-slate-800">Reason</th>
+                        {showAiSim && aiSimData && <>
+                          <th className="px-4 py-3 bg-green-900/20 text-green-400/80 border-l border-green-700/30" title="AI-suggested stop-loss index level">AI SL</th>
+                          <th className="px-4 py-3 bg-green-900/20 text-green-400/80" title="AI-suggested take-profit index level">AI TP</th>
+                          <th className="px-4 py-3 bg-green-900/20 text-green-400/80" title="Underlying index level where AI scenario exited">AI Exit Spot</th>
+                          <th className="px-4 py-3 bg-green-900/20 text-green-400/80">AI Reason</th>
+                          <th className="px-4 py-3 bg-green-900/20 text-green-400/80">AI Est. P&L</th>
+                        </>}
+                        {hasReentryData && <>
+                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80 border-l border-violet-700/30" title="Re-entry signal entry time">Re-entry Entry</th>
+                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80" title="Spot level at re-entry">Entry Spot</th>
+                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80" title="AI stop-loss for re-entry trade">Re AI SL</th>
+                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80" title="AI take-profit for re-entry trade">Re AI TP</th>
+                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80" title="Re-entry trade exit time">Re-exit Time</th>
+                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80" title="Spot level at re-entry exit">Re-exit Spot</th>
+                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80">Re-exit Reason</th>
+                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80">Re-entry P&L</th>
+                        </>}
                       </tr>
                     </thead>
                     <tbody>
                       {result.trades.map((trade, idx) => (
                         <tr key={idx} className="border-b border-slate-700 hover:bg-slate-700/30">
-                          <td className="px-4 py-3">{new Date(trade.entryTime).toLocaleString()}</td>
+                          <td className="px-4 py-3 text-xs">{new Date(trade.entryTime).toLocaleString()}</td>
                           <td className="px-4 py-3 font-mono text-xs">{trade.option_symbol || '-'}</td>
-                          <td className="px-4 py-3 text-slate-400">{trade.volume || '-'}</td>
-                          <td className="px-4 py-3 font-medium text-blue-300">
-                              <div className="flex flex-col text-xs">
-                                  <span>{trade.underlying_price ? `${Number(trade.underlying_price).toFixed(2)} (${trade.underlying_type})` : '-'}</span>
-                                  {trade.spot_price && trade.underlying_type === 'FUT' && (
-                                      <span className="text-slate-400">Spot: {Number(trade.spot_price).toFixed(2)}</span>
-                                  )}
-                              </div>
-                          </td>
-                          <td className="px-4 py-3 text-slate-500">{trade.avg_volume ? Math.round(trade.avg_volume) : '-'}</td>
-                          <td className={`px-4 py-3 font-bold ${trade.type === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
+                          <td className="px-4 py-3 text-slate-400 text-xs">{trade.volume || '-'}</td>
+                          <td className="px-4 py-3 text-slate-500 text-xs">{trade.avg_volume ? Math.round(trade.avg_volume) : '-'}</td>
+                          <td className={`px-4 py-3 font-bold text-xs ${trade.type === 'CE' || trade.type === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
                             {trade.type}
                           </td>
-                          <td className="px-4 py-3 font-mono text-blue-300">
-                            {trade.ai_confidence ? (trade.ai_confidence * 100).toFixed(0) + '%' : '-'}
+                          <td className="px-4 py-3 text-xs max-w-[150px]">
+                            {trade.ai_decision ? (
+                              <div className="flex flex-col items-start gap-0.5">
+                                <span className={`px-1.5 py-0.5 rounded font-bold whitespace-nowrap ${trade.ai_decision === 'CONFIRM' ? 'bg-green-900/50 text-green-300' : 'bg-red-900/50 text-red-300'}`}>
+                                  {trade.ai_decision === 'CONFIRM' ? '✓' : '✗'} {trade.ai_decision}
+                                  {trade.ai_confidence ? <span className="font-normal ml-1 opacity-70">{(trade.ai_confidence * 100).toFixed(0)}%</span> : null}
+                                </span>
+                                {trade.aiConfirmation?.reasoning && (
+                                  <span
+                                    className={`italic leading-tight cursor-help ${trade.ai_decision === 'CONFIRM' ? 'text-green-400/70' : 'text-red-400/70'}`}
+                                    style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                                    title={trade.aiConfirmation.reasoning}
+                                  >
+                                    {trade.aiConfirmation.reasoning}
+                                  </span>
+                                )}
+                                {(trade.ai_spot_sl || trade.ai_spot_tp) && (
+                                  <span className="text-purple-400/70 text-[10px] mt-0.5"
+                                    title="AI-suggested index levels for SL and TP">
+                                    SL {trade.ai_spot_sl ? Number(trade.ai_spot_sl).toFixed(0) : '–'} / TP {trade.ai_spot_tp ? Number(trade.ai_spot_tp).toFixed(0) : '–'}
+                                  </span>
+                                )}
+                                {trade.ai_reentry_suggested && trade.ai_reentry_level && (
+                                  <>
+                                    <span
+                                      className={`text-[10px] mt-0.5 font-medium px-1 py-0.5 rounded ${trade.ai_decision === 'REJECT' ? 'bg-amber-900/40 text-amber-300' : 'bg-sky-900/40 text-sky-300'}`}
+                                      title={trade.ai_reentry_note || 'Better entry level suggested'}
+                                    >
+                                      {trade.ai_decision === 'REJECT' ? '⏳' : '💡'} Watch {Number(trade.ai_reentry_level).toFixed(0)}
+                                      {trade.ai_reentry_note ? ` — ${trade.ai_reentry_note}` : ''}
+                                    </span>
+                                    {/* Re-entry AI second decision */}
+                                    {trade.ai_reentry_decision ? (
+                                      <span
+                                        className={`text-[10px] mt-0.5 font-semibold px-1 py-0.5 rounded ${trade.ai_reentry_decision === 'CONFIRM' ? 'bg-green-900/60 text-green-200' : 'bg-red-900/60 text-red-200'}`}
+                                        title={trade.ai_reentry_reasoning || ''}
+                                      >
+                                        ↳ Re-entry: {trade.ai_reentry_decision === 'CONFIRM' ? '✓' : '✗'} {trade.ai_reentry_decision}
+                                        {trade.ai_reentry_confidence ? <span className="font-normal opacity-70 ml-1">{trade.ai_reentry_confidence.toFixed(0)}%</span> : null}
+                                        {trade.ai_reentry_reasoning ? <span className="block font-normal italic opacity-70 mt-0.5" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{trade.ai_reentry_reasoning}</span> : null}
+                                      </span>
+                                    ) : trade.ai_reentry_level_reached === false ? (
+                                      <span className="text-[10px] mt-0.5 text-slate-500 italic">↳ Level not reached</span>
+                                    ) : aiReentryPolling ? (
+                                      <span className="text-[10px] mt-0.5 text-amber-500/60 animate-pulse">↳ re-checking…</span>
+                                    ) : null}
+                                  </>
+                                )}
+                                {backtestResultId && (
+                                  <div className="flex gap-1 mt-1 flex-wrap">
+                                    <button
+                                      onClick={() => copyPrompt(idx, 'first')}
+                                      title="Copy the exact prompt sent to the AI for this trade"
+                                      className="flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-slate-700/60 text-slate-400 hover:text-slate-200 hover:bg-slate-600/60 transition-colors"
+                                    >
+                                      {promptCopyState[`first_${idx}`] === 'done'
+                                        ? <><Check size={9} className="text-green-400" /> Copied</>
+                                        : promptCopyState[`first_${idx}`] === 'copying'
+                                        ? <><Copy size={9} className="animate-pulse" /> …</>
+                                        : <><Copy size={9} /> Prompt</>}
+                                    </button>
+                                    {trade.ai_reentry_decision && (
+                                      <button
+                                        onClick={() => copyPrompt(idx, 'reentry')}
+                                        title="Copy the exact re-entry prompt sent to the AI"
+                                        className="flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-violet-900/40 text-violet-400 hover:text-violet-200 hover:bg-violet-800/40 transition-colors"
+                                      >
+                                        {promptCopyState[`reentry_${idx}`] === 'done'
+                                          ? <><Check size={9} className="text-green-400" /> Copied</>
+                                          : promptCopyState[`reentry_${idx}`] === 'copying'
+                                          ? <><Copy size={9} className="animate-pulse" /> …</>
+                                          : <><Copy size={9} /> Re-entry</>}
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            ) : aiPolling ? (
+                              <span className="text-slate-600 animate-pulse text-xs">analyzing…</span>
+                            ) : '-'}
                           </td>
-                          <td className="px-4 py-3 font-bold text-white">{Number(trade.entryPrice).toFixed(2)}</td>
-                          <td className="px-4 py-3 text-red-300 cursor-help border-b border-dashed border-red-500/30" title={trade.slDetails ? `ATR: ${trade.slDetails.atr} | Strat: ${trade.slDetails.strategy || 'N/A'} | Fixed: ${trade.slDetails.fixed || 'N/A'} | Chosen: ${trade.slDetails.chosen}` : 'No Details'}>
-                              {trade.sl ? Number(trade.sl).toFixed(2) : '-'}
+                          {/* Entry price: spot or premium depending on view */}
+                          <td className="px-4 py-3 font-bold text-white text-xs">
+                            {showSpotView && hasSpotData
+                              ? (trade.spot_entry ? Number(trade.spot_entry).toFixed(2) : '-')
+                              : Number(trade.entryPrice).toFixed(2)}
                           </td>
-                          <td className="px-4 py-3 text-green-300">{trade.tp ? Number(trade.tp).toFixed(2) : '-'}</td>
-                          <td className="px-4 py-3">₹{trade.invested_amount ? Number(trade.invested_amount).toFixed(2) : '-'}</td>
-                          <td className="px-4 py-3">{new Date(trade.exitTime).toLocaleString()}</td>
-                          <td className="px-4 py-3">{Number(trade.exitPrice).toFixed(2)}</td>
-                          <td className={`px-4 py-3 font-bold ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {/* SL: always spot level; tooltip shows source details */}
+                          <td className="px-4 py-3 text-red-300 text-xs cursor-help border-b border-dashed border-red-500/30"
+                            title={trade.slDetails
+                              ? trade.slDetails.chosen === 'SWING'
+                                ? `Mode: Swing | Extreme: ${trade.slDetails.swingExtreme ?? 'N/A'} | Dist: ${trade.slDetails.slDist ?? 'N/A'} | R:R: ${trade.slDetails.rrRatio ?? 'N/A'}`
+                                : `ATR: ${trade.slDetails.atr} | Strat: ${trade.slDetails.strategy ?? 'N/A'} | Fixed: ${trade.slDetails.fixed ?? 'N/A'} | Chosen: ${trade.slDetails.chosen}`
+                              : 'No Details'}>
+                            {(showSpotView && hasSpotData ? trade.spot_sl : trade.sl)
+                              ? Number(showSpotView && hasSpotData ? trade.spot_sl : trade.sl).toFixed(2)
+                              : '-'}
+                          </td>
+                          {/* TP: always spot level */}
+                          <td className="px-4 py-3 text-green-300 text-xs">
+                            {(showSpotView && hasSpotData ? trade.spot_tp : trade.tp)
+                              ? Number(showSpotView && hasSpotData ? trade.spot_tp : trade.tp).toFixed(2)
+                              : '-'}
+                          </td>
+                          <td className="px-4 py-3 text-xs">₹{trade.invested_amount ? Number(trade.invested_amount).toFixed(2) : '-'}</td>
+                          <td className="px-4 py-3 text-xs">{new Date(trade.exitTime).toLocaleString()}</td>
+                          {/* Exit price: spot or premium depending on view */}
+                          <td className="px-4 py-3 text-xs">
+                            {showSpotView && hasSpotData
+                              ? (trade.spot_exit ? Number(trade.spot_exit).toFixed(2) : '-')
+                              : Number(trade.exitPrice).toFixed(2)}
+                          </td>
+                          <td className={`px-4 py-3 font-bold text-xs ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                             {Number(trade.pnl).toFixed(2)}
                           </td>
                           <td className="px-4 py-3 text-slate-400 text-xs">{trade.reason}</td>
+                          {showAiSim && aiSimData && (() => {
+                            const sim = aiSimData.trades[idx];
+                            const isReject = trade.ai_decision === 'REJECT';
+                            const aiSl = trade.aiConfirmation?.suggested_sl || trade.ai_spot_sl;
+                            const aiTp = trade.aiConfirmation?.suggested_tp || trade.ai_spot_tp;
+                            const isCE = trade.type === 'CE' || trade.type === 'BUY';
+                            const pnl = sim?.ai_sim_pnl ?? 0;
+                            const diff = pnl - trade.pnl;
+                            return (
+                              <>
+                                <td className="px-4 py-3 text-xs font-mono border-l border-green-700/20"
+                                  title={aiSl ? `AI SL: ${Number(aiSl).toFixed(2)} (${isCE ? 'below' : 'above'} entry)` : 'No AI SL'}>
+                                  {aiSl ? <span className="text-red-300/80">{Number(aiSl).toFixed(0)}</span> : <span className="text-slate-600">-</span>}
+                                </td>
+                                <td className="px-4 py-3 text-xs font-mono"
+                                  title={aiTp ? `AI TP: ${Number(aiTp).toFixed(2)} (${isCE ? 'above' : 'below'} entry)` : 'No AI TP'}>
+                                  {aiTp ? <span className="text-green-300/80">{Number(aiTp).toFixed(0)}</span> : <span className="text-slate-600">-</span>}
+                                </td>
+                                {!sim?.ai_sim_exit || isReject ? (
+                                  <>
+                                    <td className="px-4 py-3 text-slate-500 text-xs font-mono">-</td>
+                                    <td className="px-4 py-3 text-xs">
+                                      {isReject
+                                        ? <span className="px-1 py-0.5 rounded text-[10px] bg-red-900/30 text-red-500" title="AI rejected this trade — not taken">REJECTED</span>
+                                        : <span className="px-1 py-0.5 rounded text-[10px] bg-slate-700 text-slate-400">NO DATA</span>}
+                                    </td>
+                                    <td className={`px-4 py-3 text-xs font-bold ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                      {isReject ? <span title="Trade not taken — AI rejected">₹0</span> : Number(pnl).toFixed(2)}
+                                      {!isReject && <span className={`block text-[10px] font-normal ${diff >= 0 ? 'text-green-500/70' : 'text-red-500/70'}`}>{diff >= 0 ? '↑+' : '↓'}{diff.toFixed(0)}</span>}
+                                    </td>
+                                  </>
+                                ) : (
+                                  <>
+                                    <td className="px-4 py-3 text-xs font-mono"
+                                      title={sim.ai_sim_exit.reason === 'TP_HIT' ? `TP hit — target was ${Number(aiTp || sim.ai_sim_exit.spot).toFixed(0)}` : sim.ai_sim_exit.reason === 'SL_HIT' ? `SL hit — stop was ${Number(aiSl || sim.ai_sim_exit.spot).toFixed(0)}` : 'Closed at session end'}>
+                                      {Number(sim.ai_sim_exit.spot).toFixed(2)}
+                                    </td>
+                                    <td className="px-4 py-3 text-xs">
+                                      <span className={`px-1 py-0.5 rounded text-[10px] ${sim.ai_sim_exit.reason === 'TP_HIT' ? 'bg-green-900/50 text-green-300' : sim.ai_sim_exit.reason === 'SL_HIT' ? 'bg-red-900/50 text-red-300' : 'bg-slate-700 text-slate-400'}`}>
+                                        {sim.ai_sim_exit.reason}
+                                      </span>
+                                    </td>
+                                    <td className={`px-4 py-3 text-xs font-bold ${sim.ai_sim_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                      {Number(sim.ai_sim_pnl).toFixed(2)}
+                                      <span className={`block text-[10px] font-normal ${(sim.ai_sim_pnl - trade.pnl) >= 0 ? 'text-green-500/70' : 'text-red-500/70'}`}>{(sim.ai_sim_pnl - trade.pnl) >= 0 ? '↑+' : '↓'}{(sim.ai_sim_pnl - trade.pnl).toFixed(0)}</span>
+                                    </td>
+                                  </>
+                                )}
+                              </>
+                            );
+                          })()}
+                          {hasReentryData && (() => {
+                            const reEntry = aiReentryResimMap?.get(idx);
+                            const entryTime = reEntry?.entry_time || trade.ai_reentry_entry_time;
+                            const entrySpot = reEntry?.entry_spot ?? trade.ai_reentry_entry_price;
+                            const reAiSl = trade.ai_reentry_sl;
+                            const reAiTp = trade.ai_reentry_tp;
+                            if (!trade.ai_reentry_suggested) {
+                              return (
+                                <>
+                                  <td className="px-4 py-3 text-slate-600 text-xs border-l border-violet-700/20">-</td>
+                                  <td className="px-4 py-3 text-slate-600 text-xs">-</td>
+                                  <td className="px-4 py-3 text-slate-600 text-xs">-</td>
+                                  <td className="px-4 py-3 text-slate-600 text-xs">-</td>
+                                  <td className="px-4 py-3 text-slate-600 text-xs">-</td>
+                                  <td className="px-4 py-3 text-slate-600 text-xs">-</td>
+                                  <td className="px-4 py-3 text-slate-600 text-xs">-</td>
+                                  <td className="px-4 py-3 text-slate-600 text-xs">-</td>
+                                </>
+                              );
+                            }
+                            const isConfirmed = trade.ai_reentry_decision === 'CONFIRM';
+                            return (
+                              <>
+                                <td className="px-4 py-3 text-xs border-l border-violet-700/20">
+                                  {entryTime
+                                    ? new Date(entryTime).toLocaleString()
+                                    : (aiReentryPolling ? <span className="text-amber-500/60 animate-pulse text-[10px]">…</span> : '-')}
+                                </td>
+                                <td className="px-4 py-3 text-xs font-mono">
+                                  {entrySpot != null ? Number(entrySpot).toFixed(2) : '-'}
+                                </td>
+                                <td className="px-4 py-3 text-xs font-mono">
+                                  {reAiSl ? <span className="text-red-300/80">{Number(reAiSl).toFixed(0)}</span> : '-'}
+                                </td>
+                                <td className="px-4 py-3 text-xs font-mono">
+                                  {reAiTp ? <span className="text-green-300/80">{Number(reAiTp).toFixed(0)}</span> : '-'}
+                                </td>
+                                <td className="px-4 py-3 text-xs">
+                                  {reEntry?.exit_time
+                                    ? new Date(reEntry.exit_time).toLocaleString()
+                                    : (isConfirmed && !aiReentryResimMap ? <span className="text-amber-500/60 animate-pulse text-[10px]">simulating…</span> : '-')}
+                                </td>
+                                <td className="px-4 py-3 text-xs font-mono">
+                                  {reEntry?.exit_spot != null ? Number(reEntry.exit_spot).toFixed(2) : '-'}
+                                </td>
+                                <td className="px-4 py-3 text-xs">
+                                  {reEntry?.exit_reason ? (
+                                    <span className={`px-1 py-0.5 rounded text-[10px] ${reEntry.exit_reason === 'TP_HIT' ? 'bg-green-900/50 text-green-300' : reEntry.exit_reason === 'SL_HIT' ? 'bg-red-900/50 text-red-300' : 'bg-slate-700 text-slate-400'}`}>
+                                      {reEntry.exit_reason}
+                                    </span>
+                                  ) : '-'}
+                                </td>
+                                <td className={`px-4 py-3 text-xs font-bold ${reEntry?.exit_pnl == null ? 'text-slate-500' : reEntry.exit_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                  {reEntry?.exit_pnl != null ? `₹${Number(reEntry.exit_pnl).toFixed(2)}` : '-'}
+                                </td>
+                              </>
+                            );
+                          })()}
                         </tr>
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
-              </div>
+                );
+              })()}
             </div>
           ) : (
             <div className="flex items-center justify-center h-full text-slate-500">

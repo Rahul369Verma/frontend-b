@@ -453,21 +453,52 @@ export default function Dashboard() {
                                                  Test
                                             </button>
                                             <span className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-gray-400">
-                                                {params.strategyName === 'rl_agent' ? 'RL Agent' : 
-                                                 params.strategyName === 'mta_ema_crossover' ? 'MTA Crossover' : 
-                                                 params.strategyName === 'vwap_momentum' ? 'VWAP Momentum' : 
-                                                 params.strategyName === 'pos_5ema_scalp' ? 'Power of Stocks' : 
+                                                {params.strategyName === 'rl_agent' ? 'RL Agent' :
+                                                 params.strategyName === 'mta_ema_crossover' ? 'MTA Crossover' :
+                                                 params.strategyName === 'vwap_momentum' ? 'VWAP Momentum' :
+                                                 params.strategyName === 'pos_5ema_scalp' ? 'Power of Stocks' :
                                                  (params.strategyName || 'Legacy Strategy')}
                                             </span>
+                                            {params.use_ai_confirmation && (
+                                                <span className="text-xs px-2 py-0.5 rounded-full bg-violet-500/20 border border-violet-500/40 text-violet-300 flex items-center gap-1">
+                                                    🤖 AI
+                                                    {params.ai_follow_sl_tp && <span className="text-violet-400">SL/TP</span>}
+                                                    {params.ai_enable_reentry && <span className="text-violet-400">RE</span>}
+                                                </span>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
-                                
+
+                                {/* AI Settings Summary (when AI is enabled) */}
+                                {params.use_ai_confirmation && (
+                                    <div className="px-4 py-2 border-t border-violet-500/20 bg-violet-500/5 flex flex-wrap gap-2 text-[11px]">
+                                        <span className="text-violet-400 font-semibold">AI Filter:</span>
+                                        <span className={`px-1.5 py-0.5 rounded ${params.ai_follow_sl_tp ? 'bg-green-500/20 text-green-300' : 'bg-slate-700 text-slate-400'}`}>
+                                            {params.ai_follow_sl_tp ? '✓ Follow AI SL/TP' : '✗ Strategy SL/TP'}
+                                        </span>
+                                        <span className={`px-1.5 py-0.5 rounded ${params.ai_enable_reentry ? 'bg-green-500/20 text-green-300' : 'bg-slate-700 text-slate-400'}`}>
+                                            {params.ai_enable_reentry ? '✓ Re-entry' : '✗ No Re-entry'}
+                                        </span>
+                                        <span className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-300">
+                                            Thresh: {Math.round((params.ai_confidence_threshold || 0.6) * 100)}%
+                                        </span>
+                                        {params.ai_models && (
+                                            <span className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-400">
+                                                {Array.isArray(params.ai_models) ? params.ai_models.join(', ') : params.ai_models}
+                                            </span>
+                                        )}
+                                    </div>
+                                )}
+
                                 {/* Key-Value Grid */}
                                 <div className="p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                                      {Object.entries(params).map(([key, val]) => {
                                          if (key === 'strategyName') return null; // Already in header
-                                         
+                                         // AI settings shown in the summary bar above — skip in grid
+                                         if (['use_ai_confirmation','ai_follow_sl_tp','ai_enable_reentry',
+                                              'ai_confidence_threshold','ai_models','ai_follow_strategy_exits'].includes(key)) return null;
+
                                          // Formatting Value
                                          let displayVal = val;
                                          if (typeof val === 'boolean') displayVal = val ? 'TRUE' : 'FALSE';
@@ -475,7 +506,7 @@ export default function Dashboard() {
 
                                          // Highlight important keys
                                          const isKey = ['lots', 'capital', 'max_daily_loss', 'max_single_trade_loss'].includes(key);
-                                         
+
                                          return (
                                              <div key={key} className="overflow-hidden">
                                                  <p className="text-slate-500 text-[10px] uppercase font-bold tracking-wider mb-0.5">{key.replace(/_/g, ' ')}</p>
