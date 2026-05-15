@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
 import { Play, Activity, ChevronDown, ChevronUp, Bot, Copy, Check } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
@@ -55,12 +55,20 @@ export default function Backtest() {
   const [aiPanelOpen, setAiPanelOpen] = useState(true);
   const [aiJobId, setAiJobId] = useState(null);
   const [aiPolling, setAiPolling] = useState(false);
+  const aiPollActiveJobRef = useRef(null); // prevents duplicate poll loops (StrictMode / HMR)
   const [aiProgress, setAiProgress] = useState({ done: 0, total: 0 });
   const [showSpotView, setShowSpotView] = useState(false);
   const [showAiSim, setShowAiSim] = useState(false);
   const [backtestResultId, setBacktestResultId] = useState(null);
   // Server-calculated accurate AI resim: Map of tradeIdx → { ai_pnl, ai_exit }
   const [aiResimMap, setAiResimMap] = useState(null);
+  // Alternative resim with the opposite followAiSlTp setting (populated on demand)
+  const [aiResimAltMap, setAiResimAltMap] = useState(null);
+  const [aiResimAltLoading, setAiResimAltLoading] = useState(false);
+  // 'main' = use aiResimMap (matches params setting), 'alt' = use aiResimAltMap
+  const [aiSlTpView, setAiSlTpView] = useState('main');
+  // Preserved AI decisions for on-demand alt resim (populated when AI job completes)
+  const allAiDecisionsRef = useRef({});
   // Re-entry second AI pass
   const [aiReentryJobId, setAiReentryJobId] = useState(null);
   const [aiReentryPolling, setAiReentryPolling] = useState(false);
@@ -83,8 +91,9 @@ export default function Backtest() {
     const allPnl = trades.reduce((s, t) => s + (t.pnl || 0), 0);
     const startBal = (result.finalBalance || 0) - allPnl;
 
+    const activeResimMap = aiSlTpView === 'alt' ? aiResimAltMap : aiResimMap;
     const simTrades = trades.map((trade, idx) => {
-      const serverSim = aiResimMap?.get(idx);
+      const serverSim = activeResimMap?.get(idx);
       if (serverSim) {
         // REJECT trades are not taken in the AI scenario → equity curve uses 0.
         // We still keep ai_sim_exit so the table can show the "what-if" exit spot/reason.
@@ -146,7 +155,36 @@ export default function Backtest() {
       maxDrawdown: +maxDD.toFixed(1),
       sharpe,
     };
-  }, [result, showAiSim, aiResimMap]);
+  }, [result, showAiSim, aiResimMap, aiResimAltMap, aiSlTpView]);
+
+  // Run the alt resim on demand (opposite followAiSlTp to the one used for the main resim)
+  const runAltResim = async () => {
+    if (aiResimAltMap || aiResimAltLoading || !backtestResultId) return;
+    const decisions = allAiDecisionsRef.current;
+    if (!Object.keys(decisions).length) return;
+    setAiResimAltLoading(true);
+    try {
+      const mainFollowAiSlTp = params?.ai_follow_sl_tp !== false;
+      const altFollowAiSlTp  = !mainFollowAiSlTp; // opposite of current setting
+      const followStrategyExits = params?.ai_follow_strategy_exits === true;
+      const totalTrades = result?.trades?.length ?? 0;
+      const chronIdx = (displayIdx) => totalTrades - 1 - displayIdx;
+      const aiDecisions = Object.entries(decisions)
+        .filter(([, d]) => altFollowAiSlTp ? (d.suggested_sl && d.suggested_tp) : d.decision === 'CONFIRM')
+        .map(([ci, d]) => ({ tradeIdx: chronIdx(parseInt(ci)), suggested_sl: d.suggested_sl, suggested_tp: d.suggested_tp }));
+      if (!aiDecisions.length) { setAiResimAltLoading(false); return; }
+      const res = await axios.post(`${API_URL}/backtest/ai-resim`, {
+        resultId: backtestResultId, aiDecisions, followAiSlTp: altFollowAiSlTp, followStrategyExits,
+      });
+      const map = new Map();
+      for (const s of res.data.simTrades) map.set(s.tradeIdx, s);
+      setAiResimAltMap(map);
+    } catch (err) {
+      console.error('Alt AI resim failed:', err.message);
+    } finally {
+      setAiResimAltLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!params.symbol) return;
@@ -412,6 +450,9 @@ export default function Backtest() {
     setShowAiSim(false);
     setBacktestResultId(null);
     setAiResimMap(null);
+    setAiResimAltMap(null);
+    setAiSlTpView('main');
+    allAiDecisionsRef.current = {};
     setAiReentryJobId(null);
     setAiReentryPolling(false);
     setAiReentryProgress({ done: 0, total: 0 });
@@ -441,7 +482,13 @@ export default function Backtest() {
   // Poll for async AI confirmation results — delta-aware incremental updates
   useEffect(() => {
     if (!aiPolling || !aiJobId) return;
+    // Guard: StrictMode runs effects twice; HMR can also cause double-mount.
+    // Block a second loop from starting if one is already active for this job.
+    if (aiPollActiveJobRef.current === aiJobId) return;
+    aiPollActiveJobRef.current = aiJobId;
+
     let cancelled = false;
+    const abortCtrl = new AbortController();
 
     // decisions keys are 0,1,2... in CHRONOLOGICAL order (oldest=0).
     // result.trades is REVERSED (newest=0). Map: display idx → chronological idx = (N-1-idx).
@@ -483,6 +530,8 @@ export default function Backtest() {
     // Uses allDecisions (full set), not a single poll's delta.
     const runAccurateResim = async (decisions, resultId) => {
       try {
+        // Persist decisions for on-demand alt resim toggle
+        allAiDecisionsRef.current = decisions;
         const followAiSlTp = params?.ai_follow_sl_tp !== false;
         const followStrategyExits = params?.ai_follow_strategy_exits === true;
         const aiDecisions = Object.entries(decisions)
@@ -540,7 +589,9 @@ export default function Backtest() {
     const poll = async () => {
       try {
         // Pass `since` so the server only returns decisions we haven't seen yet.
-        const res = await axios.get(`${API_URL}/ai-confirmation/status/${aiJobId}?since=${lastDone}`);
+        const res = await axios.get(`${API_URL}/ai-confirmation/status/${aiJobId}?since=${lastDone}`, {
+          signal: abortCtrl.signal,
+        });
         if (cancelled) return;
         const { status, decisions: newDecisions = {}, done = 0, total = 0 } = res.data;
 
@@ -572,6 +623,7 @@ export default function Backtest() {
           setTimeout(poll, interval);
         }
       } catch (err) {
+        if (err.name === 'CanceledError' || err.name === 'AbortError') return;
         if (!cancelled) {
           console.error('AI status poll failed:', err.message);
           setTimeout(poll, 8000);
@@ -579,7 +631,11 @@ export default function Backtest() {
       }
     };
     poll();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      abortCtrl.abort();
+      if (aiPollActiveJobRef.current === aiJobId) aiPollActiveJobRef.current = null;
+    };
   }, [aiPolling, aiJobId, backtestResultId, setResult, params]);
 
   // Poll for re-entry AI job (second pass — only runs after first job suggests re-entry levels)
@@ -2034,20 +2090,43 @@ export default function Backtest() {
 
               {(() => {
                 const hasAiSimAvail = (aiResimMap && aiResimMap.size > 0) || result.trades.some(t => t.aiConfirmation?.suggested_sl);
+                const hasAiSlTpData = result.trades.some(t => t.aiConfirmation?.suggested_sl && t.aiConfirmation?.suggested_tp);
+                const mainFollowAiSlTp = params?.ai_follow_sl_tp !== false;
                 const chartData = showAiSim && aiSimData ? aiSimData.curve : result.equityCurve;
                 const isComparison = showAiSim && !!aiSimData;
                 return (
                 <div className="bg-slate-800 rounded-lg p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h4 className="text-slate-400">Equity Curve</h4>
-                    {hasAiSimAvail && (
-                      <button
-                        className={`text-xs px-3 py-1 rounded border transition-colors ${showAiSim ? 'bg-green-800/60 border-green-600 text-green-200' : 'bg-slate-700 border-slate-600 text-slate-300 hover:border-green-600 hover:text-green-300'}`}
-                        onClick={() => setShowAiSim(s => !s)}
-                      >
-                        📊 {showAiSim ? 'AI SL/TP View ✓' : 'Compare AI SL/TP'}
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {showAiSim && hasAiSlTpData && (
+                        <div className="flex items-center rounded border border-slate-600 overflow-hidden text-xs">
+                          <button
+                            className={`px-2.5 py-1 transition-colors ${aiSlTpView === 'main' ? (mainFollowAiSlTp ? 'bg-violet-700/60 text-violet-200' : 'bg-slate-600 text-white') : 'text-slate-400 hover:text-slate-200'}`}
+                            onClick={() => setAiSlTpView('main')}
+                          >
+                            {mainFollowAiSlTp ? 'AI SL/TP' : 'Strategy SL/TP'}
+                          </button>
+                          <button
+                            className={`px-2.5 py-1 transition-colors border-l border-slate-600 ${aiSlTpView === 'alt' ? (mainFollowAiSlTp ? 'bg-slate-600 text-white' : 'bg-violet-700/60 text-violet-200') : 'text-slate-400 hover:text-slate-200'}`}
+                            onClick={async () => {
+                              setAiSlTpView('alt');
+                              if (!aiResimAltMap) await runAltResim();
+                            }}
+                          >
+                            {aiResimAltLoading ? '⏳' : (mainFollowAiSlTp ? 'Strategy SL/TP' : 'AI SL/TP')}
+                          </button>
+                        </div>
+                      )}
+                      {hasAiSimAvail && (
+                        <button
+                          className={`text-xs px-3 py-1 rounded border transition-colors ${showAiSim ? 'bg-green-800/60 border-green-600 text-green-200' : 'bg-slate-700 border-slate-600 text-slate-300 hover:border-green-600 hover:text-green-300'}`}
+                          onClick={() => { setShowAiSim(s => !s); setAiSlTpView('main'); }}
+                        >
+                          📊 {showAiSim ? 'AI View ✓' : 'Compare AI SL/TP'}
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {isComparison && (() => {
@@ -2063,7 +2142,11 @@ export default function Backtest() {
                             </p>
                           </div>
                           <div className="bg-green-900/30 border border-green-700/40 rounded p-2">
-                            <p className="text-[10px] text-slate-400">AI SL/TP P&L</p>
+                            <p className="text-[10px] text-slate-400">
+                              {aiSlTpView === 'alt'
+                                ? (mainFollowAiSlTp ? 'Strategy SL/TP P&L' : 'AI SL/TP P&L')
+                                : (mainFollowAiSlTp ? 'AI SL/TP P&L' : 'Strategy SL/TP P&L')}
+                            </p>
                             <p className={`text-sm font-bold ${aiSimData.totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                               ₹{aiSimData.totalPnl.toFixed(0)}
                             </p>

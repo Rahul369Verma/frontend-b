@@ -459,7 +459,7 @@ export default function Dashboard() {
                                                  params.strategyName === 'pos_5ema_scalp' ? 'Power of Stocks' :
                                                  (params.strategyName || 'Legacy Strategy')}
                                             </span>
-                                            {params.use_ai_confirmation && (
+                                            {(params.enable_ai_confirmation || params.use_ai_confirmation) && (
                                                 <span className="text-xs px-2 py-0.5 rounded-full bg-violet-500/20 border border-violet-500/40 text-violet-300 flex items-center gap-1">
                                                     🤖 AI
                                                     {params.ai_follow_sl_tp && <span className="text-violet-400">SL/TP</span>}
@@ -471,15 +471,18 @@ export default function Dashboard() {
                                 </div>
 
                                 {/* AI Settings Summary (when AI is enabled) */}
-                                {params.use_ai_confirmation && (
+                                {(params.enable_ai_confirmation || params.use_ai_confirmation) && (
                                     <div className="px-4 py-2 border-t border-violet-500/20 bg-violet-500/5 flex flex-wrap gap-2 text-[11px]">
-                                        <span className="text-violet-400 font-semibold">AI Filter:</span>
+                                        <span className="text-violet-400 font-semibold">✨ AI Risk Filter:</span>
                                         <span className={`px-1.5 py-0.5 rounded ${params.ai_follow_sl_tp ? 'bg-green-500/20 text-green-300' : 'bg-slate-700 text-slate-400'}`}>
-                                            {params.ai_follow_sl_tp ? '✓ Follow AI SL/TP' : '✗ Strategy SL/TP'}
+                                            {params.ai_follow_sl_tp ? '✓ AI SL/TP' : 'Strategy SL/TP'}
                                         </span>
                                         <span className={`px-1.5 py-0.5 rounded ${params.ai_enable_reentry ? 'bg-green-500/20 text-green-300' : 'bg-slate-700 text-slate-400'}`}>
-                                            {params.ai_enable_reentry ? '✓ Re-entry' : '✗ No Re-entry'}
+                                            {params.ai_enable_reentry ? '✓ Re-entry' : 'No Re-entry'}
                                         </span>
+                                        {params.ai_follow_strategy_exits && (
+                                            <span className="px-1.5 py-0.5 rounded bg-green-500/20 text-green-300">✓ Strategy Exits</span>
+                                        )}
                                         <span className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-300">
                                             Thresh: {Math.round((params.ai_confidence_threshold || 0.6) * 100)}%
                                         </span>
@@ -496,8 +499,8 @@ export default function Dashboard() {
                                      {Object.entries(params).map(([key, val]) => {
                                          if (key === 'strategyName') return null; // Already in header
                                          // AI settings shown in the summary bar above — skip in grid
-                                         if (['use_ai_confirmation','ai_follow_sl_tp','ai_enable_reentry',
-                                              'ai_confidence_threshold','ai_models','ai_follow_strategy_exits'].includes(key)) return null;
+                                         if (['enable_ai_confirmation','use_ai_confirmation','ai_follow_sl_tp','ai_enable_reentry',
+                                              'ai_confidence_threshold','ai_models','ai_follow_strategy_exits','ai_concurrency'].includes(key)) return null;
 
                                          // Formatting Value
                                          let displayVal = val;
