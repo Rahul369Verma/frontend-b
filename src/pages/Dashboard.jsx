@@ -56,6 +56,22 @@ export default function Dashboard() {
       params: { type: 'CE', symbol: '', quantity: 15, sl: 40, tp: 100, price: 0 } 
   });
 
+  // Signal Simulator state
+  const [simModal, setSimModal] = useState({ isOpen: false, symbol: null, type: 'CE', loading: false, result: null, error: null });
+
+  const openSimulator = (symbol) => setSimModal({ isOpen: true, symbol, type: 'CE', loading: false, result: null, error: null });
+  const closeSimulator = () => setSimModal(s => ({ ...s, isOpen: false }));
+
+  const runSimulation = async () => {
+    setSimModal(s => ({ ...s, loading: true, result: null, error: null }));
+    try {
+      const res = await axios.post(`${API_URL}/engine/test-signal`, { symbol: simModal.symbol, type: simModal.type });
+      setSimModal(s => ({ ...s, loading: false, result: res.data }));
+    } catch (err) {
+      setSimModal(s => ({ ...s, loading: false, error: err.response?.data?.error || err.message }));
+    }
+  };
+
   const navigate = useNavigate();
 
   const handleTestClick = (symbol, config) => {
@@ -451,6 +467,13 @@ export default function Dashboard() {
                                                 title="Test this config in Backtester"
                                             >
                                                  Test
+                                            </button>
+                                            <button
+                                                onClick={() => openSimulator(symbol)}
+                                                className="px-3 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded text-xs transition-colors flex items-center gap-1"
+                                                title="Simulate a signal through the live engine (AI + SL/TP)"
+                                            >
+                                                🧪 Sim
                                             </button>
                                             <span className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-gray-400">
                                                 {params.strategyName === 'rl_agent' ? 'RL Agent' :
@@ -1037,6 +1060,190 @@ export default function Dashboard() {
                   </div>
               </div>
           </div>
+      )}
+
+      {/* ── Signal Simulator Modal ── */}
+      {simModal.isOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={closeSimulator}>
+          <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-lg shadow-2xl" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="p-4 border-b border-slate-700 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-amber-400">🧪 Signal Simulator</h3>
+                <p className="text-xs text-slate-400 mt-0.5">{simModal.symbol} — runs full pipeline without placing an order</p>
+              </div>
+              <button onClick={closeSimulator} className="text-slate-400 hover:text-white text-xl leading-none">×</button>
+            </div>
+
+            {/* Controls */}
+            <div className="p-4 flex items-center gap-3">
+              <div className="flex rounded border border-slate-600 overflow-hidden text-sm">
+                {['CE', 'PE'].map(t => (
+                  <button key={t}
+                    className={`px-4 py-1.5 transition-colors ${simModal.type === t ? (t === 'CE' ? 'bg-green-700/60 text-green-200' : 'bg-red-700/60 text-red-200') : 'text-slate-400 hover:text-white'}`}
+                    onClick={() => setSimModal(s => ({ ...s, type: t, result: null, error: null }))}
+                  >{t}</button>
+                ))}
+              </div>
+              <button
+                onClick={runSimulation}
+                disabled={simModal.loading}
+                className="flex-1 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded text-sm font-semibold transition-colors"
+              >
+                {simModal.loading ? '⏳ Running…' : '▶ Run Simulation'}
+              </button>
+            </div>
+
+            {/* Error */}
+            {simModal.error && (
+              <div className="mx-4 mb-4 p-3 bg-red-900/30 border border-red-700/50 rounded text-red-300 text-sm">{simModal.error}</div>
+            )}
+
+            {/* Results */}
+            {simModal.result && (() => {
+              const r = simModal.result;
+              const aiR = r.aiResult;
+              const pass = r.wouldExecute;
+              return (
+                <div className="px-4 pb-4 space-y-3">
+                  {/* Verdict */}
+                  <div className={`rounded-lg p-3 border text-center ${pass ? 'bg-green-900/30 border-green-600/40' : 'bg-red-900/30 border-red-600/40'}`}>
+                    <p className={`text-lg font-bold ${pass ? 'text-green-400' : 'text-red-400'}`}>
+                      {pass ? '✅ WOULD EXECUTE' : '❌ BLOCKED'}
+                    </p>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {r.type} signal on {r.symbol} @ ₹{r.spot} &nbsp;·&nbsp; {new Date(r.timestamp).toLocaleTimeString()}
+                    </p>
+                  </div>
+
+                  {/* Strategy signal result */}
+                  {r.strategySignal && (
+                    <div className="bg-slate-800 rounded-lg p-3 text-xs">
+                      <p className="text-slate-400 font-semibold mb-1">Strategy Check (current candles)</p>
+                      <span className={`px-2 py-0.5 rounded font-bold ${r.strategySignal.action === 'ENTRY' ? 'bg-green-700/40 text-green-300' : 'bg-slate-700 text-slate-400'}`}>
+                        {r.strategySignal.action === 'ENTRY' ? `✓ ${r.strategySignal.type} Signal` : 'No Signal'}
+                      </span>
+                      {r.strategySignal.reason && <span className="ml-2 text-slate-500">{r.strategySignal.reason}</span>}
+                    </div>
+                  )}
+
+                  {/* SL/TP */}
+                  <div className="bg-slate-800 rounded-lg p-3">
+                    <p className="text-xs text-slate-400 font-semibold mb-2">SL / TP ({r.slSource})</p>
+                    <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                      <div><p className="text-slate-500">Spot</p><p className="text-white font-bold">₹{r.spot}</p></div>
+                      <div><p className="text-slate-500">SL Points</p><p className="text-red-400 font-bold">{r.slPoints}</p></div>
+                      <div><p className="text-slate-500">TP Points</p><p className="text-green-400 font-bold">{r.tpPoints}</p></div>
+                    </div>
+                  </div>
+
+                  {/* Option Contract — what the engine would actually order */}
+                  {r.optionInfo && (
+                    <div className="bg-slate-800 rounded-lg p-3 border border-slate-700">
+                      <p className="text-xs text-slate-400 font-semibold mb-2">
+                        🎯 Option Contract {r.tradeMode && <span className="ml-1 text-[10px] text-slate-500">({r.tradeMode} mode)</span>}
+                      </p>
+                      {r.optionInfo.error ? (
+                        <p className="text-xs text-orange-400">⚠️ {r.optionInfo.error}</p>
+                      ) : (
+                        <>
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="text-white font-mono text-sm bg-slate-900 px-2 py-1 rounded">
+                              {r.optionInfo.optionSymbol}
+                            </span>
+                            {r.optionInfo.expiry && (
+                              <span className="text-[10px] text-slate-400">expiry {r.optionInfo.expiry}</span>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                            {r.optionInfo.strike !== undefined && (
+                              <div><p className="text-slate-500">Strike</p><p className="text-white font-bold">{r.optionInfo.strike}</p></div>
+                            )}
+                            {r.optionInfo.premium !== undefined && (
+                              <div><p className="text-slate-500">Premium</p><p className="text-amber-300 font-bold">₹{r.optionInfo.premium}</p></div>
+                            )}
+                            {r.optionInfo.quantity !== undefined && (
+                              <div>
+                                <p className="text-slate-500">Quantity</p>
+                                <p className="text-white font-bold">
+                                  {r.optionInfo.quantity}
+                                  <span className="text-[10px] text-slate-500 ml-1">({r.optionInfo.lots}×{r.optionInfo.lotSize})</span>
+                                </p>
+                              </div>
+                            )}
+                            {r.optionInfo.capitalRequired !== undefined && (
+                              <div><p className="text-slate-500">Capital</p><p className="text-cyan-300 font-bold">₹{r.optionInfo.capitalRequired}</p></div>
+                            )}
+                          </div>
+                          {(r.optionInfo.bid !== undefined || r.optionInfo.ask !== undefined) && (
+                            <div className="mt-2 flex gap-3 text-[11px] text-slate-400">
+                              {r.optionInfo.bid !== undefined && <span>Bid: <b className="text-slate-300">₹{r.optionInfo.bid}</b></span>}
+                              {r.optionInfo.ask !== undefined && <span>Ask: <b className="text-slate-300">₹{r.optionInfo.ask}</b></span>}
+                            </div>
+                          )}
+                          <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-400">
+                            {r.optionInfo.projectedRisk !== undefined && (
+                              <span>Projected Risk: <b className="text-red-400">₹{r.optionInfo.projectedRisk}</b></span>
+                            )}
+                            {r.optionInfo.projectedReward !== undefined && (
+                              <span>Projected Reward: <b className="text-green-400">₹{r.optionInfo.projectedReward}</b></span>
+                            )}
+                          </div>
+                          {!r.optionInfo.premium && (
+                            <p className="mt-2 text-[11px] text-orange-400">
+                              ⚠️ Premium fetch returned 0 — symbol may not be subscribed/active. Capital/Risk in ₹ unavailable.
+                            </p>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* AI Result */}
+                  {r.aiEnabled && aiR && (
+                    <div className={`rounded-lg p-3 border text-xs ${aiR.decision === 'CONFIRM' ? 'bg-violet-900/20 border-violet-600/30' : 'bg-orange-900/20 border-orange-600/30'}`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-slate-300 font-semibold">🤖 AI Confirmation</p>
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-0.5 rounded font-bold ${aiR.decision === 'CONFIRM' ? 'bg-green-700/50 text-green-300' : 'bg-red-700/50 text-red-300'}`}>
+                            {aiR.decision}
+                          </span>
+                          <span className="text-slate-400">{((aiR.confidence || 0)).toFixed(0)}% conf</span>
+                        </div>
+                      </div>
+                      {aiR.reasoning && <p className="text-slate-400 leading-relaxed">{aiR.reasoning}</p>}
+                      {aiR.suggested_sl && (
+                        <div className="mt-2 flex gap-3 text-slate-400">
+                          <span>AI SL: <b className="text-red-400">₹{aiR.suggested_sl}</b></span>
+                          <span>AI TP: <b className="text-green-400">₹{aiR.suggested_tp}</b></span>
+                          {r.followAiSlTp
+                            ? <span className="text-violet-400">✓ SL/TP overridden to {r.slPoints}/{r.tpPoints} pts</span>
+                            : <span className="text-slate-500">SL/TP not overridden (Follow AI SL/TP off)</span>}
+                        </div>
+                      )}
+                      {aiR.watch_level && <p className="mt-1 text-slate-500">Watch level: ₹{aiR.watch_level}</p>}
+                    </div>
+                  )}
+                  {r.aiEnabled && !aiR && <p className="text-xs text-slate-500">AI confirmation returned no data.</p>}
+                  {!r.aiEnabled && <p className="text-xs text-slate-500 text-center">AI Risk Filter not enabled for this strategy.</p>}
+
+                  {/* Indicators */}
+                  <div className="bg-slate-800 rounded-lg p-3">
+                    <p className="text-xs text-slate-400 font-semibold mb-2">Indicators ({r.candleCount} × {r.resolution}m candles)</p>
+                    <div className="grid grid-cols-3 gap-x-4 gap-y-1 text-xs text-slate-300">
+                      {Object.entries(r.indicators).filter(([, v]) => v !== 0).map(([k, v]) => (
+                        <div key={k} className="flex justify-between">
+                          <span className="text-slate-500 uppercase text-[10px]">{k}</span>
+                          <span>{v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
       )}
     </div>
   );
