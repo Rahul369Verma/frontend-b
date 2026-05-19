@@ -36,6 +36,20 @@ export default function Dashboard() {
   const [tradesSearch, setTradesSearch] = useState("");
   const [tradesLimit, setTradesLimit] = useState(10);
 
+  // ── Live Activity Feed state ─────────────────────────────────────────────
+  // Unified timeline from /api/live-activity (trades + AI rejects/errors + engine errors).
+  // Polled every 8s when the section is expanded; paused when collapsed to save bandwidth.
+  const [activityEvents, setActivityEvents] = useState([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityFilters, setActivityFilters] = useState({
+    types: ['TRADE_ENTRY', 'TRADE_EXIT', 'AI_CONFIRM', 'AI_REJECT', 'AI_ERROR', 'ENGINE_ERROR'],
+    symbol: '',
+    strategy: '',
+    limit: 100,
+  });
+  const [activityExpanded, setActivityExpanded] = useState(true);
+  const [activityDetail, setActivityDetail] = useState(null);  // selected event for modal
+
   // Refs to track current pagination/search for socket listener (prevents stale closure)
   const tradesPageRef = React.useRef(1);
   const tradesSearchRef = React.useRef("");
@@ -196,6 +210,34 @@ export default function Dashboard() {
         socket.disconnect();
     };
   }, []);
+
+  // ── Live Activity Feed polling ───────────────────────────────────────────
+  // Pulls /api/live-activity every 8s while the section is expanded. Filters
+  // recompute the URL on each tick (acceptable — backend is bounded by limit).
+  useEffect(() => {
+    if (!activityExpanded) return;
+    let cancelled = false;
+    const fetchActivity = async () => {
+      try {
+        setActivityLoading(true);
+        const params = {
+          types: activityFilters.types.join(','),
+          limit: activityFilters.limit,
+        };
+        if (activityFilters.symbol)   params.symbol = activityFilters.symbol;
+        if (activityFilters.strategy) params.strategy = activityFilters.strategy;
+        const res = await axios.get(`${API_URL}/live-activity`, { params });
+        if (!cancelled) setActivityEvents(res.data?.events || []);
+      } catch (err) {
+        if (!cancelled) console.warn('[Activity] fetch failed:', err.message);
+      } finally {
+        if (!cancelled) setActivityLoading(false);
+      }
+    };
+    fetchActivity();
+    const iv = setInterval(fetchActivity, 8000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [activityExpanded, activityFilters.types, activityFilters.symbol, activityFilters.strategy, activityFilters.limit]);
 
   // Handlers for Option Chain Toggle
   const toggleOptionChain = () => {
@@ -514,6 +556,60 @@ export default function Dashboard() {
                                                 {Array.isArray(params.ai_models) ? params.ai_models.join(', ') : params.ai_models}
                                             </span>
                                         )}
+                                        {params.use_claude_web_session && (
+                                            <span
+                                                className="px-1.5 py-0.5 rounded bg-amber-700/40 text-amber-200"
+                                                title={
+                                                    `Model: ${params.claude_web_model || 'claude-web/claude-sonnet-4-6'}` +
+                                                    `\nSession key: ${params.claude_web_session_key ? 'set (' + String(params.claude_web_session_key).slice(0, 12) + '…)' : '⚠️ MISSING'}` +
+                                                    `\nOrg UUID: ${params.claude_web_org_id || 'auto-detect'}` +
+                                                    `\nBatch size: ${parseInt(params.claude_web_batch_size, 10) || 1}×`
+                                                }
+                                            >
+                                                🍪 Claude.ai Web (
+                                                {String(params.claude_web_model || 'sonnet').replace('claude-web/claude-', '')}
+                                                , batch {parseInt(params.claude_web_batch_size, 10) || 1}×
+                                                {!params.claude_web_session_key ? ' · ⚠️ no key' : ''}
+                                                )
+                                            </span>
+                                        )}
+                                        {params.use_gemini_web_session && (
+                                            <span
+                                                className="px-1.5 py-0.5 rounded bg-cyan-700/40 text-cyan-200"
+                                                title={
+                                                    `Model: ${params.gemini_web_model || 'gemini-web/gemini-2.5-pro'}` +
+                                                    `\n__Secure-1PSID: ${params.gemini_web_psid ? 'set (' + String(params.gemini_web_psid).slice(0, 12) + '…)' : '⚠️ MISSING'}` +
+                                                    `\n__Secure-1PSIDTS: ${params.gemini_web_psidts ? 'set (' + String(params.gemini_web_psidts).slice(0, 12) + '…)' : '⚠️ MISSING'}` +
+                                                    `\nBatch size: ${parseInt(params.gemini_web_batch_size, 10) || 1}×`
+                                                }
+                                            >
+                                                🍪 Gemini Web (
+                                                {String(params.gemini_web_model || 'pro').replace('gemini-web/gemini-', '')}
+                                                , batch {parseInt(params.gemini_web_batch_size, 10) || 1}×
+                                                {(!params.gemini_web_psid || !params.gemini_web_psidts) ? ' · ⚠️ no cookies' : ''}
+                                                )
+                                            </span>
+                                        )}
+                                        {params.claude_thinking_enabled && (
+                                            <span
+                                                className="px-1.5 py-0.5 rounded bg-orange-700/40 text-orange-200"
+                                                title={
+                                                    `Thinking budget: ${(parseInt(params.claude_thinking_budget, 10) || 32000).toLocaleString()} tokens` +
+                                                    `\nApplies to: Anthropic API + Claude.ai web (paprika_mode)` +
+                                                    `\nNote: temperature forced to 1.0 when thinking is on`
+                                                }
+                                            >
+                                                🧠 Thinking ({(parseInt(params.claude_thinking_budget, 10) || 32000).toLocaleString()})
+                                            </span>
+                                        )}
+                                        {params.ai_fail_closed && (
+                                            <span
+                                                className="px-1.5 py-0.5 rounded bg-red-700/40 text-red-200"
+                                                title="On AI timeout/error: REJECT the trade instead of falling back to threshold gate"
+                                            >
+                                                🛑 Fail-closed
+                                            </span>
+                                        )}
                                     </div>
                                 )}
 
@@ -522,8 +618,12 @@ export default function Dashboard() {
                                      {Object.entries(params).map(([key, val]) => {
                                          if (key === 'strategyName') return null; // Already in header
                                          // AI settings shown in the summary bar above — skip in grid
-                                         if (['enable_ai_confirmation','use_ai_confirmation','ai_follow_sl_tp','ai_enable_reentry',
-                                              'ai_confidence_threshold','ai_models','ai_follow_strategy_exits','ai_concurrency'].includes(key)) return null;
+                                         if (['enable_ai_confirmation','use_ai_confirmation','ai_follow_sl_tp','ai_follow_sl','ai_follow_tp','ai_enable_reentry',
+                                              'ai_confidence_threshold','ai_models','ai_follow_strategy_exits','ai_concurrency',
+                                              'use_claude_web_session','claude_web_session_key','claude_web_org_id','claude_web_model','claude_web_batch_size',
+                                              'use_gemini_web_session','gemini_web_psid','gemini_web_psidts','gemini_web_psidcc','gemini_web_model','gemini_web_batch_size',
+                                              'claude_thinking_enabled','claude_thinking_budget',
+                                              'ai_fail_closed'].includes(key)) return null;
 
                                          // Formatting Value
                                          let displayVal = val;
@@ -903,7 +1003,7 @@ export default function Dashboard() {
                   <span className="text-sm border border-slate-700 bg-slate-800 rounded px-4 py-1 font-mono text-slate-300">
                       Page {tradesPage} of {Math.max(1, Math.ceil(tradesTotal / tradesLimit))}
                   </span>
-                  <button 
+                  <button
                       disabled={tradesPage >= Math.ceil(tradesTotal / tradesLimit)}
                       onClick={() => setTradesPage(p => p + 1)}
                       className={`px-3 py-1 rounded text-sm font-medium ${tradesPage >= Math.ceil(tradesTotal / tradesLimit) ? 'bg-slate-800 text-slate-600 cursor-not-allowed' : 'bg-slate-700 hover:bg-slate-600 text-white'}`}
@@ -913,6 +1013,273 @@ export default function Dashboard() {
               </div>
           )}
        </div>
+
+      {/* ════════════════════════════════════════════════════════════════════ */}
+      {/* Live Activity Feed — unified timeline of trades + AI events + errors */}
+      {/* ════════════════════════════════════════════════════════════════════ */}
+      <div className="bg-surface rounded-xl border border-slate-700 p-6">
+          <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                  <h3 className="text-xl font-bold flex items-center gap-2">
+                      <Activity className="w-5 h-5 text-primary" /> Live Activity Feed
+                      {activityLoading && <span className="text-[10px] text-slate-500 font-normal">refreshing…</span>}
+                  </h3>
+                  <button
+                      onClick={() => setActivityExpanded(v => !v)}
+                      className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200"
+                      title={activityExpanded ? 'Pause polling (collapse)' : 'Resume polling'}
+                  >
+                      {activityExpanded ? 'Collapse' : 'Expand'}
+                  </button>
+              </div>
+              {activityExpanded && (
+                  <div className="flex items-center gap-2 flex-wrap text-xs">
+                      <input
+                          type="text"
+                          placeholder="Filter symbol (e.g. NSE:NIFTYBANK-INDEX)"
+                          value={activityFilters.symbol}
+                          onChange={e => setActivityFilters(f => ({ ...f, symbol: e.target.value }))}
+                          className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 w-56"
+                      />
+                      <input
+                          type="text"
+                          placeholder="Filter strategy"
+                          value={activityFilters.strategy}
+                          onChange={e => setActivityFilters(f => ({ ...f, strategy: e.target.value }))}
+                          className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 w-40"
+                      />
+                      <select
+                          value={activityFilters.limit}
+                          onChange={e => setActivityFilters(f => ({ ...f, limit: parseInt(e.target.value, 10) }))}
+                          className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200"
+                      >
+                          <option value={50}>50</option>
+                          <option value={100}>100</option>
+                          <option value={250}>250</option>
+                          <option value={500}>500</option>
+                      </select>
+                  </div>
+              )}
+          </div>
+
+          {activityExpanded && (
+              <>
+                  {/* Type chips — click to toggle */}
+                  <div className="flex gap-2 flex-wrap mb-4">
+                      {[
+                          { key: 'TRADE_ENTRY',  label: '🟢 Entry',     color: 'bg-emerald-700/40 text-emerald-200 border-emerald-700' },
+                          { key: 'TRADE_EXIT',   label: '💰 Exit',      color: 'bg-blue-700/40 text-blue-200 border-blue-700' },
+                          { key: 'AI_CONFIRM',   label: '✅ AI Confirm', color: 'bg-teal-700/40 text-teal-200 border-teal-700' },
+                          { key: 'AI_REJECT',    label: '🛑 AI Reject', color: 'bg-rose-700/40 text-rose-200 border-rose-700' },
+                          { key: 'AI_ERROR',     label: '⚠️ AI Error',  color: 'bg-amber-700/40 text-amber-200 border-amber-700' },
+                          { key: 'ENGINE_ERROR', label: '🔥 Engine Err', color: 'bg-red-700/40 text-red-200 border-red-700' },
+                      ].map(chip => {
+                          const active = activityFilters.types.includes(chip.key);
+                          return (
+                              <button
+                                  key={chip.key}
+                                  onClick={() => setActivityFilters(f => ({
+                                      ...f,
+                                      types: active
+                                          ? f.types.filter(t => t !== chip.key)
+                                          : [...f.types, chip.key],
+                                  }))}
+                                  className={`text-[11px] px-2 py-1 rounded border ${active ? chip.color : 'bg-slate-800 text-slate-500 border-slate-700'}`}
+                              >
+                                  {chip.label}
+                              </button>
+                          );
+                      })}
+                  </div>
+
+                  {/* Event timeline */}
+                  <div className="overflow-x-auto rounded-lg border border-slate-800">
+                      <table className="w-full text-sm">
+                          <thead className="bg-slate-900/50 text-slate-400 text-[11px] uppercase tracking-wider">
+                              <tr>
+                                  <th className="p-2 text-left w-32">When</th>
+                                  <th className="p-2 text-left w-32">Type</th>
+                                  <th className="p-2 text-left">Symbol</th>
+                                  <th className="p-2 text-left">Strategy</th>
+                                  <th className="p-2 text-left">Side</th>
+                                  <th className="p-2 text-right">PnL / Conf</th>
+                                  <th className="p-2 text-left">Detail</th>
+                                  <th className="p-2 text-right w-16"></th>
+                              </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800">
+                              {activityEvents.length === 0 && !activityLoading && (
+                                  <tr>
+                                      <td colSpan={8} className="p-6 text-center text-slate-500 italic">
+                                          No activity in the selected window.
+                                      </td>
+                                  </tr>
+                              )}
+                              {activityEvents.map((ev, i) => {
+                                  const ts = new Date(ev.timestamp);
+                                  const tsStr = ts.toLocaleString('en-IN', { hour12: false });
+                                  let typeBadge, rowTone, pnlOrConf, detail;
+                                  if (ev.type === 'TRADE_ENTRY') {
+                                      typeBadge = <span className="px-1.5 py-0.5 rounded bg-emerald-700/40 text-emerald-200">🟢 ENTRY</span>;
+                                      rowTone = '';
+                                      pnlOrConf = ev.ai_confidence != null ? `AI ${(ev.ai_confidence * 100).toFixed(0)}%` : '—';
+                                      detail = (
+                                          <span className="text-slate-400 text-xs">
+                                              @ ₹{ev.price?.toFixed?.(2) ?? ev.price} · qty {ev.quantity ?? '?'} · {ev.reason || '—'}
+                                          </span>
+                                      );
+                                  } else if (ev.type === 'TRADE_EXIT') {
+                                      typeBadge = <span className="px-1.5 py-0.5 rounded bg-blue-700/40 text-blue-200">💰 EXIT</span>;
+                                      const pnl = ev.pnl || 0;
+                                      rowTone = pnl > 0 ? 'hover:bg-emerald-950/30' : (pnl < 0 ? 'hover:bg-rose-950/30' : '');
+                                      pnlOrConf = (
+                                          <span className={`font-mono font-bold ${pnl > 0 ? 'text-emerald-400' : pnl < 0 ? 'text-rose-400' : 'text-slate-300'}`}>
+                                              {pnl > 0 ? '+' : ''}₹{Math.round(pnl).toLocaleString()}
+                                          </span>
+                                      );
+                                      detail = (
+                                          <span className="text-slate-400 text-xs">
+                                              {ev.entryPrice?.toFixed?.(2)} → {ev.exitPrice?.toFixed?.(2)} · {ev.reason || '—'}
+                                          </span>
+                                      );
+                                  } else if (ev.type === 'AI_CONFIRM') {
+                                      typeBadge = <span className="px-1.5 py-0.5 rounded bg-teal-700/40 text-teal-200">✅ AI CONFIRM</span>;
+                                      rowTone = 'hover:bg-teal-950/20';
+                                      pnlOrConf = ev.ai_confidence != null
+                                          ? <span className="font-mono text-teal-300">{(ev.ai_confidence * 100).toFixed(0)}%</span>
+                                          : '—';
+                                      detail = (
+                                          <span className="text-teal-300/80 text-xs italic">
+                                              {ev.ai_reasoning?.slice(0, 100) || '(no reasoning)'}
+                                              {ev.ai_suggested_sl && ev.ai_suggested_tp ? (
+                                                  <span className="ml-2 text-slate-500 not-italic">
+                                                      · SL {ev.ai_suggested_sl} / TP {ev.ai_suggested_tp}
+                                                  </span>
+                                              ) : null}
+                                          </span>
+                                      );
+                                  } else if (ev.type === 'AI_REJECT') {
+                                      typeBadge = <span className="px-1.5 py-0.5 rounded bg-rose-700/40 text-rose-200">🛑 AI REJECT</span>;
+                                      rowTone = 'hover:bg-rose-950/20';
+                                      pnlOrConf = ev.ai_confidence != null ? `${(ev.ai_confidence * 100).toFixed(0)}%` : '—';
+                                      detail = (
+                                          <span className="text-rose-300/80 text-xs italic">
+                                              {ev.ai_reasoning || '(no reasoning)'}
+                                          </span>
+                                      );
+                                  } else if (ev.type === 'AI_ERROR') {
+                                      typeBadge = <span className="px-1.5 py-0.5 rounded bg-amber-700/40 text-amber-200">⚠️ AI ERR</span>;
+                                      rowTone = 'hover:bg-amber-950/20';
+                                      pnlOrConf = ev.elapsed_ms ? `${(ev.elapsed_ms / 1000).toFixed(0)}s` : '—';
+                                      detail = (
+                                          <span className="text-amber-300/80 text-xs">
+                                              [{ev.failure_type}] {ev.ai_reasoning?.slice(0, 80) || '(no detail)'}
+                                          </span>
+                                      );
+                                  } else if (ev.type === 'ENGINE_ERROR') {
+                                      typeBadge = <span className="px-1.5 py-0.5 rounded bg-red-700/40 text-red-200">🔥 {ev.category || 'ERR'}</span>;
+                                      rowTone = 'hover:bg-red-950/20';
+                                      pnlOrConf = ev.severity === 'critical' ? <span className="text-red-300 font-bold">CRITICAL</span> : '—';
+                                      detail = (
+                                          <span className="text-red-300/80 text-xs">
+                                              {(ev.message || '').slice(0, 100)}
+                                          </span>
+                                      );
+                                  }
+                                  return (
+                                      <tr key={i} className={`text-slate-300 ${rowTone}`}>
+                                          <td className="p-2 font-mono text-[11px] text-slate-400 whitespace-nowrap">{tsStr}</td>
+                                          <td className="p-2 text-[11px]">{typeBadge}</td>
+                                          <td className="p-2 text-xs truncate max-w-[180px]" title={ev.symbol || ''}>{ev.symbol || '—'}</td>
+                                          <td className="p-2 text-xs text-slate-400 truncate max-w-[140px]" title={ev.strategyName || ''}>{ev.strategyName || '—'}</td>
+                                          <td className="p-2 text-xs">{ev.side || '—'}</td>
+                                          <td className="p-2 text-right text-xs">{pnlOrConf}</td>
+                                          <td className="p-2">{detail}</td>
+                                          <td className="p-2 text-right">
+                                              <button
+                                                  onClick={() => setActivityDetail(ev)}
+                                                  className="text-[10px] px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-300"
+                                              >
+                                                  view
+                                              </button>
+                                          </td>
+                                      </tr>
+                                  );
+                              })}
+                          </tbody>
+                      </table>
+                  </div>
+
+                  <p className="text-[10px] text-slate-500 mt-2">
+                      Auto-refreshes every 8s. Engine errors and AI logs retained for 30 days (TTL). Trade history persists indefinitely.
+                  </p>
+              </>
+          )}
+      </div>
+
+      {/* Activity Detail Modal */}
+      {activityDetail && (
+          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={() => setActivityDetail(null)}>
+              <div className="bg-surface border border-slate-600 rounded-xl w-full max-w-2xl max-h-[80vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+                  <div className="p-4 border-b border-slate-700 flex justify-between items-center">
+                      <h3 className="font-bold text-white">
+                          {activityDetail.type} · {activityDetail.symbol || '—'}
+                      </h3>
+                      <button onClick={() => setActivityDetail(null)} className="text-slate-400 hover:text-white text-xl">×</button>
+                  </div>
+                  <div className="p-4">
+                      <pre className="text-xs text-slate-300 bg-slate-900 p-3 rounded overflow-x-auto whitespace-pre-wrap break-words">
+                          {JSON.stringify(activityDetail, null, 2)}
+                      </pre>
+                      {/* Prompt-rebuild button — works for any event that has a log_id
+                          (AI events) OR an ai_job_id (TRADE_ENTRY events with AI metadata).
+                          For TRADE_ENTRY we look up the live_ai_log by job_id first, then
+                          rebuild the prompt from the saved signalContext. */}
+                      {(activityDetail.log_id || activityDetail.ai_job_id) && (
+                          <button
+                              onClick={async () => {
+                                  try {
+                                      let logId = activityDetail.log_id;
+                                      if (!logId && activityDetail.ai_job_id) {
+                                          const lookup = await axios.get(`${API_URL}/live-ai-logs`, {
+                                              params: { job_id: activityDetail.ai_job_id, limit: 1 },
+                                          });
+                                          logId = lookup.data?.logs?.[0]?._id;
+                                          if (!logId) {
+                                              alert('No live_ai_log found for this trade (job_id=' + activityDetail.ai_job_id + ')');
+                                              return;
+                                          }
+                                      }
+                                      const r = await axios.get(`${API_URL}/live-ai-logs/${logId}/prompt`);
+                                      // Open in a new window for readability instead of alert()
+                                      const w = window.open('', '_blank');
+                                      if (w) {
+                                          w.document.write(
+                                              '<html><head><title>AI Prompt</title>' +
+                                              '<style>body{background:#0f172a;color:#e2e8f0;font-family:monospace;padding:24px;white-space:pre-wrap;word-wrap:break-word;font-size:13px;line-height:1.5}h2{color:#a78bfa;margin-top:0}</style>' +
+                                              '</head><body><h2>AI Prompt (Model: ' + (r.data.model || 'unknown') + ')</h2>' +
+                                              (r.data.thinking_enabled ? '<p style="color:#fbbf24">🧠 Extended thinking was enabled</p>' : '') +
+                                              '<hr style="border:1px solid #334155"/>' +
+                                              (r.data?.prompt || '(empty)').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') +
+                                              '</body></html>'
+                                          );
+                                          w.document.close();
+                                      } else {
+                                          alert(r.data?.prompt || 'No prompt available');
+                                      }
+                                  } catch (e) {
+                                      alert('Failed to rebuild prompt: ' + (e.response?.data?.error || e.message));
+                                  }
+                              }}
+                              className="mt-3 px-3 py-1.5 rounded bg-violet-700 hover:bg-violet-600 text-white text-xs"
+                          >
+                              📋 View AI prompt that was sent
+                          </button>
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
 
       {/* TRADE CONFIRMATION MODAL */}
       {previewModal.isOpen && (

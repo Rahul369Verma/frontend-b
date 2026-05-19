@@ -25,8 +25,24 @@ export function GlobalProvider({ children }) {
     max_daily_loss: 2000,
     max_trades_per_day: 10,
     ai_enable_reentry: true,
+    // Legacy combined flag kept for back-compat — superseded by ai_follow_sl + ai_follow_tp.
     ai_follow_sl_tp: true,
+    // New: follow AI-suggested SL and TP independently.
+    ai_follow_sl: true,
+    ai_follow_tp: true,
     ai_follow_strategy_exits: false,
+    // Claude.ai web session — serial by default; user can raise via slider.
+    claude_web_batch_size: 1,
+    // Gemini web session — same defaults as Claude.
+    gemini_web_batch_size: 1,
+    // Claude Extended Thinking — off by default; budget defaults to 32k tokens (max effort)
+    // when the toggle is flipped on. Applies to both Anthropic API + Claude.ai web models.
+    claude_thinking_enabled: false,
+    claude_thinking_budget: 32000,
+    // Live engine fail-closed flag — when true, AI errors/timeouts return REJECT
+    // (skip the trade) instead of the historical fail-open CONFIRM (which was
+    // misleading on Telegram and only gated by the confidence threshold).
+    ai_fail_closed: false,
   });
   const [backtestResult, setBacktestResult] = useState(null);
 

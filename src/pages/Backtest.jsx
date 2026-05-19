@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Play, Activity, ChevronDown, ChevronUp, Bot, Copy, Check } from 'lucide-react';
+import { Play, Activity, ChevronDown, ChevronUp, Bot, Copy, Check, Square } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useGlobalState } from '../context/GlobalContext';
 
@@ -18,6 +18,7 @@ const FALLBACK_GEMINI_MODELS = [
     { id: 'gemini-3-flash-preview',         label: 'Gemini 3 Flash Preview ⭐',  quota: '1.5K/day', group: '⭐ Recommended (1.5K RPD + JSON)' },
     { id: 'gemini-3.1-flash-lite-preview',  label: 'Gemini 3.1 Flash Lite ⭐',   quota: '1.5K/day', group: '⭐ Recommended (1.5K RPD + JSON)' },
     { id: 'gemini-2.5-flash',               label: 'Gemini 2.5 Flash ⭐',        quota: '1.5K/day', group: '⭐ Recommended (1.5K RPD + JSON)' },
+    { id: 'gemini-2.5-flash-lite',          label: 'Gemini 2.5 Flash Lite',      quota: '1K/day',   group: '✨ Gemini 2.5' },
     { id: 'gemma-4-31b-it',                 label: 'Gemma 4 31B IT',             quota: '132/day',  group: '🔥 Gemma 4 (verbose JSON)' },
     { id: 'claude-haiku-4-5-20251001',      label: 'Claude Haiku 4.5 ⚡',        quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
     { id: 'claude-sonnet-4-6',              label: 'Claude Sonnet 4.6 ⭐',       quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
@@ -39,6 +40,51 @@ function modelGroupFor(id) {
     return '📦 Other';
 }
 
+// Compact label + vendor-colour for the per-trade "Model" column.
+// Strips common prefixes so badges fit a narrow column while keeping the full ID in tooltip.
+function modelBadgeFor(id) {
+    if (!id) return null;
+    if (id === 'auto-confirmed (signal cap)') {
+        return { short: 'auto-cap', cls: 'italic text-slate-500', vendor: 'auto' };
+    }
+    if (id.startsWith('claude-web/')) {
+        return {
+            short: `${id.replace('claude-web/claude-', '')} 🍪`,
+            cls: 'bg-amber-900/40 text-amber-200',
+            vendor: 'claude-web',
+        };
+    }
+    if (id.startsWith('gemini-web/')) {
+        return {
+            short: `${id.replace('gemini-web/gemini-', '')} 🍪`,
+            cls: 'bg-cyan-900/40 text-cyan-200',
+            vendor: 'gemini-web',
+        };
+    }
+    if (id.startsWith('claude-')) {
+        return {
+            short: id.replace('claude-', '').replace(/-\d{8}$/, ''),
+            cls: 'bg-orange-900/40 text-orange-200',
+            vendor: 'anthropic',
+        };
+    }
+    if (id.startsWith('gemma-')) {
+        return {
+            short: id.replace('gemma-', ''),
+            cls: 'bg-green-900/40 text-green-200',
+            vendor: 'gemma',
+        };
+    }
+    if (id.startsWith('gemini-')) {
+        return {
+            short: id.replace('gemini-', ''),
+            cls: 'bg-sky-900/40 text-sky-200',
+            vendor: 'google',
+        };
+    }
+    return { short: id, cls: 'bg-slate-800 text-slate-300', vendor: 'other' };
+}
+
 export default function Backtest() {
   const { backtestParams: params, setBacktestParams: setParams, backtestResult: result, setBacktestResult: setResult } = useGlobalState();
   const location = useLocation();
@@ -53,6 +99,11 @@ export default function Backtest() {
   const [marketTimings, setMarketTimings] = useState({});
   const [expiryDates, setExpiryDates] = useState([]); // For Futures Expiry Selection
   const [aiPanelOpen, setAiPanelOpen] = useState(true);
+  // Backtest cancellation: jobId set on /engine/backtest/run response, AbortController
+  // gates the axios call so the browser side aborts immediately on Stop click.
+  const [backtestJobId, setBacktestJobId] = useState(null);
+  const backtestAbortRef = useRef(null);
+  const [stopping, setStopping] = useState(false);
   const [aiJobId, setAiJobId] = useState(null);
   const [aiPolling, setAiPolling] = useState(false);
   const aiPollActiveJobRef = useRef(null); // prevents duplicate poll loops (StrictMode / HMR)
@@ -60,23 +111,36 @@ export default function Backtest() {
   const [showSpotView, setShowSpotView] = useState(false);
   const [showAiSim, setShowAiSim] = useState(false);
   const [backtestResultId, setBacktestResultId] = useState(null);
-  // Server-calculated accurate AI resim: Map of tradeIdx → { ai_pnl, ai_exit }
-  const [aiResimMap, setAiResimMap] = useState(null);
-  // Alternative resim with the opposite followAiSlTp setting (populated on demand)
-  const [aiResimAltMap, setAiResimAltMap] = useState(null);
-  const [aiResimAltLoading, setAiResimAltLoading] = useState(false);
-  // 'main' = use aiResimMap (matches params setting), 'alt' = use aiResimAltMap
-  const [aiSlTpView, setAiSlTpView] = useState('main');
+  // Cache of resims keyed by mode. Modes:
+  //   'strategy' = strategy SL + strategy TP (no AI levels)
+  //   'ai_sl'    = AI SL + strategy TP
+  //   'ai_tp'    = strategy SL + AI TP
+  //   'ai_both'  = AI SL + AI TP
+  const [resimVariants, setResimVariants] = useState({}); // { mode: Map<tradeIdx, simTrade> }
+  const [resimVariantLoading, setResimVariantLoading] = useState(null);
+  // Active view shown on the equity chart and trade table
+  const [aiSlTpView, setAiSlTpView] = useState('ai_both');
+  // Derived: existing renders read `aiResimMap`; point it at the active variant.
+  const aiResimMap = resimVariants[aiSlTpView] || null;
+  // Setter wrapper so the initial resim (runAccurateResim) can stash its result by mode key.
+  const setAiResimMap = useCallback((map, modeKey) => {
+    if (!modeKey) return;
+    setResimVariants(prev => ({ ...prev, [modeKey]: map }));
+  }, []);
+  // Legacy alt map — no longer used; kept null so old references don't error.
+  const aiResimAltMap = null;
+  const aiResimAltLoading = false;
   // Preserved AI decisions for on-demand alt resim (populated when AI job completes)
   const allAiDecisionsRef = useRef({});
   // Re-entry second AI pass
-  const [aiReentryJobId, setAiReentryJobId] = useState(null);
+  const [aiReentryJobId, setAiReentryJobId] = useState(null); // Latest loop's job id (for cancel)
   const [aiReentryPolling, setAiReentryPolling] = useState(false);
   const [aiReentryProgress, setAiReentryProgress] = useState({ done: 0, total: 0 });
-  // Maps position-in-reentry-signals-array → original trade index (set when job starts)
-  const [aiReentryIndexMap, setAiReentryIndexMap] = useState([]);
+  // Current loop in the re-entry chain (1..MAX_REENTRY_LOOPS). 0 = not running.
+  const [aiReentryLoopNum, setAiReentryLoopNum] = useState(0);
   // Re-entry Black-Scholes resim results: Map<tradeIdx, {exit_time, exit_spot, exit_pnl, exit_reason, entry_time, entry_spot}>
   const [aiReentryResimMap, setAiReentryResimMap] = useState(null);
+  const MAX_REENTRY_LOOPS = 5;
   // Prompt copy feedback: key = 'first_<idx>' or 'reentry_<idx>', value = 'copying'|'done'|'error'
   const [promptCopyState, setPromptCopyState] = useState({});
 
@@ -91,7 +155,8 @@ export default function Backtest() {
     const allPnl = trades.reduce((s, t) => s + (t.pnl || 0), 0);
     const startBal = (result.finalBalance || 0) - allPnl;
 
-    const activeResimMap = aiSlTpView === 'alt' ? aiResimAltMap : aiResimMap;
+    // aiResimMap is already a derived view (resimVariants[aiSlTpView]).
+    const activeResimMap = aiResimMap;
     const simTrades = trades.map((trade, idx) => {
       const serverSim = activeResimMap?.get(idx);
       if (serverSim) {
@@ -112,10 +177,15 @@ export default function Backtest() {
       return { ...trade, ai_sim_exit: null, ai_sim_pnl: trade.pnl };
     });
 
+    // `simTrades` is in DISPLAY order (newest first, mirroring the table).
+    // The equity curve must be CHRONOLOGICAL (oldest → newest) so it matches
+    // `result.equityCurve` shape used in the Strategy-only view. Reverse before
+    // accumulating so T1 = oldest trade, T46 = newest.
+    const chronoTrades = [...simTrades].reverse();
     let origBal = startBal, aiBal = startBal;
-    const curve = simTrades.map((t, idx) => {
-      origBal += trades[idx].pnl;
-      aiBal += t.ai_sim_pnl;
+    const curve = chronoTrades.map((t, idx) => {
+      origBal += (t.pnl || 0);
+      aiBal   += (t.ai_sim_pnl || 0);
       return { t: idx + 1, date: t.exitTime, original: +origBal.toFixed(2), ai_sim: +aiBal.toFixed(2) };
     });
 
@@ -155,35 +225,75 @@ export default function Backtest() {
       maxDrawdown: +maxDD.toFixed(1),
       sharpe,
     };
-  }, [result, showAiSim, aiResimMap, aiResimAltMap, aiSlTpView]);
+  }, [result, showAiSim, aiResimMap, aiSlTpView]);
 
-  // Run the alt resim on demand (opposite followAiSlTp to the one used for the main resim)
-  const runAltResim = async () => {
-    if (aiResimAltMap || aiResimAltLoading || !backtestResultId) return;
+  // Map a view mode to the (followAiSl, followAiTp) flags the server expects.
+  const _modeToFlags = (mode) => ({
+    strategy: { followAiSl: false, followAiTp: false },
+    ai_sl:    { followAiSl: true,  followAiTp: false },
+    ai_tp:    { followAiSl: false, followAiTp: true  },
+    ai_both:  { followAiSl: true,  followAiTp: true  },
+  }[mode] || { followAiSl: true, followAiTp: true });
+
+  // Fetch a resim variant for a given mode and cache it. Used both by the initial
+  // resim (right after AI completes) and by the chart view-toggle buttons.
+  const fetchResimVariant = async (mode) => {
+    if (resimVariants[mode] || resimVariantLoading === mode || !backtestResultId) return;
     const decisions = allAiDecisionsRef.current;
     if (!Object.keys(decisions).length) return;
-    setAiResimAltLoading(true);
+    setResimVariantLoading(mode);
     try {
-      const mainFollowAiSlTp = params?.ai_follow_sl_tp !== false;
-      const altFollowAiSlTp  = !mainFollowAiSlTp; // opposite of current setting
+      const flags = _modeToFlags(mode);
       const followStrategyExits = params?.ai_follow_strategy_exits === true;
       const totalTrades = result?.trades?.length ?? 0;
       const chronIdx = (displayIdx) => totalTrades - 1 - displayIdx;
+      // For pure-strategy mode, include any CONFIRMed decision (we still want to plot
+      // the strategy outcome on the AI-confirmed subset). For AI-side modes, include
+      // decisions that have the AI level on that side.
       const aiDecisions = Object.entries(decisions)
-        .filter(([, d]) => altFollowAiSlTp ? (d.suggested_sl && d.suggested_tp) : d.decision === 'CONFIRM')
-        .map(([ci, d]) => ({ tradeIdx: chronIdx(parseInt(ci)), suggested_sl: d.suggested_sl, suggested_tp: d.suggested_tp }));
-      if (!aiDecisions.length) { setAiResimAltLoading(false); return; }
+        .filter(([, d]) => {
+          if (mode === 'strategy') return d.decision === 'CONFIRM';
+          if (mode === 'ai_sl')    return d.decision === 'CONFIRM' && d.suggested_sl;
+          if (mode === 'ai_tp')    return d.decision === 'CONFIRM' && d.suggested_tp;
+          return d.decision === 'CONFIRM' && d.suggested_sl && d.suggested_tp;
+        })
+        .map(([ci, d]) => ({
+          tradeIdx: chronIdx(parseInt(ci)),
+          suggested_sl: d.suggested_sl,
+          suggested_tp: d.suggested_tp,
+        }));
+      if (!aiDecisions.length) {
+        setResimVariantLoading(null);
+        return;
+      }
       const res = await axios.post(`${API_URL}/backtest/ai-resim`, {
-        resultId: backtestResultId, aiDecisions, followAiSlTp: altFollowAiSlTp, followStrategyExits,
+        resultId: backtestResultId,
+        aiDecisions,
+        followAiSl: flags.followAiSl,
+        followAiTp: flags.followAiTp,
+        followStrategyExits,
       });
       const map = new Map();
       for (const s of res.data.simTrades) map.set(s.tradeIdx, s);
-      setAiResimAltMap(map);
+      setResimVariants(prev => ({ ...prev, [mode]: map }));
     } catch (err) {
-      console.error('Alt AI resim failed:', err.message);
+      console.error(`Resim mode ${mode} failed:`, err.message);
     } finally {
-      setAiResimAltLoading(false);
+      setResimVariantLoading(null);
     }
+  };
+
+  // Click handler for the chart view-toggle buttons.
+  const selectResimView = async (mode) => {
+    setAiSlTpView(mode);
+    if (!resimVariants[mode]) await fetchResimVariant(mode);
+  };
+
+  // Back-compat shim — old `runAltResim` call sites still exist; redirect to new system.
+  const runAltResim = async () => {
+    const current = aiSlTpView;
+    const next = current === 'ai_both' ? 'strategy' : 'ai_both';
+    await selectResimView(next);
   };
 
   useEffect(() => {
@@ -444,28 +554,38 @@ export default function Backtest() {
   const runBacktest = async () => {
     setLoading(true);
     setResult(null);
+    setBacktestJobId(null);
+    setStopping(false);
     setAiJobId(null);
     setAiPolling(false);
     setAiProgress({ done: 0, total: 0 });
     setShowAiSim(false);
     setBacktestResultId(null);
-    setAiResimMap(null);
-    setAiResimAltMap(null);
-    setAiSlTpView('main');
+    setResimVariants({});
+    setResimVariantLoading(null);
+    setAiSlTpView('ai_both');
     allAiDecisionsRef.current = {};
     setAiReentryJobId(null);
     setAiReentryPolling(false);
     setAiReentryProgress({ done: 0, total: 0 });
-    setAiReentryIndexMap([]);
+    setAiReentryLoopNum(0);
     setAiReentryResimMap(null);
+
+    const aborter = new AbortController();
+    backtestAbortRef.current = aborter;
+
     try {
       const cleanParams = preparePayload(params);
-      const res = await axios.post(`${API_URL}/engine/backtest/run`, cleanParams);
-      if (res.data.error) {
+      const res = await axios.post(`${API_URL}/engine/backtest/run`, cleanParams, { signal: aborter.signal });
+      if (res.data.cancelled) {
+        // Server confirmed clean cancel — no error, just bail.
+        setResult(null);
+      } else if (res.data.error) {
         alert("Backtest Error: " + res.data.error);
         setResult(null);
       } else {
         setResult(res.data);
+        if (res.data.backtest_job_id) setBacktestJobId(res.data.backtest_job_id);
         if (res.data.resultId) setBacktestResultId(res.data.resultId);
         if (res.data.ai_job_id) {
           setAiJobId(res.data.ai_job_id);
@@ -473,9 +593,44 @@ export default function Backtest() {
         }
       }
     } catch (err) {
-      alert("Backtest failed: " + err.message);
+      // Don't alert on user-initiated cancel.
+      if (axios.isCancel(err) || err.name === 'CanceledError' || err.name === 'AbortError') {
+        setResult(null);
+      } else {
+        alert("Backtest failed: " + err.message);
+      }
     } finally {
+      backtestAbortRef.current = null;
+      setBacktestJobId(null);
+      setStopping(false);
       setLoading(false);
+    }
+  };
+
+  const stopBacktest = async () => {
+    if (stopping) return;
+    setStopping(true);
+    // 1. Tell the server to abort the engine loop (also cancels the AI confirmation job server-side).
+    if (backtestJobId) {
+      try { await axios.post(`${API_URL}/engine/backtest/cancel/${backtestJobId}`); }
+      catch (_) { /* server may have just finished — ignore */ }
+    }
+    // 2. Belt-and-braces: cancel AI confirmation directly in case the run/response already returned an ai_job_id.
+    if (aiJobId) {
+      try { await axios.post(`${API_URL}/ai-confirmation/cancel/${aiJobId}`); }
+      catch (_) {}
+    }
+    // 3. Cancel any in-flight re-entry pass too.
+    if (aiReentryJobId) {
+      try { await axios.post(`${API_URL}/ai-confirmation/cancel/${aiReentryJobId}`); }
+      catch (_) {}
+    }
+    // 4. Stop frontend polling immediately so the UI reflects the cancel.
+    setAiPolling(false);
+    setAiReentryPolling(false);
+    // 5. Abort the axios POST itself — also kicks runBacktest's finally block.
+    if (backtestAbortRef.current) {
+      backtestAbortRef.current.abort();
     }
   };
 
@@ -527,62 +682,221 @@ export default function Backtest() {
     };
 
     // After all AI decisions arrive, ask Node to re-simulate using Black-Scholes.
-    // Uses allDecisions (full set), not a single poll's delta.
+    // The user's `ai_follow_sl` / `ai_follow_tp` checkbox state determines the initial
+    // view mode; other modes are computed lazily when the user clicks the chart toggle.
     const runAccurateResim = async (decisions, resultId) => {
       try {
-        // Persist decisions for on-demand alt resim toggle
         allAiDecisionsRef.current = decisions;
-        const followAiSlTp = params?.ai_follow_sl_tp !== false;
+        const followAiSl = params?.ai_follow_sl !== false;
+        const followAiTp = params?.ai_follow_tp !== false;
         const followStrategyExits = params?.ai_follow_strategy_exits === true;
+        const initialMode = (followAiSl && followAiTp) ? 'ai_both'
+                          : (followAiSl && !followAiTp) ? 'ai_sl'
+                          : (!followAiSl && followAiTp) ? 'ai_tp'
+                          : 'strategy';
+        setAiSlTpView(initialMode);
         const aiDecisions = Object.entries(decisions)
-          .filter(([, d]) => followAiSlTp ? (d.suggested_sl && d.suggested_tp) : d.decision === 'CONFIRM')
-          .map(([ci, d]) => ({ tradeIdx: chronIdx(parseInt(ci)), suggested_sl: d.suggested_sl, suggested_tp: d.suggested_tp }));
+          .filter(([, d]) => {
+            if (initialMode === 'strategy') return d.decision === 'CONFIRM';
+            if (initialMode === 'ai_sl')    return d.decision === 'CONFIRM' && d.suggested_sl;
+            if (initialMode === 'ai_tp')    return d.decision === 'CONFIRM' && d.suggested_tp;
+            return d.decision === 'CONFIRM' && d.suggested_sl && d.suggested_tp;
+          })
+          .map(([ci, d]) => ({
+            tradeIdx: chronIdx(parseInt(ci)),
+            suggested_sl: d.suggested_sl,
+            suggested_tp: d.suggested_tp,
+          }));
         if (!aiDecisions.length) return;
-        const res = await axios.post(`${API_URL}/backtest/ai-resim`, { resultId, aiDecisions, followAiSlTp, followStrategyExits });
+        const res = await axios.post(`${API_URL}/backtest/ai-resim`, {
+          resultId, aiDecisions,
+          followAiSl, followAiTp,
+          followStrategyExits,
+        });
         const map = new Map();
         for (const s of res.data.simTrades) map.set(s.tradeIdx, s);
-        setAiResimMap(map);
+        setResimVariants(prev => ({ ...prev, [initialMode]: map }));
       } catch (err) {
         console.error('AI resim failed:', err.message);
       }
     };
 
-    const triggerReentryFlow = async (decisions, resultId) => {
-      try {
-        const candidates = Object.entries(decisions)
-          .filter(([, d]) => d.reentry_suggested && d.reentry_level && d.decision === 'REJECT')
-          .map(([ci, d]) => ({
-            tradeIdx: chronIdx(parseInt(ci)),
+    // Runs ONE re-entry loop: fetch touch contexts → start AI → poll to completion →
+    // apply decisions → resim CONFIRMs → return candidates for the next loop.
+    // Returns [] when no further loops should run for any trade.
+    const runReentryLoop = async (candidates, loopNum, resultId, aiModels, aiConcurrency) => {
+      const ctxRes = await axios.post(`${API_URL}/backtest/reentry-contexts`, {
+        resultId, candidates, loopNum, aiModels, aiConcurrency,
+        claude_web_session_key: params?.claude_web_session_key || null,
+        claude_web_org_id: params?.claude_web_org_id || null,
+        claude_web_batch_size: parseInt(params?.claude_web_batch_size, 10) || 1,
+        gemini_web_psid: params?.gemini_web_psid || null,
+        gemini_web_psidts: params?.gemini_web_psidts || null,
+        gemini_web_psidcc: params?.gemini_web_psidcc || null,
+        gemini_web_batch_size: parseInt(params?.gemini_web_batch_size, 10) || 1,
+        claude_thinking_enabled: !!params?.claude_thinking_enabled,
+        claude_thinking_budget: parseInt(params?.claude_thinking_budget, 10) || 32000,
+      });
+      const { job_id, found, touched_data = [] } = ctxRes.data;
+      const touchedSet = new Set(touched_data.map(t => t.tradeIdx));
+
+      // Mark touched / not-reached on the trades for this loop
+      setResult(prev => {
+        if (!prev) return prev;
+        const updatedTrades = (prev.trades || []).map((trade, idx) => {
+          const td = touched_data.find(t => t.tradeIdx === idx);
+          if (td) {
+            return {
+              ...trade,
+              ai_reentry_entry_time: td.touchTime,
+              ai_reentry_entry_price: td.touchPrice,
+              ai_reentry_level_reached: true,
+              ai_reentry_loop: loopNum,
+            };
+          }
+          const isCandidate = candidates.some(c => c.tradeIdx === idx);
+          if (isCandidate && !touchedSet.has(idx)) {
+            return { ...trade, ai_reentry_level_reached: false };
+          }
+          return trade;
+        });
+        return { ...prev, trades: updatedTrades };
+      });
+
+      if (!job_id || !found) return [];
+
+      setAiReentryJobId(job_id);
+      setAiReentryProgress({ done: 0, total: found });
+
+      // Poll until AI job completes (await internally)
+      const decisions = await new Promise((resolve, reject) => {
+        const pollOnce = async () => {
+          try {
+            const res = await axios.get(`${API_URL}/ai-confirmation/status/${job_id}`);
+            const { status, decisions: d = {}, done = 0, total = 0 } = res.data;
+            setAiReentryProgress({ done, total });
+            if (status === 'complete') return resolve(d);
+            if (status === 'error')    return reject(new Error('AI job failed'));
+            setTimeout(pollOnce, 2500);
+          } catch (err) {
+            console.error('Re-entry poll error:', err.message);
+            setTimeout(pollOnce, 6000);
+          }
+        };
+        pollOnce();
+      });
+
+      // Apply decisions + maintain a per-trade `ai_reentry_attempts` chain
+      setResult(prev => {
+        if (!prev) return prev;
+        const updatedTrades = (prev.trades || []).map((trade, idx) => {
+          if (!touchedSet.has(idx)) return trade;
+          const d = decisions[String(idx)];
+          if (!d) return trade;
+          const td = touched_data.find(t => t.tradeIdx === idx);
+          const attempts = Array.isArray(trade.ai_reentry_attempts) ? [...trade.ai_reentry_attempts] : [];
+          attempts.push({
+            loop: loopNum,
+            touchTime: td?.touchTime || null,
+            touchPrice: td?.touchPrice || null,
+            decision: d.decision,
+            confidence: d.confidence || 0,
+            reasoning: d.reasoning || '',
+            sl: d.suggested_sl || null,
+            tp: d.suggested_tp || null,
+            reentry_suggested: !!d.reentry_suggested,
+            reentry_level: d.reentry_level || null,
+            reentry_note: d.reentry_note || '',
+          });
+          return {
+            ...trade,
+            ai_reentry_attempts: attempts,
+            // Top-level fields point to LATEST attempt for table display
+            ai_reentry_decision: d.decision,
+            ai_reentry_confidence: d.confidence || 0,
+            ai_reentry_reasoning: d.reasoning || '',
+            ai_reentry_sl: d.suggested_sl || null,
+            ai_reentry_tp: d.suggested_tp || null,
+            ai_reentry_loop: loopNum,
+          };
+        });
+        return { ...prev, trades: updatedTrades };
+      });
+
+      // Resim CONFIRMed re-entries this loop (each gets its own Black-Scholes sim)
+      const confirmedDecisions = touched_data
+        .map(t => {
+          const d = decisions[String(t.tradeIdx)];
+          if (!d || d.decision !== 'CONFIRM') return null;
+          return { tradeIdx: t.tradeIdx, suggested_sl: d.suggested_sl, suggested_tp: d.suggested_tp };
+        })
+        .filter(Boolean);
+      if (confirmedDecisions.length) {
+        try {
+          const simRes = await axios.post(`${API_URL}/backtest/reentry-resim`, { resultId, reentryDecisions: confirmedDecisions });
+          setAiReentryResimMap(prev => {
+            const map = prev ? new Map(prev) : new Map();
+            for (const s of simRes.data.simTrades) map.set(s.tradeIdx, s);
+            return map;
+          });
+        } catch (err) {
+          console.error('Re-entry resim failed:', err.message);
+        }
+      }
+
+      // Next-loop candidates: REJECTed trades where AI suggested another level + still wants re-entry
+      return touched_data
+        .map(t => {
+          const d = decisions[String(t.tradeIdx)];
+          if (!d) return null;
+          if (d.decision === 'CONFIRM')          return null;  // success → stop
+          if (!d.reentry_suggested)              return null;  // model says no more re-entry
+          if (!d.reentry_level)                  return null;
+          return {
+            tradeIdx: t.tradeIdx,
             reentry_level: d.reentry_level,
             ai_decision: d.decision,
             ai_reasoning: d.reasoning || '',
             reentry_note: d.reentry_note || '',
-          }));
-        if (!candidates.length) return;
-        const aiModels = params?.ai_models?.length ? params.ai_models : ['gemini-2.0-flash'];
-        const ctxRes = await axios.post(`${API_URL}/backtest/reentry-contexts`, {
-          resultId, candidates, aiModels, aiConcurrency: params?.ai_concurrency ?? 1,
-        });
-        const { job_id, found, touched_data = [] } = ctxRes.data;
-        const touchedIndices = touched_data.map(t => t.tradeIdx);
-        const touchedSet = new Set(touchedIndices);
-        setResult(prev => {
-          if (!prev) return prev;
-          const updatedTrades = (prev.trades || []).map((trade, idx) => {
-            const td = touched_data.find(t => t.tradeIdx === idx);
-            if (td) return { ...trade, ai_reentry_entry_time: td.touchTime, ai_reentry_entry_price: td.touchPrice, ai_reentry_level_reached: true };
-            const isCandidate = candidates.some(c => c.tradeIdx === idx);
-            if (isCandidate && !touchedSet.has(idx)) return { ...trade, ai_reentry_level_reached: false };
-            return trade;
-          });
-          return { ...prev, trades: updatedTrades };
-        });
-        if (!job_id || !found) return;
-        setAiReentryIndexMap(touchedIndices);
-        setAiReentryJobId(job_id);
-        setAiReentryPolling(true);
+            previousTouchTime: t.touchTime, // backend scans candles AFTER this for next loop
+          };
+        })
+        .filter(Boolean);
+    };
+
+    const triggerReentryFlow = async (decisions, resultId) => {
+      const initialCandidates = Object.entries(decisions)
+        .filter(([, d]) => d.reentry_suggested && d.reentry_level && d.decision === 'REJECT')
+        .map(([ci, d]) => ({
+          tradeIdx: chronIdx(parseInt(ci)),
+          reentry_level: d.reentry_level,
+          ai_decision: d.decision,
+          ai_reasoning: d.reasoning || '',
+          reentry_note: d.reentry_note || '',
+        }));
+      if (!initialCandidates.length) return;
+
+      const aiModels = params?.ai_models?.length ? params.ai_models : ['gemini-2.0-flash'];
+      const aiConcurrency = params?.ai_concurrency ?? 1;
+
+      setAiReentryPolling(true);
+      try {
+        let candidates = initialCandidates;
+        for (let loop = 1; loop <= MAX_REENTRY_LOOPS; loop++) {
+          if (!candidates.length) {
+            console.log(`[Re-entry] Loop ${loop}: no candidates remain, stopping`);
+            break;
+          }
+          setAiReentryLoopNum(loop);
+          console.log(`[Re-entry] Loop ${loop}/${MAX_REENTRY_LOOPS} — ${candidates.length} candidate(s)`);
+          candidates = await runReentryLoop(candidates, loop, resultId, aiModels, aiConcurrency);
+        }
       } catch (err) {
-        console.error('Re-entry flow failed:', err.message);
+        console.error('Re-entry orchestration failed:', err.message);
+      } finally {
+        setAiReentryPolling(false);
+        setAiReentryLoopNum(0);
+        setAiReentryJobId(null);
       }
     };
 
@@ -638,82 +952,8 @@ export default function Backtest() {
     };
   }, [aiPolling, aiJobId, backtestResultId, setResult, params]);
 
-  // Poll for re-entry AI job (second pass — only runs after first job suggests re-entry levels)
-  useEffect(() => {
-    if (!aiReentryPolling || !aiReentryJobId) return;
-    let cancelled = false;
-
-    const applyReentryDecisions = (decisions, done, total) => {
-      setAiReentryProgress({ done, total });
-      setResult(prev => {
-        if (!prev) return prev;
-        let changed = false;
-        // decisions keyed 0,1,2... = position in re-entry signals array
-        // aiReentryIndexMap[i] = original tradeIdx for that position
-        const updatedTrades = (prev.trades || []).map((trade, idx) => {
-          const position = aiReentryIndexMap.indexOf(idx);
-          if (position < 0) return trade;
-          const d = decisions[String(position)];
-          if (!d) return trade;
-          changed = true;
-          return {
-            ...trade,
-            ai_reentry_decision: d.decision,
-            ai_reentry_confidence: d.confidence || 0,
-            ai_reentry_reasoning: d.reasoning || '',
-            ai_reentry_sl: d.suggested_sl || null,
-            ai_reentry_tp: d.suggested_tp || null,
-            ai_reentry_level_reached: true,
-          };
-        });
-        return changed ? { ...prev, trades: updatedTrades } : prev;
-      });
-    };
-
-    const runReentryResim = async (decisions, resultId) => {
-      try {
-        const reentryDecisions = aiReentryIndexMap
-          .map((tradeIdx, pos) => {
-            const d = decisions[String(pos)];
-            if (!d || d.decision !== 'CONFIRM') return null;
-            return { tradeIdx, suggested_sl: d.suggested_sl, suggested_tp: d.suggested_tp };
-          })
-          .filter(Boolean);
-        if (!reentryDecisions.length) return;
-        const simRes = await axios.post(`${API_URL}/backtest/reentry-resim`, { resultId, reentryDecisions });
-        const map = new Map();
-        for (const s of simRes.data.simTrades) map.set(s.tradeIdx, s);
-        setAiReentryResimMap(map);
-      } catch (err) {
-        console.error('Re-entry resim failed:', err.message);
-      }
-    };
-
-    const poll = async () => {
-      try {
-        const res = await axios.get(`${API_URL}/ai-confirmation/status/${aiReentryJobId}`);
-        if (cancelled) return;
-        const { status, decisions = {}, done = 0, total = 0 } = res.data;
-        applyReentryDecisions(decisions, done, total);
-        if (status === 'complete' || status === 'error') {
-          setAiReentryPolling(false);
-          if (status === 'complete' && backtestResultId) {
-            runReentryResim(decisions, backtestResultId);
-          }
-          if (status === 'error') console.error('AI re-entry job failed');
-        } else {
-          setTimeout(poll, 2500);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          console.error('AI re-entry poll failed:', err.message);
-          setTimeout(poll, 6000);
-        }
-      }
-    };
-    poll();
-    return () => { cancelled = true; };
-  }, [aiReentryPolling, aiReentryJobId, aiReentryIndexMap, backtestResultId, setResult]);
+  // Re-entry polling is now handled inline inside triggerReentryFlow's orchestrateReentryLoops.
+  // The orchestrator awaits each loop's AI job and chains up to MAX_REENTRY_LOOPS attempts.
 
   // Auto-fetch defaults on mount if strategy is set but empty params
   // Or handle change
@@ -1597,6 +1837,333 @@ export default function Backtest() {
                                 </div>
                             </div>
 
+                            {/* 🍪 Claude.ai Web Session — separate from API model selector */}
+                            <div className="border border-amber-700/40 bg-amber-900/10 rounded p-2 space-y-2">
+                                <label className="flex items-center gap-2 cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        className="w-3.5 h-3.5 accent-amber-500"
+                                        checked={!!params.use_claude_web_session}
+                                        onChange={e => {
+                                            const enabled = e.target.checked;
+                                            setParams({
+                                                ...params,
+                                                use_claude_web_session: enabled,
+                                                // Mutually exclusive with Gemini Web — one bridge at a time.
+                                                use_gemini_web_session: enabled ? false : params.use_gemini_web_session,
+                                                // Force serial when enabled — Claude.ai blocks parallel scrapers
+                                                ai_concurrency: enabled ? 1 : (params.ai_concurrency || 1),
+                                                // Auto-select a web model when enabling, replacing API models
+                                                ai_models: enabled
+                                                    ? [params.claude_web_model || 'claude-web/claude-sonnet-4-6']
+                                                    : (params.ai_models || []).filter(m => !m.startsWith('claude-web/')),
+                                            });
+                                        }}
+                                    />
+                                    <span className="text-[12px] text-amber-200 font-semibold">
+                                        🍪 Use Claude.ai Web Session (Team plan — no API credits needed)
+                                    </span>
+                                </label>
+                                {!!params.use_claude_web_session && (
+                                    <>
+                                        <p className="text-[10px] text-red-300/80 leading-snug">
+                                            ⚠️ <b>Violates Anthropic ToS.</b> Risk of Claude.ai account suspension.
+                                            Forced serial (1 call at a time) to reduce detection. No key rotation.
+                                            Re-paste sessionKey when it expires (typically every few weeks).
+                                        </p>
+                                        <div>
+                                            <label className="block text-[10px] text-amber-300 mb-1">
+                                                Claude.ai <code className="bg-slate-900 px-1">sessionKey</code> cookie
+                                            </label>
+                                            <input
+                                                type="password"
+                                                placeholder="sk-ant-sid01-..."
+                                                className="w-full bg-slate-900 border border-amber-700/40 rounded p-1.5 text-white text-xs font-mono"
+                                                value={params.claude_web_session_key || ''}
+                                                onChange={e => setParams({ ...params, claude_web_session_key: e.target.value.trim() })}
+                                            />
+                                            <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+                                                <b>How to copy:</b> open <code>claude.ai</code> while logged in →
+                                                DevTools (F12) → Application → Cookies → <code>https://claude.ai</code> →
+                                                copy the <code>sessionKey</code> value (starts with <code>sk-ant-sid01-</code>).
+                                                Stored client-side only; sent to backend per backtest.
+                                            </p>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <label className="block text-[10px] text-amber-300 mb-1">
+                                                    Org UUID <span className="text-slate-500">(optional, auto-detect)</span>
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="leave blank to auto-detect"
+                                                    className="w-full bg-slate-900 border border-amber-700/40 rounded p-1.5 text-white text-xs font-mono"
+                                                    value={params.claude_web_org_id || ''}
+                                                    onChange={e => setParams({ ...params, claude_web_org_id: e.target.value.trim() })}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] text-amber-300 mb-1">Claude model</label>
+                                                <select
+                                                    className="w-full bg-slate-900 border border-amber-700/40 rounded p-1.5 text-white text-xs"
+                                                    value={params.claude_web_model || 'claude-web/claude-sonnet-4-6'}
+                                                    onChange={e => setParams({
+                                                        ...params,
+                                                        claude_web_model: e.target.value,
+                                                        ai_models: [e.target.value],
+                                                    })}
+                                                >
+                                                    <option value="claude-web/claude-haiku-4-5">Claude Haiku 4.5 (fastest)</option>
+                                                    <option value="claude-web/claude-sonnet-4-6">Claude Sonnet 4.6 (balanced)</option>
+                                                    <option value="claude-web/claude-opus-4-7">Claude Opus 4.7 (slowest, best)</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        {/* Batched-call control — only meaningful for Claude.ai web (serial-only path) */}
+                                        <div>
+                                            <label className="block text-[10px] text-amber-300 mb-1">
+                                                Batch size <span className="text-slate-500">(signals per request, 1–10)</span>
+                                            </label>
+                                            <div className="flex items-center gap-2">
+                                                <input
+                                                    type="range"
+                                                    min="1"
+                                                    max="10"
+                                                    step="1"
+                                                    className="flex-1 accent-amber-500"
+                                                    value={parseInt(params.claude_web_batch_size, 10) || 1}
+                                                    onChange={e => setParams({ ...params, claude_web_batch_size: parseInt(e.target.value, 10) })}
+                                                />
+                                                <span className="font-mono text-xs text-amber-200 w-8 text-right">
+                                                    {parseInt(params.claude_web_batch_size, 10) || 1}×
+                                                </span>
+                                            </div>
+                                            <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+                                                {(() => {
+                                                    const b = parseInt(params.claude_web_batch_size, 10) || 1;
+                                                    if (b === 1) return '🐢 Serial mode — one signal per request. Accurate but slowest. Use for small backtests.';
+                                                    if (b <= 3)  return '✅ Safe — minimal context bleed risk. ~3× speedup vs serial.';
+                                                    if (b <= 5)  return '⚡ Recommended — good balance of speed and accuracy.';
+                                                    if (b <= 7)  return '🚀 Fast — higher speedup but watch for confidence drift.';
+                                                    return '⚠️ Aggressive — max speed but more context-bleed / token-cap risk. Auto-fallback to serial on parse failure.';
+                                                })()}
+                                            </p>
+                                            <p className="text-[10px] text-slate-500 italic mt-0.5">
+                                                Each batch sends N signals in one request with independence-framed prompt. On malformed JSON the engine auto-falls-back to single-call mode for that batch.
+                                            </p>
+                                        </div>
+                                        {!params.claude_web_session_key && (
+                                            <p className="text-[10px] text-red-400 font-semibold">
+                                                ⚠️ sessionKey is empty — AI confirmation will fail.
+                                            </p>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+
+                            {/* 🍪 Gemini Web Session — parallel to the Claude Web section above */}
+                            <div className="border border-cyan-700/40 bg-cyan-900/10 rounded p-2 space-y-2">
+                                <label className="flex items-center gap-2 cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        className="w-3.5 h-3.5 accent-cyan-500"
+                                        checked={!!params.use_gemini_web_session}
+                                        onChange={e => {
+                                            const enabled = e.target.checked;
+                                            setParams({
+                                                ...params,
+                                                use_gemini_web_session: enabled,
+                                                // Mutually exclusive with Claude Web — one bridge at a time.
+                                                use_claude_web_session: enabled ? false : params.use_claude_web_session,
+                                                ai_concurrency: enabled ? 1 : (params.ai_concurrency || 1),
+                                                ai_models: enabled
+                                                    ? [params.gemini_web_model || 'gemini-web/gemini-2.5-pro']
+                                                    : (params.ai_models || []).filter(m => !m.startsWith('gemini-web/')),
+                                            });
+                                        }}
+                                    />
+                                    <span className="text-[12px] text-cyan-200 font-semibold">
+                                        🍪 Use Gemini Web Session (consumer plan — no API credits needed)
+                                    </span>
+                                </label>
+                                {!!params.use_gemini_web_session && (
+                                    <>
+                                        <p className="text-[10px] text-red-300/80 leading-snug">
+                                            ⚠️ <b>Violates Google ToS.</b> Risk of Google account suspension.
+                                            Forced serial (1 call at a time) to reduce detection. No key rotation.
+                                            <code className="bg-slate-900 px-1">__Secure-1PSIDTS</code> rotates every
+                                            few hours — re-paste when calls start erroring.
+                                        </p>
+                                        <div>
+                                            <label className="block text-[10px] text-cyan-300 mb-1">
+                                                <code className="bg-slate-900 px-1">__Secure-1PSID</code> cookie
+                                            </label>
+                                            <input
+                                                type="password"
+                                                placeholder="g.a000... (long string ending with .)"
+                                                className="w-full bg-slate-900 border border-cyan-700/40 rounded p-1.5 text-white text-xs font-mono"
+                                                value={params.gemini_web_psid || ''}
+                                                onChange={e => setParams({ ...params, gemini_web_psid: e.target.value.trim() })}
+                                            />
+                                            <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+                                                <b>How to copy:</b> open <code>gemini.google.com</code> while logged in →
+                                                DevTools (F12) → Application → Cookies → <code>https://gemini.google.com</code> →
+                                                copy <code>__Secure-1PSID</code>, <code>__Secure-1PSIDTS</code>,
+                                                and (optional) <code>__Secure-1PSIDCC</code> values.
+                                                Stored client-side only; sent to backend per backtest.
+                                            </p>
+                                        </div>
+                                        <div>
+                                            <label className="block text-[10px] text-cyan-300 mb-1">
+                                                <code className="bg-slate-900 px-1">__Secure-1PSIDTS</code> cookie (rotates often)
+                                            </label>
+                                            <input
+                                                type="password"
+                                                placeholder="sidts-..."
+                                                className="w-full bg-slate-900 border border-cyan-700/40 rounded p-1.5 text-white text-xs font-mono"
+                                                value={params.gemini_web_psidts || ''}
+                                                onChange={e => setParams({ ...params, gemini_web_psidts: e.target.value.trim() })}
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <label className="block text-[10px] text-cyan-300 mb-1">
+                                                    <code className="bg-slate-900 px-1">__Secure-1PSIDCC</code> <span className="text-slate-500">(optional)</span>
+                                                </label>
+                                                <input
+                                                    type="password"
+                                                    placeholder="optional"
+                                                    className="w-full bg-slate-900 border border-cyan-700/40 rounded p-1.5 text-white text-xs font-mono"
+                                                    value={params.gemini_web_psidcc || ''}
+                                                    onChange={e => setParams({ ...params, gemini_web_psidcc: e.target.value.trim() })}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] text-cyan-300 mb-1">Gemini model</label>
+                                                <select
+                                                    className="w-full bg-slate-900 border border-cyan-700/40 rounded p-1.5 text-white text-xs"
+                                                    value={params.gemini_web_model || 'gemini-web/gemini-2.5-pro'}
+                                                    onChange={e => setParams({
+                                                        ...params,
+                                                        gemini_web_model: e.target.value,
+                                                        ai_models: [e.target.value],
+                                                    })}
+                                                >
+                                                    <option value="gemini-web/gemini-2.5-flash">Gemini 2.5 Flash (fastest)</option>
+                                                    <option value="gemini-web/gemini-2.5-pro">Gemini 2.5 Pro (balanced)</option>
+                                                    <option value="gemini-web/gemini-2.5-flash-thinking">Gemini 2.5 Flash Thinking</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-[10px] text-cyan-300 mb-1">
+                                                Batch size <span className="text-slate-500">(signals per request, 1–10)</span>
+                                            </label>
+                                            <div className="flex items-center gap-2">
+                                                <input
+                                                    type="range"
+                                                    min="1"
+                                                    max="10"
+                                                    step="1"
+                                                    className="flex-1 accent-cyan-500"
+                                                    value={parseInt(params.gemini_web_batch_size, 10) || 1}
+                                                    onChange={e => setParams({ ...params, gemini_web_batch_size: parseInt(e.target.value, 10) })}
+                                                />
+                                                <span className="font-mono text-xs text-cyan-200 w-8 text-right">
+                                                    {parseInt(params.gemini_web_batch_size, 10) || 1}×
+                                                </span>
+                                            </div>
+                                            <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+                                                {(() => {
+                                                    const b = parseInt(params.gemini_web_batch_size, 10) || 1;
+                                                    if (b === 1) return '🐢 Serial mode — one signal per request. Accurate but slowest.';
+                                                    if (b <= 3)  return '✅ Safe — minimal context bleed risk.';
+                                                    if (b <= 5)  return '⚡ Recommended — good balance of speed and accuracy.';
+                                                    if (b <= 7)  return '🚀 Fast — higher speedup but watch for confidence drift.';
+                                                    return '⚠️ Aggressive — max speed but more context-bleed / token-cap risk.';
+                                                })()}
+                                            </p>
+                                        </div>
+                                        {(!params.gemini_web_psid || !params.gemini_web_psidts) && (
+                                            <p className="text-[10px] text-red-400 font-semibold">
+                                                ⚠️ __Secure-1PSID and __Secure-1PSIDTS are required — AI confirmation will fail.
+                                            </p>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+
+                            {/* 🧠 Claude Extended Thinking — applies to anthropic API + claude_web models */}
+                            {(() => {
+                                const hasClaude = (params.ai_models || []).some(m =>
+                                    m.startsWith('claude-') || m.startsWith('claude-web/')
+                                ) || params.use_claude_web_session;
+                                if (!hasClaude) return null;
+                                return (
+                                    <div className="border border-orange-700/40 bg-orange-900/10 rounded p-2 space-y-2">
+                                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                                            <input
+                                                type="checkbox"
+                                                className="w-3.5 h-3.5 accent-orange-500"
+                                                checked={!!params.claude_thinking_enabled}
+                                                onChange={e => setParams({
+                                                    ...params,
+                                                    claude_thinking_enabled: e.target.checked,
+                                                })}
+                                            />
+                                            <span className="text-[12px] text-orange-200 font-semibold">
+                                                🧠 Claude Extended Thinking (slower, better-reasoned)
+                                            </span>
+                                        </label>
+                                        {!!params.claude_thinking_enabled && (
+                                            <>
+                                                <p className="text-[10px] text-slate-400 leading-snug">
+                                                    Claude runs a budgeted internal reasoning pass before answering.
+                                                    Applies to <b>both</b> Anthropic API <i>and</i> Claude.ai web sessions.
+                                                    For web sessions, <code className="bg-slate-900 px-1">paprika_mode: "extended"</code>
+                                                    is set on the conversation at creation time (matches what claude.ai's UI sends).
+                                                </p>
+                                                <div>
+                                                    <label className="block text-[10px] text-orange-300 mb-1">
+                                                        Thinking budget <span className="text-slate-500">(tokens; higher = more reasoning, slower)</span>
+                                                    </label>
+                                                    <div className="flex items-center gap-2">
+                                                        <input
+                                                            type="range"
+                                                            min="1024"
+                                                            max="64000"
+                                                            step="1024"
+                                                            className="flex-1 accent-orange-500"
+                                                            value={parseInt(params.claude_thinking_budget, 10) || 32000}
+                                                            onChange={e => setParams({
+                                                                ...params,
+                                                                claude_thinking_budget: parseInt(e.target.value, 10),
+                                                            })}
+                                                        />
+                                                        <span className="font-mono text-xs text-orange-200 w-16 text-right">
+                                                            {(parseInt(params.claude_thinking_budget, 10) || 32000).toLocaleString()}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+                                                        {(() => {
+                                                            const b = parseInt(params.claude_thinking_budget, 10) || 32000;
+                                                            if (b <= 4096)  return '⚡ Low effort — quick reasoning, minimal extra cost.';
+                                                            if (b <= 16000) return '✅ Moderate — balanced reasoning depth for most signals.';
+                                                            if (b <= 32000) return '🎯 High effort — deep reasoning, recommended max for trading decisions.';
+                                                            return '🔥 Heavy — may not fit smaller models; high token cost on API.';
+                                                        })()}
+                                                    </p>
+                                                </div>
+                                                <p className="text-[10px] text-amber-400/80 leading-snug">
+                                                    ⚠️ When thinking is on, temperature is forced to 1.0 (the API requires it).
+                                                    Decisions may vary slightly between runs — that's expected.
+                                                </p>
+                                            </>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+
                             {/* Re-entry check toggle */}
                             <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
                                 <input
@@ -1613,20 +2180,65 @@ export default function Backtest() {
                                 </span>
                             </label>
 
+                            {/* Fail-closed toggle — only affects LIVE engine on AI errors/timeouts */}
                             <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
                                 <input
                                     type="checkbox"
-                                    className="w-3.5 h-3.5 accent-violet-500"
-                                    checked={params.ai_follow_sl_tp !== false}
-                                    onChange={e => setParams({ ...params, ai_follow_sl_tp: e.target.checked })}
+                                    className="w-3.5 h-3.5 accent-red-500"
+                                    checked={!!params.ai_fail_closed}
+                                    onChange={e => setParams({ ...params, ai_fail_closed: e.target.checked })}
                                 />
-                                <span className="text-[11px] text-slate-300 font-medium">Follow AI SL/TP</span>
+                                <span className="text-[11px] text-slate-300 font-medium">Fail-closed on AI errors</span>
                                 <span className="text-[10px] text-slate-500">
-                                    {params.ai_follow_sl_tp !== false
-                                        ? 'Simulation uses AI suggested SL/TP levels'
-                                        : 'Simulation uses strategy SL/TP — AI filters trades only'}
+                                    {params.ai_fail_closed
+                                        ? '🛑 AI timeout/error in LIVE → reject the trade (safer)'
+                                        : '⚠️ AI timeout/error in LIVE → fall back to threshold gate (default)'}
                                 </span>
                             </label>
+
+                            <div className="flex flex-col gap-1.5 border-l-2 border-violet-700/30 pl-3">
+                                <span className="text-[10px] text-slate-500 uppercase tracking-wide">Apply AI levels (independent)</span>
+                                <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+                                    <input
+                                        type="checkbox"
+                                        className="w-3.5 h-3.5 accent-violet-500"
+                                        checked={params.ai_follow_sl !== false}
+                                        onChange={e => setParams({
+                                            ...params,
+                                            ai_follow_sl: e.target.checked,
+                                            // Keep legacy combined flag in sync for any consumer that still reads it
+                                            ai_follow_sl_tp: e.target.checked && (params.ai_follow_tp !== false),
+                                        })}
+                                    />
+                                    <span className="text-[11px] text-slate-300 font-medium">Follow AI SL</span>
+                                    <span className="text-[10px] text-slate-500">
+                                        {params.ai_follow_sl !== false
+                                            ? 'Use AI-suggested stop-loss (wide safety net)'
+                                            : 'Use strategy stop-loss'}
+                                    </span>
+                                </label>
+                                <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+                                    <input
+                                        type="checkbox"
+                                        className="w-3.5 h-3.5 accent-violet-500"
+                                        checked={params.ai_follow_tp !== false}
+                                        onChange={e => setParams({
+                                            ...params,
+                                            ai_follow_tp: e.target.checked,
+                                            ai_follow_sl_tp: e.target.checked && (params.ai_follow_sl !== false),
+                                        })}
+                                    />
+                                    <span className="text-[11px] text-slate-300 font-medium">Follow AI TP</span>
+                                    <span className="text-[10px] text-slate-500">
+                                        {params.ai_follow_tp !== false
+                                            ? 'Use AI-suggested take-profit (realistic target)'
+                                            : 'Use strategy take-profit'}
+                                    </span>
+                                </label>
+                                <p className="text-[10px] text-slate-500 italic">
+                                    After AI completes, toggle the chart view to compare all 4 combinations.
+                                </p>
+                            </div>
 
                             <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
                                 <input
@@ -1954,13 +2566,23 @@ export default function Backtest() {
         <div className="lg:col-span-2 bg-surface p-6 rounded-xl border border-slate-700 min-h-[500px]">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-xl font-bold">Results</h3>
-            <button
-                onClick={runBacktest}
-                disabled={loading}
-                className="bg-primary hover:bg-blue-600 disabled:opacity-50 text-white font-bold py-2 px-5 rounded-lg flex items-center gap-2 transition-colors text-sm"
-            >
-                {loading ? 'Running...' : <><Play className="w-4 h-4" /> Run Backtest</>}
-            </button>
+            {loading ? (
+                <button
+                    onClick={stopBacktest}
+                    disabled={stopping}
+                    title="Stops the backtest engine, AI confirmation, and re-entry checks"
+                    className="bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white font-bold py-2 px-5 rounded-lg flex items-center gap-2 transition-colors text-sm"
+                >
+                    <Square className="w-4 h-4" /> {stopping ? 'Stopping...' : 'Stop Backtest'}
+                </button>
+            ) : (
+                <button
+                    onClick={runBacktest}
+                    className="bg-primary hover:bg-blue-600 text-white font-bold py-2 px-5 rounded-lg flex items-center gap-2 transition-colors text-sm"
+                >
+                    <Play className="w-4 h-4" /> Run Backtest
+                </button>
+            )}
           </div>
           
           {result ? (
@@ -2050,6 +2672,11 @@ export default function Backtest() {
                   <span className="text-amber-300 animate-pulse">⏳</span>
                   <span className="text-amber-200 flex-1">
                     Re-entry check in progress
+                    {aiReentryLoopNum > 0 && (
+                      <span className="ml-2 px-1.5 py-0.5 bg-amber-700/40 text-amber-100 rounded font-mono">
+                        Loop {aiReentryLoopNum}/{MAX_REENTRY_LOOPS}
+                      </span>
+                    )}
                     {aiReentryProgress.total > 0 && (
                       <span className="ml-2 font-mono text-amber-100">{aiReentryProgress.done} / {aiReentryProgress.total}</span>
                     )}
@@ -2090,38 +2717,45 @@ export default function Backtest() {
 
               {(() => {
                 const hasAiSimAvail = (aiResimMap && aiResimMap.size > 0) || result.trades.some(t => t.aiConfirmation?.suggested_sl);
-                const hasAiSlTpData = result.trades.some(t => t.aiConfirmation?.suggested_sl && t.aiConfirmation?.suggested_tp);
-                const mainFollowAiSlTp = params?.ai_follow_sl_tp !== false;
+                const hasAiSlData = result.trades.some(t => t.aiConfirmation?.suggested_sl);
+                const hasAiTpData = result.trades.some(t => t.aiConfirmation?.suggested_tp);
                 const chartData = showAiSim && aiSimData ? aiSimData.curve : result.equityCurve;
                 const isComparison = showAiSim && !!aiSimData;
+                const viewModes = [
+                  { key: 'strategy', label: 'Strategy', enabled: true,                 color: 'bg-slate-600 text-white' },
+                  { key: 'ai_sl',    label: 'AI SL',    enabled: hasAiSlData,           color: 'bg-amber-700/60 text-amber-200' },
+                  { key: 'ai_tp',    label: 'AI TP',    enabled: hasAiTpData,           color: 'bg-sky-700/60 text-sky-200' },
+                  { key: 'ai_both',  label: 'AI SL+TP', enabled: hasAiSlData && hasAiTpData, color: 'bg-violet-700/60 text-violet-200' },
+                ];
                 return (
                 <div className="bg-slate-800 rounded-lg p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h4 className="text-slate-400">Equity Curve</h4>
                     <div className="flex items-center gap-2">
-                      {showAiSim && hasAiSlTpData && (
+                      {showAiSim && hasAiSimAvail && (
                         <div className="flex items-center rounded border border-slate-600 overflow-hidden text-xs">
-                          <button
-                            className={`px-2.5 py-1 transition-colors ${aiSlTpView === 'main' ? (mainFollowAiSlTp ? 'bg-violet-700/60 text-violet-200' : 'bg-slate-600 text-white') : 'text-slate-400 hover:text-slate-200'}`}
-                            onClick={() => setAiSlTpView('main')}
-                          >
-                            {mainFollowAiSlTp ? 'AI SL/TP' : 'Strategy SL/TP'}
-                          </button>
-                          <button
-                            className={`px-2.5 py-1 transition-colors border-l border-slate-600 ${aiSlTpView === 'alt' ? (mainFollowAiSlTp ? 'bg-slate-600 text-white' : 'bg-violet-700/60 text-violet-200') : 'text-slate-400 hover:text-slate-200'}`}
-                            onClick={async () => {
-                              setAiSlTpView('alt');
-                              if (!aiResimAltMap) await runAltResim();
-                            }}
-                          >
-                            {aiResimAltLoading ? '⏳' : (mainFollowAiSlTp ? 'Strategy SL/TP' : 'AI SL/TP')}
-                          </button>
+                          {viewModes.filter(m => m.enabled).map((m, i) => {
+                            const isActive = aiSlTpView === m.key;
+                            const isLoading = resimVariantLoading === m.key;
+                            const isCached  = !!resimVariants[m.key];
+                            return (
+                              <button
+                                key={m.key}
+                                className={`px-2.5 py-1 transition-colors ${i > 0 ? 'border-l border-slate-600' : ''} ${isActive ? m.color : 'text-slate-400 hover:text-slate-200'}`}
+                                onClick={() => selectResimView(m.key)}
+                                title={isCached ? `View ${m.label} simulation` : `Compute and view ${m.label} simulation`}
+                              >
+                                {isLoading ? '⏳ ' : ''}{m.label}
+                                {!isCached && !isLoading && <span className="opacity-50 ml-1">▢</span>}
+                              </button>
+                            );
+                          })}
                         </div>
                       )}
                       {hasAiSimAvail && (
                         <button
                           className={`text-xs px-3 py-1 rounded border transition-colors ${showAiSim ? 'bg-green-800/60 border-green-600 text-green-200' : 'bg-slate-700 border-slate-600 text-slate-300 hover:border-green-600 hover:text-green-300'}`}
-                          onClick={() => { setShowAiSim(s => !s); setAiSlTpView('main'); }}
+                          onClick={() => { setShowAiSim(s => !s); }}
                         >
                           📊 {showAiSim ? 'AI View ✓' : 'Compare AI SL/TP'}
                         </button>
@@ -2143,9 +2777,10 @@ export default function Backtest() {
                           </div>
                           <div className="bg-green-900/30 border border-green-700/40 rounded p-2">
                             <p className="text-[10px] text-slate-400">
-                              {aiSlTpView === 'alt'
-                                ? (mainFollowAiSlTp ? 'Strategy SL/TP P&L' : 'AI SL/TP P&L')
-                                : (mainFollowAiSlTp ? 'AI SL/TP P&L' : 'Strategy SL/TP P&L')}
+                              {aiSlTpView === 'strategy' && 'Strategy SL/TP P&L'}
+                              {aiSlTpView === 'ai_sl'    && 'AI SL + Strategy TP P&L'}
+                              {aiSlTpView === 'ai_tp'    && 'Strategy SL + AI TP P&L'}
+                              {aiSlTpView === 'ai_both'  && 'AI SL + AI TP P&L'}
                             </p>
                             <p className={`text-sm font-bold ${aiSimData.totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                               ₹{aiSimData.totalPnl.toFixed(0)}
@@ -2269,6 +2904,7 @@ export default function Backtest() {
                         <th className="px-4 py-3 bg-slate-800">Avg Vol</th>
                         <th className="px-4 py-3 bg-slate-800">Type</th>
                         <th className="px-4 py-3 bg-slate-800">AI</th>
+                        <th className="px-4 py-3 bg-slate-800" title="Which AI model produced this decision">Model</th>
                         <th className="px-4 py-3 bg-slate-800">
                           {showSpotView && hasSpotData ? <span className="text-blue-400">Spot Entry</span> : 'Prem Entry'}
                         </th>
@@ -2338,6 +2974,7 @@ export default function Backtest() {
                                 )}
                                 {trade.ai_reentry_suggested && trade.ai_reentry_level && (
                                   <>
+                                    {/* Original AI's first suggested re-entry level (the seed for loop 1) */}
                                     <span
                                       className={`text-[10px] mt-0.5 font-medium px-1 py-0.5 rounded ${trade.ai_decision === 'REJECT' ? 'bg-amber-900/40 text-amber-300' : 'bg-sky-900/40 text-sky-300'}`}
                                       title={trade.ai_reentry_note || 'Better entry level suggested'}
@@ -2345,16 +2982,62 @@ export default function Backtest() {
                                       {trade.ai_decision === 'REJECT' ? '⏳' : '💡'} Watch {Number(trade.ai_reentry_level).toFixed(0)}
                                       {trade.ai_reentry_note ? ` — ${trade.ai_reentry_note}` : ''}
                                     </span>
-                                    {/* Re-entry AI second decision */}
-                                    {trade.ai_reentry_decision ? (
-                                      <span
-                                        className={`text-[10px] mt-0.5 font-semibold px-1 py-0.5 rounded ${trade.ai_reentry_decision === 'CONFIRM' ? 'bg-green-900/60 text-green-200' : 'bg-red-900/60 text-red-200'}`}
-                                        title={trade.ai_reentry_reasoning || ''}
-                                      >
-                                        ↳ Re-entry: {trade.ai_reentry_decision === 'CONFIRM' ? '✓' : '✗'} {trade.ai_reentry_decision}
-                                        {trade.ai_reentry_confidence ? <span className="font-normal opacity-70 ml-1">{trade.ai_reentry_confidence.toFixed(0)}%</span> : null}
-                                        {trade.ai_reentry_reasoning ? <span className="block font-normal italic opacity-70 mt-0.5" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{trade.ai_reentry_reasoning}</span> : null}
-                                      </span>
+
+                                    {/* Full re-entry chain — one entry per loop attempt */}
+                                    {Array.isArray(trade.ai_reentry_attempts) && trade.ai_reentry_attempts.length > 0 ? (
+                                      <>
+                                        {trade.ai_reentry_attempts.map((att, ai) => (
+                                          <span
+                                            key={`att-${ai}`}
+                                            className={`text-[10px] mt-0.5 font-semibold px-1 py-0.5 rounded ${att.decision === 'CONFIRM' ? 'bg-green-900/60 text-green-200' : 'bg-red-900/60 text-red-200'}`}
+                                            title={att.reasoning || ''}
+                                          >
+                                            ↳ Re-entry #{att.loop} @ {att.touchPrice != null ? Number(att.touchPrice).toFixed(0) : '?'}: {att.decision === 'CONFIRM' ? '✓' : '✗'} {att.decision}
+                                            {att.confidence ? <span className="font-normal opacity-70 ml-1">{Number(att.confidence).toFixed(0)}%</span> : null}
+                                            {att.reasoning ? (
+                                              <span className="block font-normal italic opacity-70 mt-0.5" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{att.reasoning}</span>
+                                            ) : null}
+                                          </span>
+                                        ))}
+
+                                        {/* Chain terminator — explain WHY the chain stopped */}
+                                        {(() => {
+                                          const last = trade.ai_reentry_attempts[trade.ai_reentry_attempts.length - 1];
+                                          if (last.decision === 'CONFIRM') {
+                                            return (
+                                              <span className="text-[10px] mt-0.5 text-green-300/80 italic">
+                                                🎯 Re-entry executed — see Re-exit columns
+                                              </span>
+                                            );
+                                          }
+                                          // REJECT branches:
+                                          if (!last.reentry_suggested) {
+                                            return (
+                                              <span className="text-[10px] mt-0.5 px-1 py-0.5 rounded bg-slate-700/60 text-slate-300" title="The AI explicitly said no further re-entry is justified for this trade">
+                                                🛑 AI: no further re-entry suggested
+                                              </span>
+                                            );
+                                          }
+                                          // AI suggested another level — show it and its reach status
+                                          if (last.reentry_level) {
+                                            const reached = trade.ai_reentry_level_reached;
+                                            const nextLoop = last.loop + 1;
+                                            if (nextLoop > MAX_REENTRY_LOOPS) {
+                                              return (
+                                                <span className="text-[10px] mt-0.5 text-slate-400 italic" title={`AI suggested Watch ${Number(last.reentry_level).toFixed(0)} but the ${MAX_REENTRY_LOOPS}-loop cap was hit`}>
+                                                  ⏳ Watch {Number(last.reentry_level).toFixed(0)} — max {MAX_REENTRY_LOOPS} loops reached
+                                                </span>
+                                              );
+                                            }
+                                            return (
+                                              <span className="text-[10px] mt-0.5 text-slate-400 italic">
+                                                ⏳ Watch {Number(last.reentry_level).toFixed(0)} — {reached === false ? 'level not reached' : (aiReentryPolling ? 're-checking…' : 'pending')}
+                                              </span>
+                                            );
+                                          }
+                                          return null;
+                                        })()}
+                                      </>
                                     ) : trade.ai_reentry_level_reached === false ? (
                                       <span className="text-[10px] mt-0.5 text-slate-500 italic">↳ Level not reached</span>
                                     ) : aiReentryPolling ? (
@@ -2394,6 +3077,23 @@ export default function Backtest() {
                             ) : aiPolling ? (
                               <span className="text-slate-600 animate-pulse text-xs">analyzing…</span>
                             ) : '-'}
+                          </td>
+                          {/* Model: which AI produced the decision (helps spot per-model bias) */}
+                          <td className="px-3 py-3 text-xs">
+                            {(() => {
+                              const mid = trade.aiConfirmation?.model_id || trade.ai_reentry_attempts?.[trade.ai_reentry_attempts.length - 1]?.model_id;
+                              if (!mid) return aiPolling ? <span className="text-slate-600 text-[10px]">…</span> : <span className="text-slate-600 text-[10px]">-</span>;
+                              const b = modelBadgeFor(mid);
+                              if (!b) return <span className="text-slate-500 text-[10px]">{mid}</span>;
+                              return (
+                                <span
+                                  className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${b.cls}`}
+                                  title={mid}
+                                >
+                                  {b.short}
+                                </span>
+                              );
+                            })()}
                           </td>
                           {/* Entry price: spot or premium depending on view */}
                           <td className="px-4 py-3 font-bold text-white text-xs">
