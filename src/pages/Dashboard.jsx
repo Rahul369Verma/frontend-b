@@ -50,6 +50,12 @@ export default function Dashboard() {
   const [activityExpanded, setActivityExpanded] = useState(true);
   const [activityDetail, setActivityDetail] = useState(null);  // selected event for modal
 
+  // ── Web Session Health state ─────────────────────────────────────────────
+  // Keys are symbols; values are { symbol, strategyName, claude_web?, gemini_web? }.
+  // Re-fetched every 5 min (matches backend cache TTL). Manual "Re-check" forces refresh.
+  const [sessionHealth, setSessionHealth] = useState({ results: {}, total_expired: 0, total_missing: 0, checked_at: null });
+  const [sessionHealthLoading, setSessionHealthLoading] = useState(false);
+
   // Refs to track current pagination/search for socket listener (prevents stale closure)
   const tradesPageRef = React.useRef(1);
   const tradesSearchRef = React.useRef("");
@@ -210,6 +216,30 @@ export default function Dashboard() {
         socket.disconnect();
     };
   }, []);
+
+  // ── Web Session Health polling ───────────────────────────────────────────
+  // Hits /api/strategies/session-health which validates Claude.ai sessionKey /
+  // Gemini cookies for every active strategy. Backend caches results for 5 min;
+  // we re-poll every 5 min too so the cache is always warm.
+  const fetchSessionHealth = React.useCallback(async (force = false) => {
+    setSessionHealthLoading(true);
+    try {
+      const res = await axios.get(`${API_URL}/strategies/session-health`, {
+        params: force ? { force: 'true' } : {},
+      });
+      setSessionHealth(res.data || {});
+    } catch (err) {
+      console.warn('[SessionHealth] fetch failed:', err.message);
+    } finally {
+      setSessionHealthLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSessionHealth();
+    const iv = setInterval(() => fetchSessionHealth(), 5 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, [fetchSessionHealth]);
 
   // ── Live Activity Feed polling ───────────────────────────────────────────
   // Pulls /api/live-activity every 8s while the section is expanded. Filters
@@ -391,6 +421,57 @@ export default function Dashboard() {
         </button> */}
       </div>
 
+      {/* Web Session Health Banner — only renders when there's actually a problem */}
+      {(sessionHealth.total_expired > 0 || sessionHealth.total_missing > 0) && (
+          <div className="bg-amber-900/30 border border-amber-700 rounded-xl p-4 flex items-start gap-3">
+              <AlertTriangle className="w-6 h-6 text-amber-400 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                  <h3 className="text-amber-200 font-bold mb-1">
+                      ⚠️ Web session credentials need attention
+                  </h3>
+                  <p className="text-amber-100/80 text-sm mb-2">
+                      {sessionHealth.total_expired > 0 && (
+                          <>{sessionHealth.total_expired} expired</>
+                      )}
+                      {sessionHealth.total_expired > 0 && sessionHealth.total_missing > 0 && ' · '}
+                      {sessionHealth.total_missing > 0 && (
+                          <>{sessionHealth.total_missing} missing</>
+                      )}
+                      {' '}across active strategies. These will fail at AI confirmation with auth errors.
+                      Open the Backtest page → re-paste the cookies → click Deploy to refresh.
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                      {Object.values(sessionHealth.results || {}).flatMap(s => {
+                          const issues = [];
+                          if (s.claude_web && !s.claude_web.valid) {
+                              issues.push(
+                                  <span key={s.symbol + 'c'} className="text-xs px-2 py-0.5 rounded bg-amber-800/60 text-amber-100">
+                                      🍪 Claude — {s.symbol} ({s.claude_web.reason})
+                                  </span>
+                              );
+                          }
+                          if (s.gemini_web && !s.gemini_web.valid) {
+                              issues.push(
+                                  <span key={s.symbol + 'g'} className="text-xs px-2 py-0.5 rounded bg-cyan-800/60 text-cyan-100">
+                                      🍪 Gemini — {s.symbol} ({s.gemini_web.reason})
+                                  </span>
+                              );
+                          }
+                          return issues;
+                      })}
+                  </div>
+              </div>
+              <button
+                  onClick={() => fetchSessionHealth(true)}
+                  disabled={sessionHealthLoading}
+                  className="text-xs px-3 py-1 rounded bg-amber-700 hover:bg-amber-600 text-white disabled:opacity-50"
+                  title="Force re-check (bypasses 5-min cache)"
+              >
+                  {sessionHealthLoading ? 'Checking…' : 'Re-check'}
+              </button>
+          </div>
+      )}
+
       {/* Global & Symbol Configuration */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Global Defaults */}
@@ -556,40 +637,61 @@ export default function Dashboard() {
                                                 {Array.isArray(params.ai_models) ? params.ai_models.join(', ') : params.ai_models}
                                             </span>
                                         )}
-                                        {params.use_claude_web_session && (
-                                            <span
-                                                className="px-1.5 py-0.5 rounded bg-amber-700/40 text-amber-200"
-                                                title={
-                                                    `Model: ${params.claude_web_model || 'claude-web/claude-sonnet-4-6'}` +
-                                                    `\nSession key: ${params.claude_web_session_key ? 'set (' + String(params.claude_web_session_key).slice(0, 12) + '…)' : '⚠️ MISSING'}` +
-                                                    `\nOrg UUID: ${params.claude_web_org_id || 'auto-detect'}` +
-                                                    `\nBatch size: ${parseInt(params.claude_web_batch_size, 10) || 1}×`
-                                                }
-                                            >
-                                                🍪 Claude.ai Web (
-                                                {String(params.claude_web_model || 'sonnet').replace('claude-web/claude-', '')}
-                                                , batch {parseInt(params.claude_web_batch_size, 10) || 1}×
-                                                {!params.claude_web_session_key ? ' · ⚠️ no key' : ''}
-                                                )
-                                            </span>
-                                        )}
-                                        {params.use_gemini_web_session && (
-                                            <span
-                                                className="px-1.5 py-0.5 rounded bg-cyan-700/40 text-cyan-200"
-                                                title={
-                                                    `Model: ${params.gemini_web_model || 'gemini-web/gemini-2.5-pro'}` +
-                                                    `\n__Secure-1PSID: ${params.gemini_web_psid ? 'set (' + String(params.gemini_web_psid).slice(0, 12) + '…)' : '⚠️ MISSING'}` +
-                                                    `\n__Secure-1PSIDTS: ${params.gemini_web_psidts ? 'set (' + String(params.gemini_web_psidts).slice(0, 12) + '…)' : '⚠️ MISSING'}` +
-                                                    `\nBatch size: ${parseInt(params.gemini_web_batch_size, 10) || 1}×`
-                                                }
-                                            >
-                                                🍪 Gemini Web (
-                                                {String(params.gemini_web_model || 'pro').replace('gemini-web/gemini-', '')}
-                                                , batch {parseInt(params.gemini_web_batch_size, 10) || 1}×
-                                                {(!params.gemini_web_psid || !params.gemini_web_psidts) ? ' · ⚠️ no cookies' : ''}
-                                                )
-                                            </span>
-                                        )}
+                                        {params.use_claude_web_session && (() => {
+                                            const h = sessionHealth.results?.[symbol]?.claude_web;
+                                            const isOk = h?.valid === true;
+                                            const isBad = h && h.valid === false;
+                                            return (
+                                                <span
+                                                    className={`px-1.5 py-0.5 rounded ${isBad ? 'bg-red-700/60 text-red-100 ring-1 ring-red-400 animate-pulse' : 'bg-amber-700/40 text-amber-200'}`}
+                                                    title={
+                                                        `Model: ${params.claude_web_model || 'claude-web/claude-sonnet-4-6'}` +
+                                                        `\nSession key: ${params.claude_web_session_key ? 'set (' + String(params.claude_web_session_key).slice(0, 12) + '…)' : '⚠️ MISSING'}` +
+                                                        `\nOrg UUID: ${params.claude_web_org_id || 'auto-detect'}` +
+                                                        `\nBatch size: ${parseInt(params.claude_web_batch_size, 10) || 1}×` +
+                                                        (h ? `\n\nSession status: ${isOk ? '✓ VALID' : `✗ ${h.reason || 'invalid'}`}` : '') +
+                                                        (isBad && h.error ? `\nDetail: ${h.error}` : '') +
+                                                        (isBad ? '\n\n→ Open Backtest, re-paste sessionKey, click Deploy' : '')
+                                                    }
+                                                >
+                                                    🍪 Claude.ai Web (
+                                                    {String(params.claude_web_model || 'sonnet').replace('claude-web/claude-', '')}
+                                                    , batch {parseInt(params.claude_web_batch_size, 10) || 1}×
+                                                    {!params.claude_web_session_key && ' · ⚠️ no key'}
+                                                    {isBad && ` · ⚠️ ${h.reason === 'missing_cookies' ? 'no cookie' : 'EXPIRED — refresh'}`}
+                                                    {isOk && ' · ✓ valid'}
+                                                    )
+                                                </span>
+                                            );
+                                        })()}
+                                        {params.use_gemini_web_session && (() => {
+                                            const h = sessionHealth.results?.[symbol]?.gemini_web;
+                                            const isOk = h?.valid === true;
+                                            const isBad = h && h.valid === false;
+                                            return (
+                                                <span
+                                                    className={`px-1.5 py-0.5 rounded ${isBad ? 'bg-red-700/60 text-red-100 ring-1 ring-red-400 animate-pulse' : 'bg-cyan-700/40 text-cyan-200'}`}
+                                                    title={
+                                                        `Model: ${params.gemini_web_model || 'gemini-web/gemini-2.5-pro'}` +
+                                                        `\n__Secure-1PSID: ${params.gemini_web_psid ? 'set (' + String(params.gemini_web_psid).slice(0, 12) + '…)' : '⚠️ MISSING'}` +
+                                                        `\n__Secure-1PSIDTS: ${params.gemini_web_psidts ? 'set (' + String(params.gemini_web_psidts).slice(0, 12) + '…)' : '⚠️ MISSING'}` +
+                                                        `\nBatch size: ${parseInt(params.gemini_web_batch_size, 10) || 1}×` +
+                                                        (h ? `\n\nSession status: ${isOk ? '✓ VALID' : `✗ ${h.reason || 'invalid'}`}` : '') +
+                                                        (isBad && h.error ? `\nDetail: ${h.error}` : '') +
+                                                        (isBad ? '\n\n→ Open Backtest, re-paste cookies from gemini.google.com, click Deploy' : '') +
+                                                        (h?.rotated_psidts ? '\n\n(server rotated __Secure-1PSIDTS — fresh value cached in-memory)' : '')
+                                                    }
+                                                >
+                                                    🍪 Gemini Web (
+                                                    {String(params.gemini_web_model || 'pro').replace('gemini-web/gemini-', '')}
+                                                    , batch {parseInt(params.gemini_web_batch_size, 10) || 1}×
+                                                    {(!params.gemini_web_psid || !params.gemini_web_psidts) && ' · ⚠️ no cookies'}
+                                                    {isBad && ` · ⚠️ ${h.reason === 'missing_cookies' ? 'no cookies' : 'EXPIRED — refresh'}`}
+                                                    {isOk && ' · ✓ valid'}
+                                                    )
+                                                </span>
+                                            );
+                                        })()}
                                         {params.claude_thinking_enabled && (
                                             <span
                                                 className="px-1.5 py-0.5 rounded bg-orange-700/40 text-orange-200"
@@ -1122,7 +1224,9 @@ export default function Dashboard() {
                                   if (ev.type === 'TRADE_ENTRY') {
                                       typeBadge = <span className="px-1.5 py-0.5 rounded bg-emerald-700/40 text-emerald-200">🟢 ENTRY</span>;
                                       rowTone = '';
-                                      pnlOrConf = ev.ai_confidence != null ? `AI ${(ev.ai_confidence * 100).toFixed(0)}%` : '—';
+                                      // ai_confidence is already on a 0-100 scale (Python's native).
+                                      // No * 100 anywhere — that was the long-standing "6000%" bug.
+                                      pnlOrConf = ev.ai_confidence != null ? `AI ${Math.round(ev.ai_confidence)}%` : '—';
                                       detail = (
                                           <span className="text-slate-400 text-xs">
                                               @ ₹{ev.price?.toFixed?.(2) ?? ev.price} · qty {ev.quantity ?? '?'} · {ev.reason || '—'}
@@ -1146,7 +1250,7 @@ export default function Dashboard() {
                                       typeBadge = <span className="px-1.5 py-0.5 rounded bg-teal-700/40 text-teal-200">✅ AI CONFIRM</span>;
                                       rowTone = 'hover:bg-teal-950/20';
                                       pnlOrConf = ev.ai_confidence != null
-                                          ? <span className="font-mono text-teal-300">{(ev.ai_confidence * 100).toFixed(0)}%</span>
+                                          ? <span className="font-mono text-teal-300">{Math.round(ev.ai_confidence)}%</span>
                                           : '—';
                                       detail = (
                                           <span className="text-teal-300/80 text-xs italic">
@@ -1161,7 +1265,7 @@ export default function Dashboard() {
                                   } else if (ev.type === 'AI_REJECT') {
                                       typeBadge = <span className="px-1.5 py-0.5 rounded bg-rose-700/40 text-rose-200">🛑 AI REJECT</span>;
                                       rowTone = 'hover:bg-rose-950/20';
-                                      pnlOrConf = ev.ai_confidence != null ? `${(ev.ai_confidence * 100).toFixed(0)}%` : '—';
+                                      pnlOrConf = ev.ai_confidence != null ? `${Math.round(ev.ai_confidence)}%` : '—';
                                       detail = (
                                           <span className="text-rose-300/80 text-xs italic">
                                               {ev.ai_reasoning || '(no reasoning)'}
