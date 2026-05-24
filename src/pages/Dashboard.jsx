@@ -31,6 +31,10 @@ export default function Dashboard() {
   const [positions, setPositions] = useState([]);
   const [optionChain, setOptionChain] = useState([]);
   const [mongoTrades, setMongoTrades] = useState([]);
+  // Per-symbol signal-check timeline (from /api/engine/dashboard).
+  // Shape: { [symbol]: { current: {action, type, reason, ts, strategyName},
+  //                       history: [...last 20 entries] } }
+  const [signalStatus, setSignalStatus] = useState({});
   const [tradesPage, setTradesPage] = useState(1);
   const [tradesTotal, setTradesTotal] = useState(0);
   const [tradesSearch, setTradesSearch] = useState("");
@@ -67,6 +71,16 @@ export default function Dashboard() {
   const [globalConfig, setGlobalConfig] = useState(null);
   const [symbolConfig, setSymbolConfig] = useState(null);
   const [activeConfig, setActiveConfig] = useState(null);
+
+  // ── Active Strategy Configuration UI state ───────────────────────────────
+  // When many strategies are deployed, the section grows long fast. Three knobs:
+  //   • `stratFilter` — free text matches symbol OR strategy name (case-insensitive)
+  //   • `stratModeFilter` — quick chip filter: all / live / paper / inactive
+  //   • `expandedStrategies` — per-symbol toggle for the full params grid
+  //     (collapsed by default; clicking the card header expands)
+  const [stratFilter, setStratFilter] = useState('');
+  const [stratModeFilter, setStratModeFilter] = useState('all');  // 'all'|'live'|'paper'|'inactive'
+  const [expandedStrategies, setExpandedStrategies] = useState({});  // { [symbol]: bool }
   
   // Trade Preview Modal State
   const [previewModal, setPreviewModal] = useState({ 
@@ -140,6 +154,7 @@ export default function Dashboard() {
           setPnl(data.pnl || { daily_pnl: 0, trades_count: 0 });
           setPositions(data.positions || []);
           setOptionChain(data.optionChain || []);
+          setSignalStatus(data.signalStatus || {});
           // mongoTrades is now handled entirely by specialized fetchMongoTrades hook
           // New Config Data
           setGlobalConfig(data.config?.globalSettings || {});
@@ -179,8 +194,13 @@ export default function Dashboard() {
     // Initial Fetch
     fetchData();
 
-    // Connect Socket
-    const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:5000');
+    // Connect Socket. `withCredentials: true` lets the browser attach the
+    // dash_session cookie on the handshake so the server's io.use() auth
+    // middleware can verify it. Without this, the connection is rejected with
+    // "Unauthorized" the moment auth is enabled.
+    const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:5000', {
+        withCredentials: true,
+    });
     socketRef.current = socket;
 
     socket.on('connect', () => {
@@ -195,6 +215,7 @@ export default function Dashboard() {
             setPnl(data.pnl || { daily_pnl: 0, trades_count: 0 });
             setPositions(data.positions || []);
             setOptionChain(data.optionChain || []);
+            setSignalStatus(data.signalStatus || {});
             
             // Only update mongoTrades from socket if we are on page 1 and not searching
             // This prevents the UI from "jumping" back to the start when paginating
@@ -206,6 +227,41 @@ export default function Dashboard() {
             setSymbolConfig(data.config?.symbolConfigs || {});
             setActiveConfig(data.config?.activeParams || {});
         }
+    });
+
+    // ── position_tick: sub-second live PnL updates ──────────────────────────
+    // The backend's runBackgroundLoop runs every 2s, but option premium can move
+    // ₹5–20 in a single second on liquid contracts. This listener consumes
+    // tick-driven mini-updates emitted from the fyersData onTick callback —
+    // ~200 bytes per emit, throttled to one per 200ms per position.
+    //
+    // Each payload is { positions: [{spotSymbol, symbol, ltp, spot_ltp, pnl,
+    // pnl_pct, holding_seconds}], at }. We merge by `spotSymbol` into the
+    // existing positions state, preserving all other fields (entryPrice,
+    // broker_sl_price, follow_mode, AI metadata, etc.) from the last full
+    // dashboard_update. Pure merge — no re-render of the whole panel.
+    socket.on('position_tick', ({ positions: tickUpdates }) => {
+        if (!Array.isArray(tickUpdates) || tickUpdates.length === 0) return;
+        setPositions(prev => {
+            if (!Array.isArray(prev) || prev.length === 0) return prev;
+            const byKey = new Map(tickUpdates.map(u => [u.spotSymbol || u.symbol, u]));
+            let changed = false;
+            const next = prev.map(p => {
+                const key = p.spotSymbol || p.symbol;
+                const u = byKey.get(key);
+                if (!u) return p;
+                changed = true;
+                return {
+                    ...p,
+                    ltp:             u.ltp ?? p.ltp,
+                    spot_ltp:        u.spot_ltp ?? p.spot_ltp,
+                    pnl:             u.pnl ?? p.pnl,
+                    pnl_pct:         u.pnl_pct ?? p.pnl_pct,
+                    holding_seconds: u.holding_seconds ?? p.holding_seconds,
+                };
+            });
+            return changed ? next : prev;
+        });
     });
 
     socket.on('disconnect', () => {
@@ -362,6 +418,37 @@ export default function Dashboard() {
       }));
   };
 
+  // Per-position close handler. Hits POST /api/engine/close-position which
+  // routes through liveEngine.closePosition() — same EXIT path the SL/TP
+  // gates use, so broker exit + SL cancel + Telegram all happen as normal.
+  // We track in-flight closures so the button can show a spinner state and
+  // disable itself, preventing accidental double-clicks during the ~500ms
+  // broker round-trip.
+  const [closingSymbols, setClosingSymbols] = useState({});
+  const handleClosePosition = async (pos) => {
+      const key = pos.spotSymbol || pos.symbol;
+      const pnlStr = pos.pnl != null
+          ? ` (PnL ${pos.pnl >= 0 ? '+' : ''}₹${Math.round(pos.pnl).toLocaleString()})`
+          : '';
+      if (!window.confirm(`Close ${pos.symbol}${pnlStr}?\n\nThis fires a market exit via the broker.`)) return;
+      setClosingSymbols(s => ({ ...s, [key]: true }));
+      try {
+          const res = await axios.post(`${API_URL}/engine/close-position`, { spotSymbol: pos.spotSymbol });
+          if (res.data?.success) {
+              console.log(`✅ Closed ${pos.symbol}`, res.data);
+              // Optimistically drop from local state — the next dashboard_update
+              // will reflect the authoritative server state in <2s anyway.
+              setPositions(prev => prev.filter(p => (p.spotSymbol || p.symbol) !== key));
+          } else {
+              alert(`❌ Close failed: ${res.data?.message || 'Unknown error'}`);
+          }
+      } catch (err) {
+          alert(`❌ Close failed: ${err.response?.data?.error || err.message}`);
+      } finally {
+          setClosingSymbols(s => { const n = { ...s }; delete n[key]; return n; });
+      }
+  };
+
   return (
     <div className="p-8 space-y-8">
       {/* Header */}
@@ -486,7 +573,7 @@ export default function Dashboard() {
                     </div>
                      <div className="flex justify-between p-3 bg-slate-800 rounded">
                         <span className="text-slate-400">Max Daily Loss</span>
-                        <span className="font-bold text-red-400">₹{globalConfig?.max_daily_loss || 2000}</span>
+                        <span className="font-bold text-red-400">₹{globalConfig?.max_daily_loss || 10000}</span>
                     </div>
                      <div className="flex justify-between p-3 bg-slate-800 rounded">
                         <span className="text-slate-400">Max Trades/Day</span>
@@ -503,13 +590,108 @@ export default function Dashboard() {
 
           {/* Symbol Strategies - DETAILED VIEW */}
           <div className="lg:col-span-2 bg-surface p-6 rounded-xl border border-slate-700">
-               <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-                    <Activity className="w-5 h-5 text-primary" /> Active Strategy Configuration (Full Details)
-                </h3>
-                
-                <div className="space-y-6">
-                    {/* Iterate over activeParams which has the FULL merged config */}
-                    {Object.entries(activeConfig || {}).map(([symbol, params]) => {
+                {/* ── Header + Filter Bar ──────────────────────────────────
+                    Compact controls when many strategies are deployed. Counts
+                    update live; filter chips toggle subsets; search narrows by
+                    symbol or strategy name; expand-all/collapse-all bulk toggles
+                    the per-card params grid. */}
+                {(() => {
+                    const allEntries = Object.entries(activeConfig || {});
+                    const counts = {
+                        all: allEntries.length,
+                        live: 0, paper: 0, inactive: 0,
+                    };
+                    for (const [, p] of allEntries) {
+                        if (p.isActive === false) counts.inactive++;
+                        else if (p.tradeMode === 'LIVE') counts.live++;
+                        else counts.paper++;
+                    }
+                    const allSymbols = allEntries.map(([s]) => s);
+                    const allExpanded = allSymbols.length > 0 && allSymbols.every(s => expandedStrategies[s]);
+                    return (
+                        <div className="mb-4 space-y-3">
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <h3 className="text-xl font-bold flex items-center gap-2">
+                                    <Activity className="w-5 h-5 text-primary" /> Active Strategy Configuration
+                                    <span className="text-xs font-normal text-slate-500">({counts.all})</span>
+                                </h3>
+                                {counts.all > 0 && (
+                                    <button
+                                        onClick={() => {
+                                            const next = {};
+                                            if (!allExpanded) for (const s of allSymbols) next[s] = true;
+                                            setExpandedStrategies(next);
+                                        }}
+                                        className="text-[11px] px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200"
+                                    >
+                                        {allExpanded ? 'Collapse all' : 'Expand all'}
+                                    </button>
+                                )}
+                            </div>
+                            {counts.all > 0 && (
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    {[
+                                        { key: 'all',      label: 'All',      cls: 'bg-slate-700 text-slate-200' },
+                                        { key: 'live',     label: 'Live',     cls: 'bg-red-700/40 text-red-200 border-red-700' },
+                                        { key: 'paper',    label: 'Paper',    cls: 'bg-blue-700/40 text-blue-200 border-blue-700' },
+                                        { key: 'inactive', label: 'Inactive', cls: 'bg-slate-700/40 text-slate-400 border-slate-600' },
+                                    ].map(chip => {
+                                        const active = stratModeFilter === chip.key;
+                                        const n = counts[chip.key];
+                                        return (
+                                            <button
+                                                key={chip.key}
+                                                onClick={() => setStratModeFilter(chip.key)}
+                                                className={`text-[11px] px-2 py-1 rounded border ${
+                                                    active ? chip.cls : 'bg-slate-800 text-slate-500 border-slate-700 hover:text-slate-300'
+                                                }`}
+                                            >
+                                                {chip.label} <span className="opacity-70">·{n}</span>
+                                            </button>
+                                        );
+                                    })}
+                                    <input
+                                        type="text"
+                                        placeholder="Search symbol or strategy…"
+                                        value={stratFilter}
+                                        onChange={e => setStratFilter(e.target.value)}
+                                        className="flex-1 min-w-[200px] bg-slate-800 border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-200"
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    );
+                })()}
+
+                <div className="space-y-4">
+                    {/* Filter + sort: LIVE-active first, then PAPER-active, inactive at bottom */}
+                    {(() => {
+                        let entries = Object.entries(activeConfig || {});
+                        // Mode filter
+                        entries = entries.filter(([, p]) => {
+                            if (stratModeFilter === 'all') return true;
+                            if (stratModeFilter === 'inactive') return p.isActive === false;
+                            if (stratModeFilter === 'live')   return p.isActive !== false && p.tradeMode === 'LIVE';
+                            if (stratModeFilter === 'paper')  return p.isActive !== false && p.tradeMode !== 'LIVE';
+                            return true;
+                        });
+                        // Text filter
+                        const q = stratFilter.trim().toLowerCase();
+                        if (q) {
+                            entries = entries.filter(([sym, p]) => {
+                                const stratName = String(p.strategyName || '').toLowerCase();
+                                return sym.toLowerCase().includes(q) || stratName.includes(q);
+                            });
+                        }
+                        // Sort: LIVE active → PAPER active → inactive
+                        entries.sort(([sA, pA], [sB, pB]) => {
+                            const rank = p => p.isActive === false ? 2 : (p.tradeMode === 'LIVE' ? 0 : 1);
+                            const dr = rank(pA) - rank(pB);
+                            if (dr !== 0) return dr;
+                            return sA.localeCompare(sB);
+                        });
+                        return entries;
+                    })().map(([symbol, params]) => {
                         return (
                             <div key={symbol} className="bg-slate-800 rounded-lg border border-slate-600 overflow-hidden">
                                 {/* Header */}
@@ -525,15 +707,23 @@ export default function Dashboard() {
                                                     checked={params.isActive !== false} // Default true if undefined
                                                     onChange={async (e) => {
                                                         const newState = e.target.checked;
+                                                        // Optimistic update — flip the UI immediately so the toggle
+                                                        // feels responsive. The next /api/engine/dashboard fetch will
+                                                        // confirm or correct it.
+                                                        setActiveConfig(prev => prev && prev[symbol]
+                                                            ? { ...prev, [symbol]: { ...prev[symbol], isActive: newState } }
+                                                            : prev);
                                                         try {
-                                                            await axios.post(`${API_URL}/config/symbols/toggle`, { 
-                                                                symbol, 
-                                                                isActive: newState 
+                                                            await axios.post(`${API_URL}/config/symbols/toggle`, {
+                                                                symbol,
+                                                                isActive: newState
                                                             });
-                                                            // Optimistic Update or Wait for Socket
-                                                            // For now, let socket handle it or refresh
                                                             fetchData();
                                                         } catch (err) {
+                                                            // Roll back optimistic state on failure
+                                                            setActiveConfig(prev => prev && prev[symbol]
+                                                                ? { ...prev, [symbol]: { ...prev[symbol], isActive: !newState } }
+                                                                : prev);
                                                             alert("Failed to toggle strategy: " + err.message);
                                                         }
                                                     }}
@@ -548,16 +738,26 @@ export default function Dashboard() {
                                                     <input 
                                                         type="checkbox" 
                                                         className="sr-only peer"
-                                                        checked={params.tradeMode === 'LIVE'} 
+                                                        checked={params.tradeMode === 'LIVE'}
                                                         onChange={async (e) => {
                                                             const newMode = e.target.checked ? 'LIVE' : 'PAPER';
+                                                            const oldMode = params.tradeMode;
+                                                            // Optimistic flip so the toggle responds instantly.
+                                                            // The next fetchData() will confirm.
+                                                            setActiveConfig(prev => prev && prev[symbol]
+                                                                ? { ...prev, [symbol]: { ...prev[symbol], tradeMode: newMode } }
+                                                                : prev);
                                                             try {
-                                                                await axios.post(`${API_URL}/config/symbols/toggle-mode`, { 
-                                                                    symbol, 
-                                                                    tradeMode: newMode 
+                                                                await axios.post(`${API_URL}/config/symbols/toggle-mode`, {
+                                                                    symbol,
+                                                                    tradeMode: newMode
                                                                 });
                                                                 fetchData();
                                                             } catch (err) {
+                                                                // Roll back optimistic state on failure
+                                                                setActiveConfig(prev => prev && prev[symbol]
+                                                                    ? { ...prev, [symbol]: { ...prev[symbol], tradeMode: oldMode } }
+                                                                    : prev);
                                                                 alert("Failed to toggle trade mode: " + (err.response?.data?.error || err.message));
                                                             }
                                                         }}
@@ -638,6 +838,9 @@ export default function Dashboard() {
                                             </span>
                                         )}
                                         {params.use_claude_web_session && (() => {
+                                            // Cookies live in global Settings now; the per-symbol session-health
+                                            // result reflects that single global state, so the badge just shows
+                                            // model + batch size + global validity status.
                                             const h = sessionHealth.results?.[symbol]?.claude_web;
                                             const isOk = h?.valid === true;
                                             const isBad = h && h.valid === false;
@@ -646,19 +849,17 @@ export default function Dashboard() {
                                                     className={`px-1.5 py-0.5 rounded ${isBad ? 'bg-red-700/60 text-red-100 ring-1 ring-red-400 animate-pulse' : 'bg-amber-700/40 text-amber-200'}`}
                                                     title={
                                                         `Model: ${params.claude_web_model || 'claude-web/claude-sonnet-4-6'}` +
-                                                        `\nSession key: ${params.claude_web_session_key ? 'set (' + String(params.claude_web_session_key).slice(0, 12) + '…)' : '⚠️ MISSING'}` +
-                                                        `\nOrg UUID: ${params.claude_web_org_id || 'auto-detect'}` +
                                                         `\nBatch size: ${parseInt(params.claude_web_batch_size, 10) || 1}×` +
+                                                        `\nCookies: global Settings → AI Web Cookies` +
                                                         (h ? `\n\nSession status: ${isOk ? '✓ VALID' : `✗ ${h.reason || 'invalid'}`}` : '') +
                                                         (isBad && h.error ? `\nDetail: ${h.error}` : '') +
-                                                        (isBad ? '\n\n→ Open Backtest, re-paste sessionKey, click Deploy' : '')
+                                                        (isBad ? '\n\n→ Open Settings → AI Web Cookies, paste fresh sessionKey, Save' : '')
                                                     }
                                                 >
                                                     🍪 Claude.ai Web (
                                                     {String(params.claude_web_model || 'sonnet').replace('claude-web/claude-', '')}
                                                     , batch {parseInt(params.claude_web_batch_size, 10) || 1}×
-                                                    {!params.claude_web_session_key && ' · ⚠️ no key'}
-                                                    {isBad && ` · ⚠️ ${h.reason === 'missing_cookies' ? 'no cookie' : 'EXPIRED — refresh'}`}
+                                                    {isBad && ` · ⚠️ ${h.reason === 'missing_cookies' ? 'no cookie' : 'EXPIRED — refresh in Settings'}`}
                                                     {isOk && ' · ✓ valid'}
                                                     )
                                                 </span>
@@ -673,20 +874,18 @@ export default function Dashboard() {
                                                     className={`px-1.5 py-0.5 rounded ${isBad ? 'bg-red-700/60 text-red-100 ring-1 ring-red-400 animate-pulse' : 'bg-cyan-700/40 text-cyan-200'}`}
                                                     title={
                                                         `Model: ${params.gemini_web_model || 'gemini-web/gemini-2.5-pro'}` +
-                                                        `\n__Secure-1PSID: ${params.gemini_web_psid ? 'set (' + String(params.gemini_web_psid).slice(0, 12) + '…)' : '⚠️ MISSING'}` +
-                                                        `\n__Secure-1PSIDTS: ${params.gemini_web_psidts ? 'set (' + String(params.gemini_web_psidts).slice(0, 12) + '…)' : '⚠️ MISSING'}` +
                                                         `\nBatch size: ${parseInt(params.gemini_web_batch_size, 10) || 1}×` +
+                                                        `\nCookies: global Settings → AI Web Cookies` +
                                                         (h ? `\n\nSession status: ${isOk ? '✓ VALID' : `✗ ${h.reason || 'invalid'}`}` : '') +
                                                         (isBad && h.error ? `\nDetail: ${h.error}` : '') +
-                                                        (isBad ? '\n\n→ Open Backtest, re-paste cookies from gemini.google.com, click Deploy' : '') +
+                                                        (isBad ? '\n\n→ Open Settings → AI Web Cookies, paste fresh PSID/PSIDTS, Save' : '') +
                                                         (h?.rotated_psidts ? '\n\n(server rotated __Secure-1PSIDTS — fresh value cached in-memory)' : '')
                                                     }
                                                 >
                                                     🍪 Gemini Web (
                                                     {String(params.gemini_web_model || 'pro').replace('gemini-web/gemini-', '')}
                                                     , batch {parseInt(params.gemini_web_batch_size, 10) || 1}×
-                                                    {(!params.gemini_web_psid || !params.gemini_web_psidts) && ' · ⚠️ no cookies'}
-                                                    {isBad && ` · ⚠️ ${h.reason === 'missing_cookies' ? 'no cookies' : 'EXPIRED — refresh'}`}
+                                                    {isBad && ` · ⚠️ ${h.reason === 'missing_cookies' ? 'no cookies' : 'EXPIRED — refresh in Settings'}`}
                                                     {isOk && ' · ✓ valid'}
                                                     )
                                                 </span>
@@ -712,10 +911,69 @@ export default function Dashboard() {
                                                 🛑 Fail-closed
                                             </span>
                                         )}
+                                        {params.ai_use_spot_exits && (
+                                            <span
+                                                className="px-1.5 py-0.5 rounded bg-cyan-700/40 text-cyan-200"
+                                                title={
+                                                    `Live engine actively monitors the index and fires market exits when ` +
+                                                    `spot crosses AI's suggested SL/TP exactly.\n\n` +
+                                                    `Broker SL stays as the safety net at ${params.ai_sl_safety_buffer || 1.5}× ` +
+                                                    `the AI SL distance — fires automatically if the engine disconnects.`
+                                                }
+                                            >
+                                                🎯 Spot Exits ({params.ai_sl_safety_buffer || 1.5}× safety)
+                                            </span>
+                                        )}
+                                        {params.enable_mastra_validator && (
+                                            <span
+                                                className="px-1.5 py-0.5 rounded bg-purple-700/40 text-purple-200"
+                                                title="Mastra second-AI validator runs at trade execution time. Off by default; only matters if explicitly enabled."
+                                            >
+                                                🤖 Mastra Gate
+                                            </span>
+                                        )}
                                     </div>
                                 )}
 
-                                {/* Key-Value Grid */}
+                                {/* ── Quick-glance "key stats" strip — always visible ────
+                                    The handful of params the user looks at most often:
+                                    capital, lots, daily loss limit. Lets you scan
+                                    100 strategies without expanding any. */}
+                                <div className="px-4 py-2 border-t border-slate-700 bg-slate-900/40 flex flex-wrap gap-x-6 gap-y-1 text-[11px]">
+                                    {(() => {
+                                        const quickKeys = [
+                                            { k: 'capital',          label: 'Capital',   prefix: '₹' },
+                                            { k: 'lots',             label: 'Lots',      prefix: '' },
+                                            { k: 'lot_size',         label: 'Lot Size',  prefix: '' },
+                                            { k: 'max_daily_loss',   label: 'Max Loss',  prefix: '₹', global: true },
+                                            { k: 'trade_start_time', label: 'Start',     prefix: '' },
+                                            { k: 'trade_end_time',   label: 'End',       prefix: '' },
+                                        ];
+                                        return quickKeys.map(({ k, label, prefix, global }) => {
+                                            let val = params[k];
+                                            if (val == null || val === '') return null;
+                                            // For global-override fields, show the engine's effective value
+                                            if (global && globalConfig && globalConfig[k] != null) {
+                                                val = globalConfig[k];
+                                            }
+                                            return (
+                                                <div key={k} className="flex items-center gap-1">
+                                                    <span className="text-slate-500 uppercase text-[9px] tracking-wider">{label}</span>
+                                                    <span className="font-mono text-slate-200 font-bold">{prefix}{typeof val === 'number' ? val.toLocaleString() : val}</span>
+                                                </div>
+                                            );
+                                        });
+                                    })()}
+                                    <button
+                                        onClick={() => setExpandedStrategies(s => ({ ...s, [symbol]: !s[symbol] }))}
+                                        className="ml-auto text-[10px] px-2 py-0.5 rounded bg-slate-700/60 hover:bg-slate-700 text-slate-300"
+                                    >
+                                        {expandedStrategies[symbol] ? '▲ Hide details' : '▼ Show all params'}
+                                    </button>
+                                </div>
+
+                                {/* Key-Value Grid — collapsed by default (cuts visual weight ~80%) */}
+                                {expandedStrategies[symbol] && (
                                 <div className="p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                                      {Object.entries(params).map(([key, val]) => {
                                          if (key === 'strategyName') return null; // Already in header
@@ -725,7 +983,8 @@ export default function Dashboard() {
                                               'use_claude_web_session','claude_web_session_key','claude_web_org_id','claude_web_model','claude_web_batch_size',
                                               'use_gemini_web_session','gemini_web_psid','gemini_web_psidts','gemini_web_psidcc','gemini_web_model','gemini_web_batch_size',
                                               'claude_thinking_enabled','claude_thinking_budget',
-                                              'ai_fail_closed'].includes(key)) return null;
+                                              'ai_fail_closed','ai_use_spot_exits','ai_sl_safety_buffer',
+                                              'enable_mastra_validator'].includes(key)) return null;
 
                                          // Formatting Value
                                          let displayVal = val;
@@ -735,9 +994,28 @@ export default function Dashboard() {
                                          // Highlight important keys
                                          const isKey = ['lots', 'capital', 'max_daily_loss', 'max_single_trade_loss'].includes(key);
 
+                                         // ── Global-override keys ─────────────────────────────────────
+                                         // The live engine reads `max_daily_loss` from the GLOBAL settings
+                                         // doc — not from per-strategy params. The value stored on each
+                                         // strategy (from when it was deployed) can be stale relative to
+                                         // the current effective limit. Surface the global one with a tag
+                                         // so the per-strategy card never lies about what the engine uses.
+                                         const isGlobalOverride = key === 'max_daily_loss';
+                                         let overrideTag = null;
+                                         if (isGlobalOverride && globalConfig && globalConfig[key] != null && globalConfig[key] !== val) {
+                                             displayVal = globalConfig[key];
+                                             overrideTag = (
+                                                 <span className="text-[9px] text-amber-400 font-normal ml-1" title={`Stored on strategy: ₹${val}. Engine uses global setting (₹${globalConfig[key]}). Re-deploy this strategy to update the snapshot.`}>
+                                                     (global ↑ from ₹{val})
+                                                 </span>
+                                             );
+                                         }
+
                                          return (
                                              <div key={key} className="overflow-hidden">
-                                                 <p className="text-slate-500 text-[10px] uppercase font-bold tracking-wider mb-0.5">{key.replace(/_/g, ' ')}</p>
+                                                 <p className="text-slate-500 text-[10px] uppercase font-bold tracking-wider mb-0.5">
+                                                     {key.replace(/_/g, ' ')}{overrideTag}
+                                                 </p>
                                                  <p className={`font-mono text-sm truncate ${isKey ? 'text-white font-bold' : 'text-slate-300'} ${typeof val === 'boolean' ? (val ? 'text-green-400' : 'text-red-400') : ''}`} title={String(displayVal)}>
                                                      {String(displayVal)}
                                                  </p>
@@ -745,15 +1023,44 @@ export default function Dashboard() {
                                          )
                                      })}
                                 </div>
+                                )}{/* end collapsible params grid */}
                             </div>
                         )
                     })}
-                     
+
+                     {/* Empty-state — no strategies deployed at all */}
                      {(!activeConfig || Object.keys(activeConfig).length === 0) && (
                          <div className="text-slate-500 text-sm italic p-4 text-center">
                              Waiting for bot engine to report active configurations...
                          </div>
                      )}
+                     {/* Empty-state — strategies exist but filter excludes all */}
+                     {activeConfig && Object.keys(activeConfig).length > 0 && (() => {
+                         let entries = Object.entries(activeConfig);
+                         entries = entries.filter(([, p]) => {
+                             if (stratModeFilter === 'all') return true;
+                             if (stratModeFilter === 'inactive') return p.isActive === false;
+                             if (stratModeFilter === 'live')   return p.isActive !== false && p.tradeMode === 'LIVE';
+                             if (stratModeFilter === 'paper')  return p.isActive !== false && p.tradeMode !== 'LIVE';
+                             return true;
+                         });
+                         const q = stratFilter.trim().toLowerCase();
+                         if (q) entries = entries.filter(([sym, p]) =>
+                             sym.toLowerCase().includes(q) || String(p.strategyName || '').toLowerCase().includes(q)
+                         );
+                         if (entries.length === 0) {
+                             return (
+                                 <div className="text-slate-500 text-sm italic p-4 text-center border border-dashed border-slate-700 rounded-lg">
+                                     No strategies match the current filter.
+                                     <button
+                                         onClick={() => { setStratFilter(''); setStratModeFilter('all'); }}
+                                         className="ml-2 text-blue-400 hover:underline"
+                                     >Reset filters</button>
+                                 </div>
+                             );
+                         }
+                         return null;
+                     })()}
                 </div>
           </div>
       </div>
@@ -808,88 +1115,422 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard
-          title="Daily P&L"
-          value={`₹${pnl.daily_pnl?.toFixed(2)}`}
-          icon={DollarSign}
-          color={pnl.daily_pnl >= 0 ? 'green' : 'red'}
-        />
-        <StatCard
-          title="Trades Today"
-          value={`${pnl.trades_count} / ${status.max_trades}`}
-          icon={Activity}
-          color="blue"
-        />
-         <StatCard
-          title="Signal Status"
-          value="MONITORING"
-          subtext="Waiting for crossover..."
-          icon={Shield}
-          color="yellow"
-        />
+      {/* ── Compact Stats Strip ─────────────────────────────────────────
+          Replaces the three separate StatCards. One row, dense, scannable.
+          Each cell is colour-coded so you can read state in a fraction of a
+          second during market hours. Combined PnL (realized + unrealized)
+          dominates because that's the number you actually trade against. */}
+      <div className="bg-surface rounded-xl border border-slate-700 p-3 flex flex-wrap items-stretch divide-x divide-slate-700">
+          {(() => {
+              const realized = pnl?.daily_pnl ?? 0;
+              const unrealized = pnl?.unrealized_pnl ?? 0;
+              const combined = pnl?.combined_pnl ?? (realized + unrealized);
+              const maxLoss = status?.max_daily_loss || globalConfig?.max_daily_loss || 10000;
+              const lossPctUsed = maxLoss > 0 ? Math.max(0, Math.min(100, (-Math.min(0, combined) / maxLoss) * 100)) : 0;
+              const tradesToday = pnl?.trades_count ?? 0;
+              const maxTrades = status?.strategy_params?.max_trades_per_day || 20;
+              const openPositions = pnl?.open_positions ?? positions.length ?? 0;
+              const fmt = n => `${n >= 0 ? '+' : ''}₹${Math.round(n).toLocaleString()}`;
+              const colorFor = n => n > 0 ? 'text-emerald-400' : n < 0 ? 'text-rose-400' : 'text-slate-300';
+              return (
+                  <>
+                      <div className="flex-1 min-w-[160px] px-4 py-2 flex flex-col justify-center">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold flex items-center gap-1.5">
+                              <DollarSign className="w-3 h-3" /> Combined PnL
+                          </div>
+                          <div className={`text-2xl font-bold font-mono ${colorFor(combined)}`}>
+                              {fmt(combined)}
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">
+                              <span className={colorFor(realized)}>Realized {fmt(realized)}</span>
+                              <span className="mx-1.5 text-slate-700">·</span>
+                              <span className={colorFor(unrealized)}>Open {fmt(unrealized)}</span>
+                          </div>
+                      </div>
+                      <div className="flex-1 min-w-[140px] px-4 py-2 flex flex-col justify-center">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold flex items-center gap-1.5">
+                              <Activity className="w-3 h-3" /> Trades Today
+                          </div>
+                          <div className="text-2xl font-bold font-mono text-blue-300">
+                              {tradesToday}<span className="text-base text-slate-500 font-normal"> / {maxTrades}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">
+                              {openPositions > 0 ? `${openPositions} open now` : 'No open positions'}
+                          </div>
+                      </div>
+                      <div className="flex-1 min-w-[160px] px-4 py-2 flex flex-col justify-center">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold flex items-center gap-1.5">
+                              <AlertTriangle className="w-3 h-3" /> Daily Loss Used
+                          </div>
+                          <div className={`text-2xl font-bold font-mono ${lossPctUsed > 80 ? 'text-rose-400' : lossPctUsed > 50 ? 'text-amber-400' : 'text-slate-300'}`}>
+                              {lossPctUsed.toFixed(0)}<span className="text-base text-slate-500 font-normal">%</span>
+                          </div>
+                          <div className="w-full h-1 bg-slate-800 rounded-full mt-1 overflow-hidden">
+                              <div
+                                  className={`h-full transition-all ${lossPctUsed > 80 ? 'bg-rose-500' : lossPctUsed > 50 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                                  style={{ width: `${lossPctUsed}%` }}
+                              />
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">
+                              of ₹{maxLoss.toLocaleString()} cap
+                          </div>
+                      </div>
+                      <div className="flex-1 min-w-[160px] px-4 py-2 flex flex-col justify-center">
+                          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold flex items-center gap-1.5">
+                              <Shield className="w-3 h-3" /> Engine Status
+                          </div>
+                          <div className={`text-2xl font-bold ${status?.is_running ? 'text-emerald-400' : 'text-slate-500'}`}>
+                              {status?.is_running ? 'RUNNING' : 'STOPPED'}
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-0.5 truncate" title={status?.active_strategy || 'No strategies'}>
+                              {status?.active_strategy || 'No strategies'}
+                          </div>
+                      </div>
+                  </>
+              );
+          })()}
       </div>
 
-      {/* Main Content Area */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Positions Table */}
-        <div className="lg:col-span-2 bg-surface rounded-xl border border-slate-700 p-6">
-          <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-            <ShoppingCart className="w-5 h-5 text-primary" /> Live Positions
-          </h3>
+      {/* ── Signal Status Timeline Strip ─────────────────────────────────
+          One row per active symbol. The right side shows a horizontal ribbon
+          of color dots — each dot is one recent signal check. Color tells you
+          at a glance what's been happening:
+            🟢 ENTRY signal (rare, only when strategy fires)
+            ⚫ NEUTRAL / no signal (most common)
+            🔵 WAIT (filter blocked)
+            🟡 specific block reason (volume, RSI etc.)
+          Hover any dot for the exact reason + timestamp.
+          The "current" status is shown left of the dot ribbon. */}
+      {signalStatus && Object.keys(signalStatus).length > 0 && (
+          <div className="bg-surface rounded-xl border border-slate-700 p-4">
+              <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-bold flex items-center gap-2 text-slate-200">
+                      <Activity className="w-4 h-4 text-primary" /> Signal Status Timeline
+                  </h3>
+                  <span className="text-[10px] text-slate-500">
+                      newest →  · last {Math.max(...Object.values(signalStatus).map(s => s?.history?.length || 0), 0)} checks per symbol
+                  </span>
+              </div>
+              <div className="space-y-1.5">
+                  {Object.entries(signalStatus).map(([sym, info]) => {
+                      const current = info?.current;
+                      const history = info?.history || [];
+                      // Color rules — kept tight so the ribbon reads instantly
+                      const colorFor = (action, reason) => {
+                          if (action === 'ENTRY') return 'bg-emerald-500';
+                          if (action === 'WAIT')  return 'bg-blue-500/70';
+                          // Specific block reasons surface in amber
+                          if (reason && reason !== 'No Signal' && reason !== 'Trend Mismatch') return 'bg-amber-500/70';
+                          return 'bg-slate-700';
+                      };
+                      const currColor = colorFor(current?.action, current?.reason);
+                      return (
+                          <div key={sym} className="flex items-center gap-3 text-xs">
+                              {/* Symbol + current status */}
+                              <div className="w-44 truncate text-slate-300 font-mono" title={sym}>{sym}</div>
+                              <div className="flex items-center gap-1.5 w-40">
+                                  <span className={`w-2 h-2 rounded-full ${currColor}`} />
+                                  <span className={`uppercase text-[10px] font-bold ${
+                                      current?.action === 'ENTRY' ? 'text-emerald-300'
+                                      : current?.action === 'WAIT' ? 'text-blue-300'
+                                      : 'text-slate-400'
+                                  }`}>
+                                      {current?.action || '—'}
+                                  </span>
+                                  {current?.type && (
+                                      <span className="text-[10px] text-slate-500">{current.type}</span>
+                                  )}
+                              </div>
+                              {/* Reason (truncated) */}
+                              <div className="flex-1 truncate text-[11px] text-slate-500 italic" title={current?.reason || ''}>
+                                  {current?.reason || '—'}
+                              </div>
+                              {/* History ribbon — oldest left, newest right */}
+                              <div className="flex items-center gap-0.5 flex-shrink-0">
+                                  {history.map((h, i) => (
+                                      <span
+                                          key={i}
+                                          className={`w-1.5 h-3 rounded-sm ${colorFor(h.action, h.reason)}`}
+                                          title={`${new Date(h.ts).toLocaleTimeString('en-IN', { hour12: false })}\n${h.action}${h.type ? ' ' + h.type : ''}: ${h.reason}`}
+                                      />
+                                  ))}
+                              </div>
+                          </div>
+                      );
+                  })}
+              </div>
+          </div>
+      )}
+
+      {/* ── Live Positions Panel ──────────────────────────────────────
+          Full-width now that the Manual Controls panel is gone — per-strategy
+          🧪 Sim buttons cover manual signal testing, and each position card
+          has its own Close button for individual exits. */}
+      <div className="grid grid-cols-1 gap-8">
+        <div className="bg-surface rounded-xl border border-slate-700 p-6">
+          <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold flex items-center gap-2">
+                  <ShoppingCart className="w-5 h-5 text-primary" /> Live Positions
+                  {positions.length > 0 && (
+                      <span className="text-xs font-normal text-slate-500">
+                          {positions.length} open
+                      </span>
+                  )}
+              </h3>
+              {positions.length > 0 && (() => {
+                  const totalPnl = positions.reduce((s, p) => s + (p.pnl || 0), 0);
+                  return (
+                      <span className={`text-sm font-mono font-bold ${totalPnl > 0 ? 'text-emerald-400' : totalPnl < 0 ? 'text-rose-400' : 'text-slate-400'}`}>
+                          {totalPnl >= 0 ? '+' : ''}₹{Math.round(totalPnl).toLocaleString()} total
+                      </span>
+                  );
+              })()}
+          </div>
           {positions.length > 0 ? (
-            <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                    <thead>
-                        <tr className="text-slate-400 border-b border-slate-700">
-                            <th className="p-3">Symbol</th>
-                            <th className="p-3">Qty</th>
-                            <th className="p-3">Price</th>
-                            <th className="p-3">P&L</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {positions.map((pos, i) => (
-                            <tr key={i} className="border-b border-slate-800 hover:bg-slate-800/50">
-                                <td className="p-3 font-medium text-white">{pos.symbol}</td>
-                                <td className="p-3 text-slate-300">{pos.quantity}</td>
-                                <td className="p-3 text-slate-300">₹{pos.price}</td>
-                                <td className={`p-3 font-bold ${pos.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>₹{pos.pnl ? pos.pnl.toFixed(2) : "0.00"}</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
+              <div className="space-y-3">
+                  {positions.map((pos, i) => {
+                      const isLong   = pos.type === 'CE' || pos.type === 'LONG' || pos.side === 1;
+                      const pnl      = pos.pnl || 0;
+                      const pnlPct   = pos.pnl_pct || 0;
+                      const ltp      = pos.ltp || pos.entryPrice || 0;
+                      const spotLtp  = pos.spot_ltp || null;
+                      const entrySpot = pos.entrySpot || null;
+
+                      // BROKER-side levels (option premium prices, actually sitting at broker)
+                      const brokerSl = pos.broker_sl_price || pos.sl_price || 0;
+                      const brokerTp = pos.broker_tp_price || pos.tp_price || 0;
+
+                      // SPOT-side levels (index prices, monitored by engine when ai_use_spot_exits is on)
+                      const spotSl   = pos.spot_sl_level || pos.aiSpotSl || pos.aiSuggestedSl || null;
+                      const spotTp   = pos.spot_tp_level || pos.aiSpotTp || pos.aiSuggestedTp || null;
+
+                      // Follow mode resolved server-side
+                      const followMode = pos.follow_mode || 'strategy';
+                      const followLabel = {
+                          ai_spot_exits: { txt: '🎯 AI Spot Exits', cls: 'bg-cyan-700/40 text-cyan-200', desc: 'Engine watches index live; broker SL is wider safety net' },
+                          ai_levels:     { txt: '🤖 AI Levels',     cls: 'bg-violet-700/40 text-violet-200', desc: 'Broker SL/TP placed at AI\'s spot levels via delta conversion' },
+                          strategy:      { txt: '📐 Strategy',       cls: 'bg-slate-700/60 text-slate-300', desc: 'Strategy SL/TP — no AI override applied' },
+                      }[followMode] || { txt: followMode, cls: 'bg-slate-700/60 text-slate-300' };
+
+                      // Progress bar — current option LTP between broker SL and broker TP
+                      const totalRange = Math.abs(brokerTp - brokerSl) || 1;
+                      const fromSl     = Math.abs(ltp - brokerSl);
+                      const progressPct = Math.max(0, Math.min(100, (fromSl / totalRange) * 100));
+                      const slDistPct = pos.entryPrice ? Math.abs(((ltp - brokerSl) / pos.entryPrice) * 100) : 0;
+                      const tpDistPct = pos.entryPrice ? Math.abs(((brokerTp - ltp) / pos.entryPrice) * 100) : 0;
+                      // Entry marker position on the progress bar
+                      const entryMarkerPct = pos.entryPrice && totalRange > 0
+                          ? Math.max(0, Math.min(100, (Math.abs(pos.entryPrice - brokerSl) / totalRange) * 100))
+                          : null;
+
+                      // Time held — human-readable: "1h 5m" / "12m 34s" / "47s"
+                      const hs = pos.holding_seconds || 0;
+                      const heldStr = hs >= 3600
+                          ? `${Math.floor(hs / 3600)}h ${Math.floor((hs % 3600) / 60)}m`
+                          : hs >= 60
+                              ? `${Math.floor(hs / 60)}m ${hs % 60}s`
+                              : `${hs}s`;
+                      const entryTimeStr = pos.entry_time_iso
+                          ? new Date(pos.entry_time_iso).toLocaleTimeString('en-IN', { hour12: false })
+                          : null;
+
+                      // Spot move since entry
+                      const spotMove = (spotLtp != null && entrySpot != null) ? (spotLtp - entrySpot) : null;
+
+                      return (
+                          <div
+                              key={pos.spotSymbol || pos.symbol || i}
+                              className={`rounded-lg border p-3 transition-colors ${
+                                  pnl > 0
+                                      ? 'border-emerald-700/50 bg-emerald-950/10'
+                                      : pnl < 0
+                                          ? 'border-rose-700/50 bg-rose-950/10'
+                                          : 'border-slate-700 bg-slate-900/40'
+                              }`}
+                          >
+                              {/* ── Row 1: badges + symbol + live PnL ── */}
+                              <div className="flex items-center justify-between gap-2 mb-2">
+                                  <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${isLong ? 'bg-emerald-700/40 text-emerald-200' : 'bg-rose-700/40 text-rose-200'}`}>
+                                          {pos.type || (isLong ? 'CE' : 'PE')}
+                                      </span>
+                                      <span className="font-mono text-sm text-white truncate" title={pos.symbol}>
+                                          {pos.symbol}
+                                      </span>
+                                      {pos.mode && (
+                                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${pos.mode === 'LIVE' ? 'bg-red-700/40 text-red-200' : 'bg-slate-700 text-slate-300'}`}>
+                                              {pos.mode}
+                                          </span>
+                                      )}
+                                      {pos.strategyName && (
+                                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-mono" title="Strategy that produced this signal">
+                                              {pos.strategyName}
+                                          </span>
+                                      )}
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${followLabel.cls}`} title={followLabel.desc}>
+                                          {followLabel.txt}
+                                      </span>
+                                  </div>
+                                  <div className="text-right">
+                                      <div className={`font-mono font-bold text-lg ${pnl > 0 ? 'text-emerald-400' : pnl < 0 ? 'text-rose-400' : 'text-slate-300'}`}>
+                                          {pnl >= 0 ? '+' : ''}₹{Math.round(pnl).toLocaleString()}
+                                      </div>
+                                      <div className="text-[10px] text-slate-500 font-mono">
+                                          {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}% · qty {pos.quantity || 0}
+                                      </div>
+                                  </div>
+                              </div>
+
+                              {/* ── Row 2: Entry option price | Entry spot | Held ── */}
+                              <div className="grid grid-cols-4 gap-3 text-[11px] mb-2 pb-2 border-b border-slate-800/50">
+                                  <div>
+                                      <div className="text-slate-500 text-[9px] uppercase tracking-wider">Entry Option</div>
+                                      <div className="font-mono text-slate-300 font-bold">₹{(pos.entryPrice || 0).toFixed(2)}</div>
+                                  </div>
+                                  <div>
+                                      <div className="text-slate-500 text-[9px] uppercase tracking-wider">Option LTP</div>
+                                      <div className="font-mono text-white font-bold">₹{ltp.toFixed(2)}</div>
+                                  </div>
+                                  <div>
+                                      <div className="text-slate-500 text-[9px] uppercase tracking-wider">Entry Spot</div>
+                                      <div className="font-mono text-slate-300 font-bold">
+                                          {entrySpot != null ? entrySpot.toFixed(2) : <span className="text-slate-600">—</span>}
+                                      </div>
+                                  </div>
+                                  <div>
+                                      <div className="text-slate-500 text-[9px] uppercase tracking-wider">Spot LTP</div>
+                                      <div className="font-mono text-white font-bold">
+                                          {spotLtp != null ? (
+                                              <>
+                                                  {spotLtp.toFixed(2)}
+                                                  {spotMove != null && (
+                                                      <span className={`ml-1 text-[10px] ${spotMove > 0 ? 'text-emerald-400' : spotMove < 0 ? 'text-rose-400' : 'text-slate-500'}`}>
+                                                          ({spotMove > 0 ? '+' : ''}{spotMove.toFixed(2)})
+                                                      </span>
+                                                  )}
+                                              </>
+                                          ) : <span className="text-slate-600">—</span>}
+                                      </div>
+                                  </div>
+                              </div>
+
+                              {/* ── Row 3: Broker SL/TP (option-premium levels at broker) ── */}
+                              <div className="text-[11px] mb-2">
+                                  <div className="flex justify-between items-center mb-1">
+                                      <span className="text-slate-500 text-[9px] uppercase tracking-wider flex items-center gap-1">
+                                          <span className="text-amber-400">🛡</span> Broker SL/TP (option premium)
+                                      </span>
+                                      <span className="text-[9px] text-slate-600">{slDistPct.toFixed(1)}% / {tpDistPct.toFixed(1)}% from LTP</span>
+                                  </div>
+                                  <div className="flex justify-between text-[10px] font-mono mb-1">
+                                      <span className="text-rose-400">SL ₹{brokerSl.toFixed(2)}</span>
+                                      <span className="text-emerald-400">TP ₹{brokerTp.toFixed(2)}</span>
+                                  </div>
+                                  <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden relative">
+                                      <div
+                                          className={`h-full ${progressPct > 50 ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                                          style={{ width: `${progressPct}%` }}
+                                      />
+                                      {entryMarkerPct != null && (
+                                          <div
+                                              className="absolute top-0 h-full w-0.5 bg-slate-300"
+                                              style={{ left: `${entryMarkerPct}%` }}
+                                              title={`Entry @ ₹${pos.entryPrice.toFixed(2)}`}
+                                          />
+                                      )}
+                                  </div>
+                              </div>
+
+                              {/* ── Row 4: Spot SL/TP (index-level, shown if AI gave them) ── */}
+                              {(spotSl != null || spotTp != null) && (
+                                  <div className="text-[11px] mb-2 pb-2 border-b border-slate-800/50">
+                                      <div className="flex justify-between items-center mb-1">
+                                          <span className="text-slate-500 text-[9px] uppercase tracking-wider flex items-center gap-1">
+                                              <span className="text-cyan-400">🎯</span> Spot SL/TP {pos.aiUseSpotExits ? '(engine-monitored)' : '(AI suggestion)'}
+                                          </span>
+                                          {pos.aiUseSpotExits && (
+                                              <span className="text-[9px] text-cyan-400 font-bold">ACTIVE</span>
+                                          )}
+                                      </div>
+                                      <div className="flex justify-between text-[10px] font-mono">
+                                          <span className="text-rose-400">
+                                              SL {spotSl != null ? spotSl.toFixed(2) : '—'}
+                                              {spotSl != null && spotLtp != null && (
+                                                  <span className="text-slate-500 ml-1">({Math.abs(spotLtp - spotSl).toFixed(1)} pts away)</span>
+                                              )}
+                                          </span>
+                                          <span className="text-emerald-400">
+                                              TP {spotTp != null ? spotTp.toFixed(2) : '—'}
+                                              {spotTp != null && spotLtp != null && (
+                                                  <span className="text-slate-500 ml-1">({Math.abs(spotTp - spotLtp).toFixed(1)} pts away)</span>
+                                              )}
+                                          </span>
+                                      </div>
+                                  </div>
+                              )}
+
+                              {/* ── Row 5: time + AI footer ── */}
+                              <div className="flex items-center justify-between gap-2 text-[10px]">
+                                  <div className="text-slate-400 flex items-center gap-2">
+                                      <span className="text-slate-500">⏱</span>
+                                      <span className="font-mono">{heldStr}</span>
+                                      {entryTimeStr && (
+                                          <span className="text-slate-600">since {entryTimeStr}</span>
+                                      )}
+                                  </div>
+                                  {pos.aiDecision && (
+                                      <div className="flex items-center gap-2 text-slate-400 min-w-0">
+                                          <span className="text-violet-400 font-bold">🤖</span>
+                                          {pos.aiConfidence != null && (
+                                              <span className="font-mono text-violet-300">{Math.round(pos.aiConfidence)}%</span>
+                                          )}
+                                          {pos.aiModel && (
+                                              <span className="text-slate-500 truncate max-w-[120px]" title={pos.aiModel}>
+                                                  {String(pos.aiModel).replace(/^claude-web\/|^gemini-web\//, '')}
+                                              </span>
+                                          )}
+                                      </div>
+                                  )}
+                              </div>
+                              {pos.aiReasoning && (
+                                  <div className="text-[10px] text-slate-500 italic mt-1 truncate" title={pos.aiReasoning}>
+                                      📋 {pos.aiReasoning}
+                                  </div>
+                              )}
+                              {/* ── Close button — manual exit for THIS position only ── */}
+                              {(() => {
+                                  const lockKey = pos.spotSymbol || pos.symbol;
+                                  const isClosing = !!closingSymbols[lockKey];
+                                  return (
+                                      <div className="mt-2 pt-2 border-t border-slate-800/50 flex justify-end">
+                                          <button
+                                              onClick={() => handleClosePosition(pos)}
+                                              disabled={isClosing}
+                                              className={`text-[11px] px-3 py-1 rounded font-bold transition-colors ${
+                                                  isClosing
+                                                      ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                                                      : 'bg-rose-700/40 hover:bg-rose-700/70 text-rose-200 hover:text-white border border-rose-700/60'
+                                              }`}
+                                              title="Fire a market exit for this position via the broker"
+                                          >
+                                              {isClosing ? '⏳ Closing…' : '🛑 Close Position'}
+                                          </button>
+                                      </div>
+                                  );
+                              })()}
+                          </div>
+                      );
+                  })}
+              </div>
           ) : (
-            <div className="flex items-center justify-center h-32 text-slate-500 bg-slate-900/50 rounded-lg">
-                No open positions
-            </div>
+              <div className="flex flex-col items-center justify-center h-32 text-slate-500 bg-slate-900/40 rounded-lg border border-dashed border-slate-700">
+                  <ShoppingCart className="w-6 h-6 mb-1 opacity-50" />
+                  <div className="text-sm">No open positions</div>
+                  <div className="text-[10px] text-slate-600 mt-1">Waiting for the next signal…</div>
+              </div>
           )}
         </div>
 
-        {/* Manual Controls */}
-        <div className="bg-surface rounded-xl border border-slate-700 p-6 space-y-6">
-          <h3 className="text-xl font-bold mb-4">Manual Controls</h3>
-          <div className="space-y-4">
-             <button 
-                onClick={() => openTradeModal('CE')}
-                className="w-full bg-green-500/10 hover:bg-green-500/20 text-green-500 border border-green-500/20 py-3 rounded-lg font-bold transition-colors"
-             >
-                📈 Test FAKE BUY (CE)
-             </button>
-             <button 
-                onClick={() => openTradeModal('PE')}
-                className="w-full bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 py-3 rounded-lg font-bold transition-colors"
-             >
-                📉 Test FAKE SELL (PE)
-             </button>
-             <hr className="border-slate-700" />
-             <button className="w-full bg-slate-700 hover:bg-slate-600 text-white py-3 rounded-lg font-bold transition-colors">
-                🚨 CLOSE ALL POSITIONS
-             </button>
-          </div>
-        </div>
       </div>
 
       {/* Option Chain */}

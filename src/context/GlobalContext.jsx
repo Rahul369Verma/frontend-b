@@ -22,7 +22,7 @@ export function GlobalProvider({ children }) {
     lot_size: defaultLotSize,
     trade_start_time: "09:30",
     trade_end_time: "15:00",
-    max_daily_loss: 2000,
+    max_daily_loss: 10000,
     max_trades_per_day: 10,
     ai_enable_reentry: true,
     // Legacy combined flag kept for back-compat — superseded by ai_follow_sl + ai_follow_tp.
@@ -43,6 +43,26 @@ export function GlobalProvider({ children }) {
     // (skip the trade) instead of the historical fail-open CONFIRM (which was
     // misleading on Telegram and only gated by the confidence threshold).
     ai_fail_closed: false,
+    // Opt-in: ask the AI to browse the web for VIX + news + global cues before
+    // deciding. Only meaningful for Claude.ai web-session models. Adds ~30–60s
+    // latency per signal. OFF by default — turn on only when you want macro
+    // context layered on top of the technical analysis.
+    ai_enable_web_research: false,
+    // In-flight AI review — periodically re-evaluates active positions and
+    // can auto-tighten SL, extend TP, or close early. OFF by default.
+    // FULL AUTONOMOUS: whatever the AI suggests (within sanity bounds) is
+    // applied without confirmation. Telegram fires for every action.
+    ai_inflight_review_enabled: false,
+    ai_inflight_review_interval_min: 15,
+    // AI spot-level exits (live engine only). When true, the engine monitors
+    // the underlying index and fires market exits the moment spot crosses
+    // AI's exact suggested_sl / suggested_tp. Broker SL stays as a wider safety
+    // net (multiplied by ai_sl_safety_buffer) so disconnects/crashes can't
+    // strand the position.
+    ai_use_spot_exits: false,
+    ai_sl_safety_buffer: 1.5,
+    // Mastra second-AI validator — off by default; live matches backtest unless on.
+    enable_mastra_validator: false,
   });
   const [backtestResult, setBacktestResult] = useState(null);
 

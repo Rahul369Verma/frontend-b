@@ -109,6 +109,20 @@ export default function Backtest() {
   const aiPollActiveJobRef = useRef(null); // prevents duplicate poll loops (StrictMode / HMR)
   const [aiProgress, setAiProgress] = useState({ done: 0, total: 0 });
   const [showSpotView, setShowSpotView] = useState(false);
+
+  // ── Ask-AI parameter optimization ────────────────────────────────────────
+  // Modal lets the user pick a model and have the AI suggest better values
+  // for the current strategy/symbol/date-range combo. Response lands in a
+  // diff view where the user can selectively apply.
+  const [askAiModal, setAskAiModal] = useState({
+      open: false,
+      step: 'config',           // 'config' | 'running' | 'review'
+      model: '',                // selected model id
+      result: null,             // { suggested_params, reasoning, confidence }
+      applyMap: {},             // { paramKey: true/false } — toggle per-row in diff view
+      error: null,
+      elapsedMs: 0,
+  });
   const [showAiSim, setShowAiSim] = useState(false);
   const [backtestResultId, setBacktestResultId] = useState(null);
   // Cache of resims keyed by mode. Modes:
@@ -422,6 +436,203 @@ export default function Backtest() {
   // Keys to exclude from Strategy Params (System/Backtest Config)
   const IGNORED_PARAMS = ['startDate', 'endDate', 'interval', 'period'];
 
+  // ── Ask-AI: collect tunable params from current form ──────────────────────
+  // We send everything EXCEPT:
+  //   • System/runtime params (symbol, strategy, dates, capital, lots, mode)
+  //   • AI-config params (model selection, cookies, thinking, web research,
+  //     in-flight review) — the AI doesn't tune its own settings
+  //   • Backtest meta (futures_expiry, backtest_mode, broker, model_file, ...)
+  // What remains is: Risk & Sizing + Exit & SL/TP + Strategy-specific params.
+  const ASKAI_EXCLUDE_KEYS = new Set([
+      // System / runtime
+      'symbol', 'strategy', 'start_date', 'end_date', 'capital', 'lots',
+      'lot_size', 'trade_mode', 'dataSource', 'resolution', 'interval',
+      'startDate', 'endDate', 'period', 'futures_expiry', 'backtest_mode',
+      'broker', 'model_file', 'seed_data', 'use_ai_prediction',
+      // AI configuration — the AI doesn't tune itself
+      'enable_ai_confirmation', 'use_ai_confirmation', 'ai_models',
+      'ai_concurrency', 'ai_confidence_threshold', 'ai_follow_sl_tp',
+      'ai_follow_sl', 'ai_follow_tp', 'ai_follow_strategy_exits',
+      'ai_enable_reentry', 'ai_max_signals', 'ai_fail_closed',
+      'ai_enable_web_research', 'ai_inflight_review_enabled',
+      'ai_inflight_review_interval_min', 'ai_use_spot_exits',
+      'ai_sl_safety_buffer', 'enable_mastra_validator',
+      // Cookies live in global Settings (not in params), so they're already
+      // absent here — kept in the exclude list for defensive cleanliness.
+      'use_claude_web_session', 'claude_web_model', 'claude_web_batch_size',
+      'claude_thinking_enabled', 'claude_thinking_budget',
+      'use_gemini_web_session', 'gemini_web_model', 'gemini_web_batch_size',
+      // Ensemble / RL
+      'use_ensemble', 'ensemble_models',
+  ]);
+
+  /**
+   * Build the tunable-params payload for the AI from the current form state.
+   * Snapshots only the keys the AI is allowed to tune. Booleans/numbers/
+   * strings pass through unchanged.
+   */
+  const buildAskAiPayload = () => {
+      const tunable = {};
+      Object.keys(params).forEach(k => {
+          if (ASKAI_EXCLUDE_KEYS.has(k)) return;
+          const v = params[k];
+          if (v === undefined || v === null) return;
+          // Only include primitives — arrays/objects get skipped (the AI won't
+          // know how to suggest a new array of ensemble models, etc.)
+          if (typeof v === 'object') return;
+          tunable[k] = v;
+      });
+      return tunable;
+  };
+
+  /**
+   * Resolve which AI model to use for the optimization call.
+   * Preference: user's explicit pick from the modal → currently-active AI Risk
+   * Filter model (claude-web/gemini-web/api). Falls back to gemini-2.0-flash.
+   */
+  const resolveAskAiModel = (explicitPick) => {
+      if (explicitPick) return explicitPick;
+      if (params.use_claude_web_session) return params.claude_web_model || 'claude-web/claude-sonnet-4-6';
+      if (params.use_gemini_web_session) return params.gemini_web_model || 'gemini-web/gemini-2.5-pro';
+      const list = Array.isArray(params.ai_models) ? params.ai_models : [];
+      return list[0] || 'gemini-2.0-flash';
+  };
+
+  /**
+   * Kick off a parameter optimization request. Reuses the same /ai-confirmation/
+   * start + status polling that entry/in-trade reviews use — just with a signal
+   * dict that carries phase='param_optimization'. Updates `askAiModal` through
+   * the three states: config → running → review.
+   */
+  const submitAskAi = async (chosenModel) => {
+      const modelId = resolveAskAiModel(chosenModel);
+      const isWebModel = modelId.startsWith('claude-web/') || modelId.startsWith('gemini-web/');
+      const currentTunable = buildAskAiPayload();
+
+      if (Object.keys(currentTunable).length === 0) {
+          setAskAiModal(m => ({ ...m, error: 'No tunable parameters found for this strategy.' }));
+          return;
+      }
+      setAskAiModal(m => ({
+          ...m, step: 'running', model: modelId, error: null, result: null, elapsedMs: 0,
+      }));
+      const startedAt = Date.now();
+
+      // Build the "signal" payload — phase tells Python which prompt to build
+      const signalPayload = {
+          candleIndex: 0,
+          phase: 'param_optimization',
+          strategy: params.strategy,
+          symbol: params.symbol,
+          start_date: params.start_date,
+          end_date: params.end_date,
+          current_params: currentTunable,
+          // Empty arrays so the Python builder doesn't crash on missing keys
+          candles: [],
+      };
+
+      try {
+          // Start the AI job
+          // Cookies are injected by the Node /api/ai-confirmation/start proxy
+          // from the global Settings doc — we no longer send them from the browser.
+          const startRes = await axios.post(`${API_URL}/ai-confirmation/start`, {
+              signals: [signalPayload],
+              models: [modelId],
+              concurrency: 1,
+              claude_web_batch_size: 1,
+              gemini_web_batch_size: 1,
+              claude_thinking_enabled: !!params.claude_thinking_enabled && modelId.startsWith('claude'),
+              claude_thinking_budget: parseInt(params.claude_thinking_budget, 10) || 32000,
+              enable_web_research: false,  // Not useful for param tuning
+          });
+          const jobId = startRes.data?.job_id;
+          if (!jobId) throw new Error('No job_id returned from server');
+
+          // Poll status until done (max 5 min — covers Claude thinking)
+          const POLL_INTERVAL = 3000;
+          const MAX_POLLS = 100;
+          let finalResult = null;
+          for (let i = 0; i < MAX_POLLS; i++) {
+              await new Promise(r => setTimeout(r, POLL_INTERVAL));
+              const statusRes = await axios.get(`${API_URL}/ai-confirmation/status/${jobId}`);
+              const data = statusRes.data || {};
+              const decisions = data.decisions || {};
+              const firstKey = Object.keys(decisions)[0];
+              if (firstKey) {
+                  finalResult = decisions[firstKey];
+                  break;
+              }
+              if (data.status === 'cancelled' || data.status === 'error') {
+                  throw new Error(data.error || `Job ended in '${data.status}' state`);
+              }
+              // Update elapsed time so the running spinner shows real progress
+              setAskAiModal(m => ({ ...m, elapsedMs: Date.now() - startedAt }));
+          }
+          if (!finalResult) throw new Error('AI timeout — no response within 5 min');
+
+          const suggested = finalResult.suggested_params;
+          if (!suggested || typeof suggested !== 'object' || Object.keys(suggested).length === 0) {
+              throw new Error('AI returned no parameter suggestions. Try a different model.');
+          }
+
+          // Pre-populate applyMap: default = all keys ON (so "Apply All" works
+          // and the user can de-select rows they don't trust)
+          const applyMap = {};
+          Object.keys(suggested).forEach(k => { applyMap[k] = true; });
+
+          setAskAiModal(m => ({
+              ...m,
+              step: 'review',
+              result: {
+                  suggested_params: suggested,
+                  reasoning: finalResult.reasoning || '',
+                  confidence: finalResult.confidence || 0,
+              },
+              applyMap,
+              elapsedMs: Date.now() - startedAt,
+          }));
+      } catch (err) {
+          setAskAiModal(m => ({
+              ...m,
+              step: 'config',
+              error: err?.response?.data?.error || err.message || 'Unknown error',
+              elapsedMs: Date.now() - startedAt,
+          }));
+      }
+  };
+
+  /**
+   * Apply the selected suggestions back to `params`. Only rows the user has
+   * toggled ON in applyMap are pushed; rest are skipped. Preserves the type
+   * of the current value when the AI sent a string number / int vs float.
+   */
+  const applyAskAiSuggestions = () => {
+      const { result, applyMap } = askAiModal;
+      if (!result?.suggested_params) return;
+      const updates = {};
+      Object.entries(result.suggested_params).forEach(([k, v]) => {
+          if (!applyMap[k]) return;
+          const cur = params[k];
+          // Type-coerce to match current type. Catches AI mistakes like
+          // returning "1.5" (string) when current is 1.5 (number).
+          if (typeof cur === 'number' && typeof v !== 'number') {
+              const parsed = parseFloat(v);
+              if (!isNaN(parsed)) updates[k] = parsed;
+              else return;  // skip un-coerceable
+          } else if (typeof cur === 'boolean' && typeof v !== 'boolean') {
+              updates[k] = !!(v && v !== 'false' && v !== 0);
+          } else {
+              updates[k] = v;
+          }
+      });
+      if (Object.keys(updates).length === 0) {
+          alert('No suggestions selected — nothing to apply.');
+          return;
+      }
+      setParams(prev => ({ ...prev, ...updates }));
+      setAskAiModal(m => ({ ...m, open: false }));
+  };
+
   const handleSaveDefault = async () => {
     if (!params.strategy) return alert("Please select a strategy first.");
     const confirm = window.confirm(`Are you sure you want to update GLOBAL DEFAULTS for ${params.strategy}? This will affect all new backtests.`);
@@ -725,14 +936,11 @@ export default function Backtest() {
     // apply decisions → resim CONFIRMs → return candidates for the next loop.
     // Returns [] when no further loops should run for any trade.
     const runReentryLoop = async (candidates, loopNum, resultId, aiModels, aiConcurrency) => {
+      // Cookies are injected server-side by AiConfirmationCore from the global
+      // Settings doc; the browser no longer ships them in the payload.
       const ctxRes = await axios.post(`${API_URL}/backtest/reentry-contexts`, {
         resultId, candidates, loopNum, aiModels, aiConcurrency,
-        claude_web_session_key: params?.claude_web_session_key || null,
-        claude_web_org_id: params?.claude_web_org_id || null,
         claude_web_batch_size: parseInt(params?.claude_web_batch_size, 10) || 1,
-        gemini_web_psid: params?.gemini_web_psid || null,
-        gemini_web_psidts: params?.gemini_web_psidts || null,
-        gemini_web_psidcc: params?.gemini_web_psidcc || null,
         gemini_web_batch_size: parseInt(params?.gemini_web_batch_size, 10) || 1,
         claude_thinking_enabled: !!params?.claude_thinking_enabled,
         claude_thinking_budget: parseInt(params?.claude_thinking_budget, 10) || 32000,
@@ -1871,37 +2079,14 @@ export default function Backtest() {
                                             Forced serial (1 call at a time) to reduce detection. No key rotation.
                                             Re-paste sessionKey when it expires (typically every few weeks).
                                         </p>
-                                        <div>
-                                            <label className="block text-[10px] text-amber-300 mb-1">
-                                                Claude.ai <code className="bg-slate-900 px-1">sessionKey</code> cookie
-                                            </label>
-                                            <input
-                                                type="password"
-                                                placeholder="sk-ant-sid01-..."
-                                                className="w-full bg-slate-900 border border-amber-700/40 rounded p-1.5 text-white text-xs font-mono"
-                                                value={params.claude_web_session_key || ''}
-                                                onChange={e => setParams({ ...params, claude_web_session_key: e.target.value.trim() })}
-                                            />
-                                            <p className="text-[10px] text-slate-500 mt-1 leading-snug">
-                                                <b>How to copy:</b> open <code>claude.ai</code> while logged in →
-                                                DevTools (F12) → Application → Cookies → <code>https://claude.ai</code> →
-                                                copy the <code>sessionKey</code> value (starts with <code>sk-ant-sid01-</code>).
-                                                Stored client-side only; sent to backend per backtest.
-                                            </p>
+                                        {/* Cookies are managed globally — single source of truth in Settings.
+                                            Update once, every backtest and every deployed strategy picks up the new value. */}
+                                        <div className="text-[10px] text-slate-400 bg-slate-900/40 border border-slate-700 rounded p-2">
+                                            🍪 Cookies (<code>sessionKey</code> + <code>org_id</code>) are managed globally in{' '}
+                                            <a href="/settings" className="text-amber-300 underline hover:text-amber-200">Settings → AI Web Cookies</a>.
+                                            Update there once; every backtest and deployed strategy uses the same values.
                                         </div>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <div>
-                                                <label className="block text-[10px] text-amber-300 mb-1">
-                                                    Org UUID <span className="text-slate-500">(optional, auto-detect)</span>
-                                                </label>
-                                                <input
-                                                    type="text"
-                                                    placeholder="leave blank to auto-detect"
-                                                    className="w-full bg-slate-900 border border-amber-700/40 rounded p-1.5 text-white text-xs font-mono"
-                                                    value={params.claude_web_org_id || ''}
-                                                    onChange={e => setParams({ ...params, claude_web_org_id: e.target.value.trim() })}
-                                                />
-                                            </div>
+                                        <div className="grid grid-cols-1 gap-2">
                                             <div>
                                                 <label className="block text-[10px] text-amber-300 mb-1">Claude model</label>
                                                 <select
@@ -1952,11 +2137,6 @@ export default function Backtest() {
                                                 Each batch sends N signals in one request with independence-framed prompt. On malformed JSON the engine auto-falls-back to single-call mode for that batch.
                                             </p>
                                         </div>
-                                        {!params.claude_web_session_key && (
-                                            <p className="text-[10px] text-red-400 font-semibold">
-                                                ⚠️ sessionKey is empty — AI confirmation will fail.
-                                            </p>
-                                        )}
                                     </>
                                 )}
                             </div>
@@ -1994,50 +2174,13 @@ export default function Backtest() {
                                             <code className="bg-slate-900 px-1">__Secure-1PSIDTS</code> rotates every
                                             few hours — re-paste when calls start erroring.
                                         </p>
-                                        <div>
-                                            <label className="block text-[10px] text-cyan-300 mb-1">
-                                                <code className="bg-slate-900 px-1">__Secure-1PSID</code> cookie
-                                            </label>
-                                            <input
-                                                type="password"
-                                                placeholder="g.a000... (long string ending with .)"
-                                                className="w-full bg-slate-900 border border-cyan-700/40 rounded p-1.5 text-white text-xs font-mono"
-                                                value={params.gemini_web_psid || ''}
-                                                onChange={e => setParams({ ...params, gemini_web_psid: e.target.value.trim() })}
-                                            />
-                                            <p className="text-[10px] text-slate-500 mt-1 leading-snug">
-                                                <b>How to copy:</b> open <code>gemini.google.com</code> while logged in →
-                                                DevTools (F12) → Application → Cookies → <code>https://gemini.google.com</code> →
-                                                copy <code>__Secure-1PSID</code>, <code>__Secure-1PSIDTS</code>,
-                                                and (optional) <code>__Secure-1PSIDCC</code> values.
-                                                Stored client-side only; sent to backend per backtest.
-                                            </p>
+                                        {/* Cookies are managed globally — single source of truth in Settings. */}
+                                        <div className="text-[10px] text-slate-400 bg-slate-900/40 border border-slate-700 rounded p-2">
+                                            🍪 Cookies (<code>__Secure-1PSID</code> / <code>__Secure-1PSIDTS</code> / <code>__Secure-1PSIDCC</code>) are managed globally in{' '}
+                                            <a href="/settings" className="text-cyan-300 underline hover:text-cyan-200">Settings → AI Web Cookies</a>.
+                                            Update there once; every backtest and deployed strategy uses the same values.
                                         </div>
-                                        <div>
-                                            <label className="block text-[10px] text-cyan-300 mb-1">
-                                                <code className="bg-slate-900 px-1">__Secure-1PSIDTS</code> cookie (rotates often)
-                                            </label>
-                                            <input
-                                                type="password"
-                                                placeholder="sidts-..."
-                                                className="w-full bg-slate-900 border border-cyan-700/40 rounded p-1.5 text-white text-xs font-mono"
-                                                value={params.gemini_web_psidts || ''}
-                                                onChange={e => setParams({ ...params, gemini_web_psidts: e.target.value.trim() })}
-                                            />
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <div>
-                                                <label className="block text-[10px] text-cyan-300 mb-1">
-                                                    <code className="bg-slate-900 px-1">__Secure-1PSIDCC</code> <span className="text-slate-500">(optional)</span>
-                                                </label>
-                                                <input
-                                                    type="password"
-                                                    placeholder="optional"
-                                                    className="w-full bg-slate-900 border border-cyan-700/40 rounded p-1.5 text-white text-xs font-mono"
-                                                    value={params.gemini_web_psidcc || ''}
-                                                    onChange={e => setParams({ ...params, gemini_web_psidcc: e.target.value.trim() })}
-                                                />
-                                            </div>
+                                        <div className="grid grid-cols-1 gap-2">
                                             <div>
                                                 <label className="block text-[10px] text-cyan-300 mb-1">Gemini model</label>
                                                 <select
@@ -2049,9 +2192,14 @@ export default function Backtest() {
                                                         ai_models: [e.target.value],
                                                     })}
                                                 >
-                                                    <option value="gemini-web/gemini-2.5-flash">Gemini 2.5 Flash (fastest)</option>
-                                                    <option value="gemini-web/gemini-2.5-pro">Gemini 2.5 Pro (balanced)</option>
-                                                    <option value="gemini-web/gemini-2.5-flash-thinking">Gemini 2.5 Flash Thinking</option>
+                                                    {/* Latest 2026 models — visible in the gemini.google.com UI dropdown */}
+                                                    <option value="gemini-web/gemini-3.1-pro">Gemini 3.1 Pro — strongest reasoning (NEW)</option>
+                                                    <option value="gemini-web/gemini-3.5-flash">Gemini 3.5 Flash — balanced (NEW)</option>
+                                                    <option value="gemini-web/gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite — fastest (NEW)</option>
+                                                    {/* Older 2.5 family — kept for back-compat with existing saved configs */}
+                                                    <option value="gemini-web/gemini-2.5-pro">Gemini 2.5 Pro (legacy)</option>
+                                                    <option value="gemini-web/gemini-2.5-flash">Gemini 2.5 Flash (legacy)</option>
+                                                    <option value="gemini-web/gemini-2.5-flash-thinking">Gemini 2.5 Flash Thinking (legacy)</option>
                                                 </select>
                                             </div>
                                         </div>
@@ -2084,11 +2232,6 @@ export default function Backtest() {
                                                 })()}
                                             </p>
                                         </div>
-                                        {(!params.gemini_web_psid || !params.gemini_web_psidts) && (
-                                            <p className="text-[10px] text-red-400 font-semibold">
-                                                ⚠️ __Secure-1PSID and __Secure-1PSIDTS are required — AI confirmation will fail.
-                                            </p>
-                                        )}
                                     </>
                                 )}
                             </div>
@@ -2193,6 +2336,140 @@ export default function Backtest() {
                                     {params.ai_fail_closed
                                         ? '🛑 AI timeout/error in LIVE → reject the trade (safer)'
                                         : '⚠️ AI timeout/error in LIVE → fall back to threshold gate (default)'}
+                                </span>
+                            </label>
+
+                            {/* ── Web research toggle ────────────────────────────────────
+                                Asks the AI (Claude.ai web session only) to use its built-in
+                                browse tool to look up India VIX, current symbol news, and
+                                global cues before deciding. Adds ~30–60s latency per signal.
+                                The Anthropic API path doesn't have a built-in browser tool,
+                                so this is a silent no-op unless you're on claude-web/*. */}
+                            <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+                                <input
+                                    type="checkbox"
+                                    className="w-3.5 h-3.5 accent-emerald-500"
+                                    checked={!!params.ai_enable_web_research}
+                                    onChange={e => setParams({ ...params, ai_enable_web_research: e.target.checked })}
+                                />
+                                <span className="text-[11px] text-slate-300 font-medium">🌐 Live web research (Claude web only)</span>
+                                <span className="text-[10px] text-slate-500">
+                                    {params.ai_enable_web_research
+                                        ? '🔎 AI looks up VIX + news + global cues before judging (+30–60s)'
+                                        : 'Technical context only — fast, deterministic'}
+                                </span>
+                            </label>
+                            {params.ai_enable_web_research && !params.use_claude_web_session && (
+                                <p className="ml-6 text-[10px] text-amber-400/80 leading-snug">
+                                    ⚠ Web research needs Claude.ai web session. Anthropic API + Gemini paths
+                                    will ignore this flag. Enable a <code>claude-web/*</code> model + paste a
+                                    sessionKey to use it.
+                                </p>
+                            )}
+
+                            {/* ── In-flight position review (live engine only, AUTONOMOUS) ──────
+                                Periodically re-asks the AI to review each ACTIVE position. AI can:
+                                  HOLD / UPDATE_SL / UPDATE_TP / CLOSE_NOW
+                                Whatever it returns (within sanity bounds — correct side of entry,
+                                valid numbers) is applied automatically. Telegram fires for each
+                                action. Doesn't affect backtest. Default OFF — review consumes
+                                AI calls every N min per open position.
+                            */}
+                            <div className="border border-cyan-800/40 bg-cyan-950/10 rounded p-2 space-y-2">
+                                <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+                                    <input
+                                        type="checkbox"
+                                        className="w-3.5 h-3.5 accent-cyan-500"
+                                        checked={!!params.ai_inflight_review_enabled}
+                                        onChange={e => setParams({ ...params, ai_inflight_review_enabled: e.target.checked })}
+                                    />
+                                    <span className="text-[11px] text-cyan-200 font-bold">
+                                        🔄 In-flight AI review (live engine only, AUTONOMOUS)
+                                    </span>
+                                </label>
+                                {!!params.ai_inflight_review_enabled && (
+                                    <>
+                                        <p className="ml-6 text-[10px] text-slate-400 leading-snug">
+                                            Every <b>{params.ai_inflight_review_interval_min || 15} min</b> the AI re-evaluates each
+                                            ACTIVE position and may auto-tighten SL, extend TP, or close early.
+                                            Telegram fires on every action so you stay informed.
+                                            Doesn't run in backtest.
+                                        </p>
+                                        <div className="ml-6 flex items-center gap-2">
+                                            <span className="text-[10px] text-slate-400">Review every</span>
+                                            <input
+                                                type="number"
+                                                min="5"
+                                                max="60"
+                                                step="5"
+                                                value={params.ai_inflight_review_interval_min ?? 15}
+                                                onChange={e => setParams({
+                                                    ...params,
+                                                    ai_inflight_review_interval_min: Math.max(5, Math.min(60, parseInt(e.target.value, 10) || 15)),
+                                                })}
+                                                className="w-16 bg-slate-900 border border-cyan-700/40 rounded p-1 text-white text-xs text-center"
+                                            />
+                                            <span className="text-[10px] text-slate-400">minutes (5–60)</span>
+                                        </div>
+                                        <p className="ml-6 text-[10px] text-amber-400/80 leading-snug">
+                                            ⚠ <b>Autonomous mode</b>: AI suggestions are applied without confirmation.
+                                            Sanity-checked (correct side of entry, valid levels) but otherwise trusted.
+                                            Watch the Live Activity Feed for actions logged with <code>phase=in_trade</code>.
+                                        </p>
+                                    </>
+                                )}
+                            </div>
+
+                            {/* AI spot-level exits (engine monitors index, broker SL is the wider safety net) */}
+                            <div className="border-l-2 border-cyan-700/30 pl-3 space-y-1.5">
+                                <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+                                    <input
+                                        type="checkbox"
+                                        className="w-3.5 h-3.5 accent-cyan-500"
+                                        checked={!!params.ai_use_spot_exits}
+                                        onChange={e => setParams({ ...params, ai_use_spot_exits: e.target.checked })}
+                                    />
+                                    <span className="text-[11px] text-cyan-200 font-medium">🎯 AI Spot-Level Exits (LIVE)</span>
+                                    <span className="text-[10px] text-slate-500">
+                                        {params.ai_use_spot_exits
+                                            ? 'Engine fires market exit when index crosses AI level. Broker SL is wider safety net.'
+                                            : 'Default — broker SL = exact AI level converted via 0.5 delta.'}
+                                    </span>
+                                </label>
+                                {!!params.ai_use_spot_exits && (
+                                    <div className="ml-6 flex items-center gap-2">
+                                        <label className="text-[10px] text-cyan-300">Safety buffer:</label>
+                                        <input
+                                            type="number"
+                                            min="1.0"
+                                            max="3.0"
+                                            step="0.1"
+                                            className="w-16 bg-slate-900 border border-cyan-700/40 rounded p-1 text-white text-[11px] text-right"
+                                            value={params.ai_sl_safety_buffer ?? 1.5}
+                                            onChange={e => setParams({ ...params, ai_sl_safety_buffer: parseFloat(e.target.value) || 1.5 })}
+                                        />
+                                        <span className="text-[10px] text-slate-500 leading-tight">
+                                            × the AI SL distance — the broker SL fires at this wider buffer in case of engine
+                                            crash / disconnect. 1.5 = broker SL fires at 1.5× AI's level (good default).
+                                            Set higher for more headroom during volatile sessions.
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Mastra validator — secondary AI gate (off by default; live matches backtest) */}
+                            <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+                                <input
+                                    type="checkbox"
+                                    className="w-3.5 h-3.5 accent-purple-500"
+                                    checked={!!params.enable_mastra_validator}
+                                    onChange={e => setParams({ ...params, enable_mastra_validator: e.target.checked })}
+                                />
+                                <span className="text-[11px] text-slate-300 font-medium">Mastra second-AI validator</span>
+                                <span className="text-[10px] text-slate-500">
+                                    {params.enable_mastra_validator
+                                        ? '🤖 Mastra Gemini re-validates each trade at execution time (extra gate)'
+                                        : 'Off — live matches backtest (primary AI only). Recommended.'}
                                 </span>
                             </label>
 
@@ -2537,7 +2814,17 @@ export default function Backtest() {
 
 
          <div className="grid grid-cols-2 gap-2 mt-auto">
-            <button 
+            {/* Ask AI — sends the current strategy + symbol + tunable params to
+                the AI and gets back optimized values. Two-column "Ask AI" gets
+                its own row at the top so it doesn't compete with Save/Deploy. */}
+            <button
+                onClick={() => setAskAiModal(m => ({ ...m, open: true, step: 'config', error: null, result: null }))}
+                className="col-span-2 bg-violet-700/30 hover:bg-violet-700/50 text-xs py-2 rounded text-violet-100 border border-violet-700 shadow-sm font-bold flex items-center justify-center gap-2"
+                title="Have the AI suggest optimal parameter values for this strategy + symbol"
+            >
+                🤖 Ask AI for Parameter Suggestions
+            </button>
+            <button
                 onClick={handleSaveDefault}
                 className="bg-gray-700 hover:bg-gray-600 text-xs py-2 rounded text-gray-300 border border-gray-600"
                 title="Update Global Strategy Defaults with these values"
@@ -3255,6 +3542,232 @@ export default function Backtest() {
           )}
         </div>
       </div>
+
+      {/* ─── Ask AI for Parameter Suggestions Modal ──────────────────── */}
+      {askAiModal.open && (() => {
+          const onClose = () => setAskAiModal({ open: false, step: 'config', model: '', result: null, applyMap: {}, error: null, elapsedMs: 0 });
+          const tunableCount = Object.keys(buildAskAiPayload()).length;
+          const resolvedModel = resolveAskAiModel(askAiModal.model);
+          const isWebSession = resolvedModel.startsWith('claude-web/') || resolvedModel.startsWith('gemini-web/');
+          // Cookie status checks dropped — cookies are sourced from global Settings
+          // server-side now; a missing-cookie failure shows up at runtime with the
+          // actual error from Python, which is more accurate than a stale browser check.
+          return (
+              <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={onClose}>
+                  <div className="bg-surface border border-violet-700/50 rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+                      {/* Header */}
+                      <div className="p-4 border-b border-violet-700/30 bg-violet-950/20 flex justify-between items-center">
+                          <div>
+                              <h3 className="text-lg font-bold text-violet-200 flex items-center gap-2">
+                                  🤖 Ask AI for Parameter Suggestions
+                              </h3>
+                              <p className="text-[11px] text-slate-400 mt-0.5">
+                                  Strategy: <code className="bg-slate-800 px-1 rounded">{params.strategy}</code>
+                                  &nbsp;·&nbsp; Symbol: <code className="bg-slate-800 px-1 rounded">{params.symbol}</code>
+                                  &nbsp;·&nbsp; {tunableCount} tunable params
+                              </p>
+                          </div>
+                          <button onClick={onClose} className="text-slate-400 hover:text-white text-2xl leading-none">×</button>
+                      </div>
+
+                      {/* Step: config — pick model + submit */}
+                      {askAiModal.step === 'config' && (
+                          <div className="p-5 space-y-4">
+                              <div>
+                                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
+                                      AI Model
+                                  </label>
+                                  <select
+                                      value={askAiModal.model || resolvedModel}
+                                      onChange={e => setAskAiModal(m => ({ ...m, model: e.target.value }))}
+                                      className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                  >
+                                      <optgroup label="🌐 Web Sessions (no API cost)">
+                                          <option value="claude-web/claude-opus-4-7">Claude Opus 4.7 (web) — strongest reasoning</option>
+                                          <option value="claude-web/claude-sonnet-4-6">Claude Sonnet 4.6 (web) — balanced</option>
+                                          <option value="claude-web/claude-haiku-4-5">Claude Haiku 4.5 (web) — fastest</option>
+                                          {/* Latest 2026 Gemini models from gemini.google.com */}
+                                          <option value="gemini-web/gemini-3.1-pro">Gemini 3.1 Pro (web) — strongest reasoning (NEW)</option>
+                                          <option value="gemini-web/gemini-3.5-flash">Gemini 3.5 Flash (web) — balanced (NEW)</option>
+                                          <option value="gemini-web/gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite (web) — fastest (NEW)</option>
+                                          <option value="gemini-web/gemini-2.5-pro">Gemini 2.5 Pro (web) — legacy</option>
+                                          <option value="gemini-web/gemini-2.5-flash">Gemini 2.5 Flash (web) — legacy</option>
+                                      </optgroup>
+                                      <optgroup label="🔌 API (pay per call)">
+                                          <option value="gemini-2.0-flash">Gemini 2.0 Flash (API)</option>
+                                          <option value="gemini-2.5-flash">Gemini 2.5 Flash (API)</option>
+                                          <option value="gemini-2.5-pro">Gemini 2.5 Pro (API)</option>
+                                          <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (API)</option>
+                                          <option value="claude-opus-4-7">Claude Opus 4.7 (API)</option>
+                                      </optgroup>
+                                  </select>
+                                  <p className="text-[10px] text-slate-500 mt-1">
+                                      Web-session models reuse credentials saved in your AI Risk Filter section.
+                                      API models use the Google/Anthropic keys in your backend env.
+                                  </p>
+                              </div>
+
+                              {/* Pre-flight warning for web-session models — cookies live in
+                                  global Settings; we can't preview their state from here, so just
+                                  point the user at the right place. */}
+                              {isWebSession && (
+                                  <div className="bg-slate-900/40 border border-slate-700 rounded p-3 text-[11px] text-slate-300">
+                                      🍪 Web-session models read cookies from{' '}
+                                      <a href="/settings" className="text-amber-300 underline hover:text-amber-200">Settings → AI Web Cookies</a>.
+                                      If cookies aren't saved there, the call will fail at runtime with the actual reason.
+                                  </div>
+                              )}
+
+                              {/* Brief summary of what we're sending */}
+                              <details className="text-[11px]">
+                                  <summary className="cursor-pointer text-slate-400 hover:text-slate-200">
+                                      Preview: parameters being sent to AI ({tunableCount} keys)
+                                  </summary>
+                                  <pre className="mt-2 bg-slate-900 p-3 rounded text-slate-300 overflow-x-auto max-h-60 text-[10px]">
+{JSON.stringify(buildAskAiPayload(), null, 2)}
+                                  </pre>
+                              </details>
+
+                              {askAiModal.error && (
+                                  <div className="bg-red-900/30 border border-red-700/50 rounded p-3 text-[12px] text-red-200">
+                                      ❌ {askAiModal.error}
+                                  </div>
+                              )}
+
+                              <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+                                  <button onClick={onClose} className="px-4 py-2 rounded text-sm bg-slate-700 hover:bg-slate-600 text-slate-200">
+                                      Cancel
+                                  </button>
+                                  <button
+                                      onClick={() => submitAskAi(askAiModal.model || resolvedModel)}
+                                      disabled={tunableCount === 0}
+                                      className={`px-4 py-2 rounded text-sm font-bold ${
+                                          tunableCount === 0
+                                              ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                                              : 'bg-violet-600 hover:bg-violet-500 text-white'
+                                      }`}
+                                  >
+                                      🚀 Get AI Suggestions
+                                  </button>
+                              </div>
+                          </div>
+                      )}
+
+                      {/* Step: running — spinner + elapsed */}
+                      {askAiModal.step === 'running' && (
+                          <div className="p-10 flex flex-col items-center justify-center text-center">
+                              <div className="w-12 h-12 border-4 border-violet-500/30 border-t-violet-400 rounded-full animate-spin mb-4" />
+                              <p className="text-sm text-slate-200">Asking <code className="bg-slate-800 px-1 rounded">{resolvedModel}</code>…</p>
+                              <p className="text-[11px] text-slate-500 mt-2">
+                                  {isWebSession ? 'Web-session calls can take 30–120s with thinking enabled.' : 'API calls usually complete in 5–20s.'}
+                              </p>
+                              <p className="text-[10px] text-slate-600 mt-3 font-mono">
+                                  Elapsed: {Math.round((askAiModal.elapsedMs || 0) / 1000)}s
+                              </p>
+                          </div>
+                      )}
+
+                      {/* Step: review — diff view + apply */}
+                      {askAiModal.step === 'review' && askAiModal.result && (() => {
+                          const suggested = askAiModal.result.suggested_params || {};
+                          const keys = Object.keys(suggested);
+                          const conf = askAiModal.result.confidence || 0;
+                          const reasoning = askAiModal.result.reasoning || '';
+                          const allOn = keys.every(k => askAiModal.applyMap[k]);
+                          const toggleAll = () => {
+                              const next = {};
+                              keys.forEach(k => { next[k] = !allOn; });
+                              setAskAiModal(m => ({ ...m, applyMap: next }));
+                          };
+                          return (
+                              <div className="p-5 space-y-3">
+                                  {/* Summary row */}
+                                  <div className="flex items-center justify-between flex-wrap gap-2 bg-violet-950/20 border border-violet-700/30 rounded p-3">
+                                      <div className="flex items-center gap-3 text-xs">
+                                          <span className="text-violet-200 font-bold">
+                                              {keys.length} parameter{keys.length !== 1 ? 's' : ''} suggested
+                                          </span>
+                                          <span className="text-slate-500">·</span>
+                                          <span className="text-slate-300">Confidence: <span className={`font-bold ${conf >= 70 ? 'text-emerald-400' : conf >= 50 ? 'text-amber-400' : 'text-rose-400'}`}>{conf}%</span></span>
+                                          <span className="text-slate-500">·</span>
+                                          <span className="text-slate-500">{Math.round((askAiModal.elapsedMs || 0) / 1000)}s</span>
+                                      </div>
+                                      <button onClick={toggleAll} className="text-[11px] px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200">
+                                          {allOn ? 'Deselect all' : 'Select all'}
+                                      </button>
+                                  </div>
+
+                                  {/* Reasoning */}
+                                  {reasoning && (
+                                      <div className="text-[11px] text-slate-300 italic bg-slate-900 border border-slate-800 rounded p-3">
+                                          💭 {reasoning}
+                                      </div>
+                                  )}
+
+                                  {/* Diff table */}
+                                  <div className="border border-slate-800 rounded overflow-hidden">
+                                      <table className="w-full text-xs">
+                                          <thead className="bg-slate-900/80 text-slate-500 uppercase tracking-wider text-[10px]">
+                                              <tr>
+                                                  <th className="p-2 text-left w-12">Apply</th>
+                                                  <th className="p-2 text-left">Parameter</th>
+                                                  <th className="p-2 text-right">Current</th>
+                                                  <th className="p-2 text-center w-6">→</th>
+                                                  <th className="p-2 text-right">Suggested</th>
+                                              </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-slate-800">
+                                              {keys.map(k => {
+                                                  const cur = params[k];
+                                                  const sug = suggested[k];
+                                                  const sameValue = String(cur) === String(sug);
+                                                  return (
+                                                      <tr key={k} className={`text-slate-200 ${askAiModal.applyMap[k] ? 'bg-violet-950/10' : ''}`}>
+                                                          <td className="p-2">
+                                                              <input
+                                                                  type="checkbox"
+                                                                  className="w-4 h-4 accent-violet-500"
+                                                                  checked={!!askAiModal.applyMap[k]}
+                                                                  onChange={e => setAskAiModal(m => ({ ...m, applyMap: { ...m.applyMap, [k]: e.target.checked } }))}
+                                                              />
+                                                          </td>
+                                                          <td className="p-2 font-mono text-slate-300">{k}</td>
+                                                          <td className="p-2 text-right font-mono text-slate-400">{String(cur)}</td>
+                                                          <td className="p-2 text-center text-slate-600">→</td>
+                                                          <td className={`p-2 text-right font-mono font-bold ${sameValue ? 'text-slate-500' : 'text-emerald-300'}`}>
+                                                              {String(sug)}{sameValue && <span className="text-slate-600 text-[10px] ml-1">(no change)</span>}
+                                                          </td>
+                                                      </tr>
+                                                  );
+                                              })}
+                                          </tbody>
+                                      </table>
+                                  </div>
+
+                                  <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+                                      <button
+                                          onClick={() => setAskAiModal(m => ({ ...m, step: 'config' }))}
+                                          className="px-4 py-2 rounded text-sm bg-slate-700 hover:bg-slate-600 text-slate-200"
+                                      >
+                                          ← Ask Again
+                                      </button>
+                                      <button onClick={onClose} className="px-4 py-2 rounded text-sm bg-slate-700 hover:bg-slate-600 text-slate-200">
+                                          Cancel
+                                      </button>
+                                      <button
+                                          onClick={applyAskAiSuggestions}
+                                          className="px-4 py-2 rounded text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white"
+                                      >
+                                          ✓ Apply Selected
+                                      </button>
+                                  </div>
+                              </div>
+                          );
+                      })()}
+                  </div>
+              </div>
+          );
+      })()}
     </div>
   );
 }

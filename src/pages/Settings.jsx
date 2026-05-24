@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
-import { Key, Bell, RefreshCw, Trash2, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Key, Bell, RefreshCw, Trash2, CheckCircle, AlertTriangle, Cookie, Save } from 'lucide-react';
 
 const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
 
@@ -101,8 +101,61 @@ export default function Settings() {
     }
   };
 
+  // ── AI Web Cookies state ─────────────────────────────────────────────
+  // Global single-source-of-truth for Claude.ai + Gemini web-session cookies.
+  // Replaces the per-strategy copies that used to live in SymbolConfig.params.
+  // Browser never receives raw saved values back — only metadata (set/last4/updatedAt).
+  const [cookieMeta, setCookieMeta] = useState(null);
+  const [cookieDraft, setCookieDraft] = useState({
+    claude_web_session_key: '',
+    claude_web_org_id: '',
+    gemini_web_psid: '',
+    gemini_web_psidts: '',
+    gemini_web_psidcc: '',
+  });
+  const [cookieSaving, setCookieSaving] = useState(false);
+
+  const fetchCookieMeta = async () => {
+    try {
+      const r = await axios.get(`${API_URL}/settings/ai-cookies`);
+      setCookieMeta(r.data);
+    } catch (err) {
+      console.error('Failed to fetch cookie metadata', err);
+    }
+  };
+
+  useEffect(() => { fetchCookieMeta(); }, []);
+
+  const handleSaveCookies = async () => {
+    // Only send fields the user actually filled in this session — empty = "leave alone".
+    const payload = {};
+    for (const k of Object.keys(cookieDraft)) {
+      if (cookieDraft[k] && cookieDraft[k].trim()) payload[k] = cookieDraft[k].trim();
+    }
+    if (Object.keys(payload).length === 0) {
+      setMessage({ type: 'error', text: 'Nothing to save — paste at least one cookie value.' });
+      return;
+    }
+    setCookieSaving(true);
+    setMessage(null);
+    try {
+      const r = await axios.put(`${API_URL}/settings/ai-cookies`, payload);
+      setMessage({
+        type: 'success',
+        text: `Cookies saved. Wiped ${r.data?.wiped_strategy_copies ?? 0} stale per-strategy copies.`,
+      });
+      setCookieDraft({ claude_web_session_key: '', claude_web_org_id: '', gemini_web_psid: '', gemini_web_psidts: '', gemini_web_psidcc: '' });
+      fetchCookieMeta();
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Save failed: ' + (err.response?.data?.error || err.message) });
+    } finally {
+      setCookieSaving(false);
+    }
+  };
+
   const tabs = [
     { id: 'api', label: 'API Configuration', icon: Key },
+    { id: 'cookies', label: 'AI Web Cookies', icon: Cookie },
     { id: 'notifications', label: 'Notifications', icon: Bell },
   ];
 
@@ -326,6 +379,141 @@ export default function Settings() {
                     />
                   </button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'cookies' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                  <div className="w-2 h-8 bg-amber-500 rounded-full"></div>
+                  AI Web Cookies (Global)
+                </h3>
+                <p className="text-sm text-slate-400 mt-2">
+                  Update Claude.ai and Gemini web-session cookies in ONE place. Every backtest
+                  and every deployed live strategy reads from here — you no longer need to
+                  paste cookies per-strategy. Saving wipes stale per-strategy copies automatically.
+                </p>
+              </div>
+
+              {/* Current state summary */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {[
+                  { key: 'claude_web_session_key', label: 'Claude sessionKey', vendor: 'claude' },
+                  { key: 'claude_web_org_id',      label: 'Claude org_id',     vendor: 'claude' },
+                  { key: 'gemini_web_psid',        label: 'Gemini __Secure-1PSID',   vendor: 'gemini' },
+                  { key: 'gemini_web_psidts',      label: 'Gemini __Secure-1PSIDTS', vendor: 'gemini' },
+                  { key: 'gemini_web_psidcc',      label: 'Gemini __Secure-1PSIDCC (optional)', vendor: 'gemini' },
+                ].map(({ key, label, vendor }) => {
+                  const m = cookieMeta?.[key];
+                  const isSet = !!m?.set;
+                  const optional = key === 'claude_web_org_id' || key === 'gemini_web_psidcc';
+                  return (
+                    <div key={key} className={`p-3 rounded-lg border ${isSet ? 'border-slate-700 bg-slate-900/40' : optional ? 'border-slate-800 bg-slate-900/20' : 'border-amber-500/30 bg-amber-500/5'}`}>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-slate-400 font-medium">{label}</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full ${isSet ? 'bg-green-500/20 text-green-400' : optional ? 'bg-slate-700 text-slate-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                          {isSet ? 'set' : optional ? 'optional' : '⚠ missing'}
+                        </span>
+                      </div>
+                      <div className="font-mono text-sm text-white mt-1">
+                        {isSet ? <>…{m.last4} <span className="text-slate-500 text-xs">({vendor})</span></> : <span className="text-slate-600">—</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {cookieMeta?.updatedAt && (
+                <div className="text-xs text-slate-500">
+                  Last updated: {new Date(cookieMeta.updatedAt).toLocaleString()}
+                </div>
+              )}
+
+              <hr className="border-slate-700" />
+
+              {/* Edit form — paste in new values; leave blank to keep existing */}
+              <div className="space-y-4">
+                <h4 className="text-white font-semibold">Update cookies</h4>
+                <p className="text-xs text-slate-500">
+                  Paste fresh values from <code className="text-slate-300">claude.ai</code> or
+                  <code className="text-slate-300"> gemini.google.com</code> (DevTools → Application → Cookies).
+                  Leave any field empty to keep its current saved value.
+                </p>
+
+                {/* Claude */}
+                <div className="p-4 bg-slate-900/50 rounded-lg border border-slate-700 space-y-3">
+                  <div className="text-orange-400 font-medium text-sm">🟠 Claude.ai</div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">sessionKey</label>
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      value={cookieDraft.claude_web_session_key}
+                      onChange={e => setCookieDraft({ ...cookieDraft, claude_web_session_key: e.target.value })}
+                      placeholder="sk-ant-sid01-…"
+                      className="w-full bg-slate-800 text-white border border-slate-600 rounded px-3 py-2 font-mono text-xs focus:outline-none focus:border-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">org_id (optional — auto-detected if blank)</label>
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      value={cookieDraft.claude_web_org_id}
+                      onChange={e => setCookieDraft({ ...cookieDraft, claude_web_org_id: e.target.value })}
+                      placeholder="UUID, e.g. abcdef12-3456-…"
+                      className="w-full bg-slate-800 text-white border border-slate-600 rounded px-3 py-2 font-mono text-xs focus:outline-none focus:border-primary"
+                    />
+                  </div>
+                </div>
+
+                {/* Gemini */}
+                <div className="p-4 bg-slate-900/50 rounded-lg border border-slate-700 space-y-3">
+                  <div className="text-cyan-400 font-medium text-sm">🔵 Gemini (gemini.google.com)</div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">__Secure-1PSID</label>
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      value={cookieDraft.gemini_web_psid}
+                      onChange={e => setCookieDraft({ ...cookieDraft, gemini_web_psid: e.target.value })}
+                      placeholder="g.a000…"
+                      className="w-full bg-slate-800 text-white border border-slate-600 rounded px-3 py-2 font-mono text-xs focus:outline-none focus:border-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">__Secure-1PSIDTS</label>
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      value={cookieDraft.gemini_web_psidts}
+                      onChange={e => setCookieDraft({ ...cookieDraft, gemini_web_psidts: e.target.value })}
+                      placeholder="sidts-…"
+                      className="w-full bg-slate-800 text-white border border-slate-600 rounded px-3 py-2 font-mono text-xs focus:outline-none focus:border-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">__Secure-1PSIDCC (optional)</label>
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      value={cookieDraft.gemini_web_psidcc}
+                      onChange={e => setCookieDraft({ ...cookieDraft, gemini_web_psidcc: e.target.value })}
+                      placeholder="ABjs…"
+                      className="w-full bg-slate-800 text-white border border-slate-600 rounded px-3 py-2 font-mono text-xs focus:outline-none focus:border-primary"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleSaveCookies}
+                  disabled={cookieSaving}
+                  className="bg-primary hover:bg-red-600 text-white px-6 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50"
+                >
+                  <Save className="w-4 h-4" />
+                  {cookieSaving ? 'Saving…' : 'Save Cookies'}
+                </button>
               </div>
             </div>
           )}

@@ -46,7 +46,9 @@ export default function Optimizer() {
   }, [config.symbol]);
 
   React.useEffect(() => {
-    const socket = io(API_URL);
+    // withCredentials sends the dash_session cookie on the WS handshake so
+    // the server-side io.use() auth middleware accepts the connection.
+    const socket = io(API_URL, { withCredentials: true });
     
     socket.on('optimization_progress', (data) => {
         setProgress(data);
