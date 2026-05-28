@@ -146,17 +146,10 @@ export default function Backtest() {
   const aiResimAltLoading = false;
   // Preserved AI decisions for on-demand alt resim (populated when AI job completes)
   const allAiDecisionsRef = useRef({});
-  // Re-entry second AI pass
-  const [aiReentryJobId, setAiReentryJobId] = useState(null); // Latest loop's job id (for cancel)
-  const [aiReentryPolling, setAiReentryPolling] = useState(false);
-  const [aiReentryProgress, setAiReentryProgress] = useState({ done: 0, total: 0 });
-  // Current loop in the re-entry chain (1..MAX_REENTRY_LOOPS). 0 = not running.
-  const [aiReentryLoopNum, setAiReentryLoopNum] = useState(0);
-  // Re-entry Black-Scholes resim results: Map<tradeIdx, {exit_time, exit_spot, exit_pnl, exit_reason, entry_time, entry_spot}>
-  const [aiReentryResimMap, setAiReentryResimMap] = useState(null);
-  const MAX_REENTRY_LOOPS = 5;
-  // Prompt copy feedback: key = 'first_<idx>' or 'reentry_<idx>', value = 'copying'|'done'|'error'
+  // Prompt copy feedback: key = 'first_<idx>', value = 'copying'|'done'|'error'
   const [promptCopyState, setPromptCopyState] = useState({});
+  // Response copy feedback: key = trade idx, value = 'done'|'error'
+  const [responseCopyState, setResponseCopyState] = useState({});
 
   // Build aiSimData from server-accurate resim results (aiResimMap) when available.
   // Falls back to delta approximation only if server hasn't responded yet.
@@ -181,6 +174,9 @@ export default function Backtest() {
           ...trade,
           ai_sim_exit: serverSim.ai_exit,
           ai_sim_pnl: isReject ? 0 : serverSim.ai_pnl,
+          fair_skipped: serverSim.fair_skipped || false,
+          fair_entry_spot: serverSim.fair_entry_spot ?? null,
+          fair_entry_premium: serverSim.fair_entry_premium ?? null,
         };
       }
       // REJECT → trade not taken in AI scenario (contributes 0 to equity curve)
@@ -241,19 +237,30 @@ export default function Backtest() {
     };
   }, [result, showAiSim, aiResimMap, aiSlTpView]);
 
-  // Map a view mode to the (followAiSl, followAiTp) flags the server expects.
+  // Map a view mode to the resim flags the server expects.
   const _modeToFlags = (mode) => ({
-    strategy: { followAiSl: false, followAiTp: false },
-    ai_sl:    { followAiSl: true,  followAiTp: false },
-    ai_tp:    { followAiSl: false, followAiTp: true  },
-    ai_both:  { followAiSl: true,  followAiTp: true  },
-  }[mode] || { followAiSl: true, followAiTp: true });
+    strategy: { followAiSl: false, followAiTp: false, useFairEntry: false },
+    ai_sl:    { followAiSl: true,  followAiTp: false, useFairEntry: false },
+    ai_tp:    { followAiSl: false, followAiTp: true,  useFairEntry: false },
+    ai_both:  { followAiSl: true,  followAiTp: true,  useFairEntry: false },
+    ai_fve:   { followAiSl: true,  followAiTp: true,  useFairEntry: true  },
+  }[mode] || { followAiSl: true, followAiTp: true, useFairEntry: false });
 
   // Fetch a resim variant for a given mode and cache it. Used both by the initial
   // resim (right after AI completes) and by the chart view-toggle buttons.
   const fetchResimVariant = async (mode) => {
     if (resimVariants[mode] || resimVariantLoading === mode || !backtestResultId) return;
     const decisions = allAiDecisionsRef.current;
+    // If ref is empty (page reload after AI ran), rebuild from result.trades.aiConfirmation
+    if (!Object.keys(decisions).length && result?.trades?.length) {
+      const n = result.trades.length;
+      result.trades.forEach((trade, displayIdx) => {
+        if (trade.aiConfirmation && trade.ai_decision) {
+          decisions[String(n - 1 - displayIdx)] = trade.aiConfirmation;
+        }
+      });
+      if (Object.keys(decisions).length) allAiDecisionsRef.current = decisions;
+    }
     if (!Object.keys(decisions).length) return;
     setResimVariantLoading(mode);
     try {
@@ -269,12 +276,15 @@ export default function Backtest() {
           if (mode === 'strategy') return d.decision === 'CONFIRM';
           if (mode === 'ai_sl')    return d.decision === 'CONFIRM' && d.suggested_sl;
           if (mode === 'ai_tp')    return d.decision === 'CONFIRM' && d.suggested_tp;
+          if (mode === 'ai_fve')   return d.decision === 'CONFIRM' && d.suggested_sl && d.suggested_tp && d.suggested_entry_spot != null;
           return d.decision === 'CONFIRM' && d.suggested_sl && d.suggested_tp;
         })
         .map(([ci, d]) => ({
           tradeIdx: chronIdx(parseInt(ci)),
           suggested_sl: d.suggested_sl,
           suggested_tp: d.suggested_tp,
+          suggested_entry_spot: d.suggested_entry_spot ?? null,
+          suggested_entry_premium: d.suggested_entry_premium ?? null,
         }));
       if (!aiDecisions.length) {
         setResimVariantLoading(null);
@@ -286,6 +296,7 @@ export default function Backtest() {
         followAiSl: flags.followAiSl,
         followAiTp: flags.followAiTp,
         followStrategyExits,
+        useFairEntry: flags.useFairEntry,
       });
       const map = new Map();
       for (const s of res.data.simTrades) map.set(s.tradeIdx, s);
@@ -453,7 +464,7 @@ export default function Backtest() {
       'enable_ai_confirmation', 'use_ai_confirmation', 'ai_models',
       'ai_concurrency', 'ai_confidence_threshold', 'ai_follow_sl_tp',
       'ai_follow_sl', 'ai_follow_tp', 'ai_follow_strategy_exits',
-      'ai_enable_reentry', 'ai_max_signals', 'ai_fail_closed',
+      'ai_max_signals', 'ai_fail_closed',
       'ai_enable_web_research', 'ai_inflight_review_enabled',
       'ai_inflight_review_interval_min', 'ai_use_spot_exits',
       'ai_sl_safety_buffer', 'enable_mastra_validator',
@@ -746,6 +757,18 @@ export default function Backtest() {
     }
   };
 
+  const copyResponse = async (tradeIdx, rawResponse) => {
+    if (!rawResponse) return;
+    try {
+      await navigator.clipboard.writeText(rawResponse);
+      setResponseCopyState(s => ({ ...s, [tradeIdx]: 'done' }));
+      setTimeout(() => setResponseCopyState(s => { const n = { ...s }; delete n[tradeIdx]; return n; }), 2000);
+    } catch {
+      setResponseCopyState(s => ({ ...s, [tradeIdx]: 'error' }));
+      setTimeout(() => setResponseCopyState(s => { const n = { ...s }; delete n[tradeIdx]; return n; }), 2000);
+    }
+  };
+
   const copyPrompt = async (tradeIdx, type) => {
     const key = `${type}_${tradeIdx}`;
     setPromptCopyState(s => ({ ...s, [key]: 'copying' }));
@@ -776,11 +799,6 @@ export default function Backtest() {
     setResimVariantLoading(null);
     setAiSlTpView('ai_both');
     allAiDecisionsRef.current = {};
-    setAiReentryJobId(null);
-    setAiReentryPolling(false);
-    setAiReentryProgress({ done: 0, total: 0 });
-    setAiReentryLoopNum(0);
-    setAiReentryResimMap(null);
 
     const aborter = new AbortController();
     backtestAbortRef.current = aborter;
@@ -831,15 +849,9 @@ export default function Backtest() {
       try { await axios.post(`${API_URL}/ai-confirmation/cancel/${aiJobId}`); }
       catch (_) {}
     }
-    // 3. Cancel any in-flight re-entry pass too.
-    if (aiReentryJobId) {
-      try { await axios.post(`${API_URL}/ai-confirmation/cancel/${aiReentryJobId}`); }
-      catch (_) {}
-    }
-    // 4. Stop frontend polling immediately so the UI reflects the cancel.
+    // 3. Stop frontend polling immediately so the UI reflects the cancel.
     setAiPolling(false);
-    setAiReentryPolling(false);
-    // 5. Abort the axios POST itself — also kicks runBacktest's finally block.
+    // 4. Abort the axios POST itself — also kicks runBacktest's finally block.
     if (backtestAbortRef.current) {
       backtestAbortRef.current.abort();
     }
@@ -883,9 +895,6 @@ export default function Backtest() {
             aiConfirmation: d,
             ai_confidence: (d.confidence || 0) / 100,
             ai_decision: d.decision,
-            ai_reentry_suggested: d.reentry_suggested || false,
-            ai_reentry_level: d.reentry_level || null,
-            ai_reentry_note: d.reentry_note || null,
           };
         });
         return changed ? { ...prev, trades: updatedTrades } : prev;
@@ -901,210 +910,43 @@ export default function Backtest() {
         const followAiSl = params?.ai_follow_sl !== false;
         const followAiTp = params?.ai_follow_tp !== false;
         const followStrategyExits = params?.ai_follow_strategy_exits === true;
-        const initialMode = (followAiSl && followAiTp) ? 'ai_both'
-                          : (followAiSl && !followAiTp) ? 'ai_sl'
-                          : (!followAiSl && followAiTp) ? 'ai_tp'
-                          : 'strategy';
+        const useFairEntryInitial = params?.use_ai_fair_entry === true;
+        const initialMode = useFairEntryInitial
+          ? 'ai_fve'
+          : (followAiSl && followAiTp) ? 'ai_both'
+          : (followAiSl && !followAiTp) ? 'ai_sl'
+          : (!followAiSl && followAiTp) ? 'ai_tp'
+          : 'strategy';
         setAiSlTpView(initialMode);
         const aiDecisions = Object.entries(decisions)
           .filter(([, d]) => {
             if (initialMode === 'strategy') return d.decision === 'CONFIRM';
             if (initialMode === 'ai_sl')    return d.decision === 'CONFIRM' && d.suggested_sl;
             if (initialMode === 'ai_tp')    return d.decision === 'CONFIRM' && d.suggested_tp;
+            if (initialMode === 'ai_fve')   return d.decision === 'CONFIRM' && d.suggested_sl && d.suggested_tp && d.suggested_entry_spot != null;
             return d.decision === 'CONFIRM' && d.suggested_sl && d.suggested_tp;
           })
           .map(([ci, d]) => ({
             tradeIdx: chronIdx(parseInt(ci)),
             suggested_sl: d.suggested_sl,
             suggested_tp: d.suggested_tp,
+            suggested_entry_spot: d.suggested_entry_spot ?? null,
+            suggested_entry_premium: d.suggested_entry_premium ?? null,
           }));
         if (!aiDecisions.length) return;
+        const initialFlags = _modeToFlags(initialMode);
         const res = await axios.post(`${API_URL}/backtest/ai-resim`, {
           resultId, aiDecisions,
-          followAiSl, followAiTp,
+          followAiSl: initialFlags.followAiSl,
+          followAiTp: initialFlags.followAiTp,
           followStrategyExits,
+          useFairEntry: initialFlags.useFairEntry,
         });
         const map = new Map();
         for (const s of res.data.simTrades) map.set(s.tradeIdx, s);
         setResimVariants(prev => ({ ...prev, [initialMode]: map }));
       } catch (err) {
         console.error('AI resim failed:', err.message);
-      }
-    };
-
-    // Runs ONE re-entry loop: fetch touch contexts → start AI → poll to completion →
-    // apply decisions → resim CONFIRMs → return candidates for the next loop.
-    // Returns [] when no further loops should run for any trade.
-    const runReentryLoop = async (candidates, loopNum, resultId, aiModels, aiConcurrency) => {
-      // Cookies are injected server-side by AiConfirmationCore from the global
-      // Settings doc; the browser no longer ships them in the payload.
-      const ctxRes = await axios.post(`${API_URL}/backtest/reentry-contexts`, {
-        resultId, candidates, loopNum, aiModels, aiConcurrency,
-        claude_web_batch_size: parseInt(params?.claude_web_batch_size, 10) || 1,
-        gemini_web_batch_size: parseInt(params?.gemini_web_batch_size, 10) || 1,
-        claude_thinking_enabled: !!params?.claude_thinking_enabled,
-        claude_thinking_budget: parseInt(params?.claude_thinking_budget, 10) || 32000,
-      });
-      const { job_id, found, touched_data = [] } = ctxRes.data;
-      const touchedSet = new Set(touched_data.map(t => t.tradeIdx));
-
-      // Mark touched / not-reached on the trades for this loop
-      setResult(prev => {
-        if (!prev) return prev;
-        const updatedTrades = (prev.trades || []).map((trade, idx) => {
-          const td = touched_data.find(t => t.tradeIdx === idx);
-          if (td) {
-            return {
-              ...trade,
-              ai_reentry_entry_time: td.touchTime,
-              ai_reentry_entry_price: td.touchPrice,
-              ai_reentry_level_reached: true,
-              ai_reentry_loop: loopNum,
-            };
-          }
-          const isCandidate = candidates.some(c => c.tradeIdx === idx);
-          if (isCandidate && !touchedSet.has(idx)) {
-            return { ...trade, ai_reentry_level_reached: false };
-          }
-          return trade;
-        });
-        return { ...prev, trades: updatedTrades };
-      });
-
-      if (!job_id || !found) return [];
-
-      setAiReentryJobId(job_id);
-      setAiReentryProgress({ done: 0, total: found });
-
-      // Poll until AI job completes (await internally)
-      const decisions = await new Promise((resolve, reject) => {
-        const pollOnce = async () => {
-          try {
-            const res = await axios.get(`${API_URL}/ai-confirmation/status/${job_id}`);
-            const { status, decisions: d = {}, done = 0, total = 0 } = res.data;
-            setAiReentryProgress({ done, total });
-            if (status === 'complete') return resolve(d);
-            if (status === 'error')    return reject(new Error('AI job failed'));
-            setTimeout(pollOnce, 2500);
-          } catch (err) {
-            console.error('Re-entry poll error:', err.message);
-            setTimeout(pollOnce, 6000);
-          }
-        };
-        pollOnce();
-      });
-
-      // Apply decisions + maintain a per-trade `ai_reentry_attempts` chain
-      setResult(prev => {
-        if (!prev) return prev;
-        const updatedTrades = (prev.trades || []).map((trade, idx) => {
-          if (!touchedSet.has(idx)) return trade;
-          const d = decisions[String(idx)];
-          if (!d) return trade;
-          const td = touched_data.find(t => t.tradeIdx === idx);
-          const attempts = Array.isArray(trade.ai_reentry_attempts) ? [...trade.ai_reentry_attempts] : [];
-          attempts.push({
-            loop: loopNum,
-            touchTime: td?.touchTime || null,
-            touchPrice: td?.touchPrice || null,
-            decision: d.decision,
-            confidence: d.confidence || 0,
-            reasoning: d.reasoning || '',
-            sl: d.suggested_sl || null,
-            tp: d.suggested_tp || null,
-            reentry_suggested: !!d.reentry_suggested,
-            reentry_level: d.reentry_level || null,
-            reentry_note: d.reentry_note || '',
-          });
-          return {
-            ...trade,
-            ai_reentry_attempts: attempts,
-            // Top-level fields point to LATEST attempt for table display
-            ai_reentry_decision: d.decision,
-            ai_reentry_confidence: d.confidence || 0,
-            ai_reentry_reasoning: d.reasoning || '',
-            ai_reentry_sl: d.suggested_sl || null,
-            ai_reentry_tp: d.suggested_tp || null,
-            ai_reentry_loop: loopNum,
-          };
-        });
-        return { ...prev, trades: updatedTrades };
-      });
-
-      // Resim CONFIRMed re-entries this loop (each gets its own Black-Scholes sim)
-      const confirmedDecisions = touched_data
-        .map(t => {
-          const d = decisions[String(t.tradeIdx)];
-          if (!d || d.decision !== 'CONFIRM') return null;
-          return { tradeIdx: t.tradeIdx, suggested_sl: d.suggested_sl, suggested_tp: d.suggested_tp };
-        })
-        .filter(Boolean);
-      if (confirmedDecisions.length) {
-        try {
-          const simRes = await axios.post(`${API_URL}/backtest/reentry-resim`, { resultId, reentryDecisions: confirmedDecisions });
-          setAiReentryResimMap(prev => {
-            const map = prev ? new Map(prev) : new Map();
-            for (const s of simRes.data.simTrades) map.set(s.tradeIdx, s);
-            return map;
-          });
-        } catch (err) {
-          console.error('Re-entry resim failed:', err.message);
-        }
-      }
-
-      // Next-loop candidates: REJECTed trades where AI suggested another level + still wants re-entry
-      return touched_data
-        .map(t => {
-          const d = decisions[String(t.tradeIdx)];
-          if (!d) return null;
-          if (d.decision === 'CONFIRM')          return null;  // success → stop
-          if (!d.reentry_suggested)              return null;  // model says no more re-entry
-          if (!d.reentry_level)                  return null;
-          return {
-            tradeIdx: t.tradeIdx,
-            reentry_level: d.reentry_level,
-            ai_decision: d.decision,
-            ai_reasoning: d.reasoning || '',
-            reentry_note: d.reentry_note || '',
-            previousTouchTime: t.touchTime, // backend scans candles AFTER this for next loop
-          };
-        })
-        .filter(Boolean);
-    };
-
-    const triggerReentryFlow = async (decisions, resultId) => {
-      const initialCandidates = Object.entries(decisions)
-        .filter(([, d]) => d.reentry_suggested && d.reentry_level && d.decision === 'REJECT')
-        .map(([ci, d]) => ({
-          tradeIdx: chronIdx(parseInt(ci)),
-          reentry_level: d.reentry_level,
-          ai_decision: d.decision,
-          ai_reasoning: d.reasoning || '',
-          reentry_note: d.reentry_note || '',
-        }));
-      if (!initialCandidates.length) return;
-
-      const aiModels = params?.ai_models?.length ? params.ai_models : ['gemini-2.0-flash'];
-      const aiConcurrency = params?.ai_concurrency ?? 1;
-
-      setAiReentryPolling(true);
-      try {
-        let candidates = initialCandidates;
-        for (let loop = 1; loop <= MAX_REENTRY_LOOPS; loop++) {
-          if (!candidates.length) {
-            console.log(`[Re-entry] Loop ${loop}: no candidates remain, stopping`);
-            break;
-          }
-          setAiReentryLoopNum(loop);
-          console.log(`[Re-entry] Loop ${loop}/${MAX_REENTRY_LOOPS} — ${candidates.length} candidate(s)`);
-          candidates = await runReentryLoop(candidates, loop, resultId, aiModels, aiConcurrency);
-        }
-      } catch (err) {
-        console.error('Re-entry orchestration failed:', err.message);
-      } finally {
-        setAiReentryPolling(false);
-        setAiReentryLoopNum(0);
-        setAiReentryJobId(null);
       }
     };
 
@@ -1131,9 +973,6 @@ export default function Backtest() {
           setAiPolling(false);
           if (backtestResultId) {
             runAccurateResim(allDecisions, backtestResultId);
-            if (params?.ai_enable_reentry !== false) {
-              triggerReentryFlow(allDecisions, backtestResultId);
-            }
           }
         } else if (status === 'error') {
           setAiPolling(false);
@@ -1159,9 +998,6 @@ export default function Backtest() {
       if (aiPollActiveJobRef.current === aiJobId) aiPollActiveJobRef.current = null;
     };
   }, [aiPolling, aiJobId, backtestResultId, setResult, params]);
-
-  // Re-entry polling is now handled inline inside triggerReentryFlow's orchestrateReentryLoops.
-  // The orchestrator awaits each loop's AI job and chains up to MAX_REENTRY_LOOPS attempts.
 
   // Auto-fetch defaults on mount if strategy is set but empty params
   // Or handle change
@@ -1580,37 +1416,86 @@ export default function Backtest() {
                      </select>
                 </div>
 
-                {/* Selling Parameters (Conditional) */}
-                {(params.trade_mode === 'SELL' || params.trade_mode === 'HEDGE_SELL') && (
-                     <div className={`bg-slate-800/50 p-3 rounded border border-purple-500/30 grid gap-3 ${params.trade_mode === 'HEDGE_SELL' ? 'grid-cols-3' : 'grid-cols-2'}`}>
-                         <div>
-                             <label className="block text-xs text-purple-300 mb-1">Margin / Lot (₹)</label>
-                             <input type="number"
-                                className="w-full bg-slate-900 border border-purple-700/50 rounded p-2 text-white text-xs"
-                                value={params.margin_per_lot || 120000}
-                                onChange={e => setParams({...params, margin_per_lot: parseFloat(e.target.value)})}
-                             />
-                         </div>
-                         <div>
-                             <label className="block text-xs text-purple-300 mb-1">Theta Gain / Day (Pts)</label>
-                             <input type="number"
-                                className="w-full bg-slate-900 border border-purple-700/50 rounded p-2 text-white text-xs"
-                                value={params.theta_decay || 20}
-                                onChange={e => setParams({...params, theta_decay: parseFloat(e.target.value)})}
-                             />
-                         </div>
-                         {params.trade_mode === 'HEDGE_SELL' && (
-                             <div>
-                                 <label className="block text-xs text-purple-300 mb-1">Hedge Cost (Pts)</label>
-                                 <input type="number"
-                                    className="w-full bg-slate-900 border border-purple-700/50 rounded p-2 text-white text-xs"
-                                    value={params.hedge_cost || 10}
-                                    onChange={e => setParams({...params, hedge_cost: parseFloat(e.target.value)})}
-                                 />
-                             </div>
-                         )}
-                     </div>
-                )}
+                {/* Selling Parameters — Auto-Derived (read-only) */}
+                {(params.trade_mode === 'SELL' || params.trade_mode === 'HEDGE_SELL') && (() => {
+                    const cfg = instrumentConfig[params.symbol] || {};
+                    const isMcx = cfg.exchange === 'MCX';
+                    const isHedged = params.trade_mode === 'HEDGE_SELL';
+                    const hedgeWidth = Math.max(1, parseInt(params.hedge_width) || 2);
+                    // SPAN+Exposure default by exchange if marginPct isn't set
+                    const fallbackPct = cfg.exchange === 'BSE' ? 0.18 : (cfg.exchange === 'MCX' ? null : 0.15);
+                    const pct = typeof cfg.marginPct === 'number' ? cfg.marginPct : fallbackPct;
+                    const HEDGE_RETENTION = 0.25;
+                    let marginPerLot = null;
+                    if (isMcx && cfg.marginPerLot) {
+                        marginPerLot = isHedged ? Math.round(cfg.marginPerLot * HEDGE_RETENTION) : cfg.marginPerLot;
+                    } else if (cfg.lotSize && pct) {
+                        // Use a representative spot from the symbol family to preview margin.
+                        // The engine will re-derive this from the actual entry spot.
+                        const previewSpot = (cfg.underlying === 'NIFTY') ? 22000
+                            : (cfg.underlying === 'BANKNIFTY') ? 50000
+                            : (cfg.underlying === 'FINNIFTY') ? 24000
+                            : (cfg.underlying === 'MIDCPNIFTY') ? 13000
+                            : (cfg.underlying === 'SENSEX') ? 80000
+                            : (cfg.underlying === 'BANKEX') ? 55000
+                            : 1000;
+                        marginPerLot = Math.max(5000, Math.round(previewSpot * cfg.lotSize * pct * (isHedged ? HEDGE_RETENTION : 1)));
+                    }
+                    const fmtINR = (n) => n == null ? '—' : `₹${n.toLocaleString('en-IN')}`;
+
+                    return (
+                        <div className="bg-slate-800/50 p-3 rounded border border-purple-500/30">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs font-semibold text-purple-300">Auto-Derived Selling Inputs</span>
+                                <span className="text-[10px] text-purple-400/70">Live values are recomputed per trade from spot + Black-Scholes</span>
+                            </div>
+                            <div className={`grid gap-2 ${isHedged ? 'grid-cols-4' : 'grid-cols-3'}`}>
+                                <div className="bg-slate-900/60 border border-purple-700/40 rounded p-2">
+                                    <div className="text-[10px] uppercase tracking-wide text-purple-400">Lot Size</div>
+                                    <div className="text-sm font-mono text-white">{cfg.lotSize ?? '—'}</div>
+                                </div>
+                                <div className="bg-slate-900/60 border border-purple-700/40 rounded p-2">
+                                    <div className="text-[10px] uppercase tracking-wide text-purple-400">Margin / Lot</div>
+                                    <div className="text-sm font-mono text-white">{fmtINR(marginPerLot)}</div>
+                                    <div className="text-[9px] text-slate-500">
+                                        {isMcx ? 'MCX SPAN+Exposure' : pct ? `${(pct * 100).toFixed(0)}% × notional` : '—'}
+                                        {isHedged && !isMcx ? ' × 0.25' : ''}
+                                    </div>
+                                </div>
+                                <div className="bg-slate-900/60 border border-purple-700/40 rounded p-2">
+                                    <div className="text-[10px] uppercase tracking-wide text-purple-400">Theta</div>
+                                    <div className="text-sm font-mono text-white">BS</div>
+                                    <div className="text-[9px] text-slate-500">Decay baked into BS premium evolution</div>
+                                </div>
+                                {isHedged && (
+                                    <div className="bg-slate-900/60 border border-purple-700/40 rounded p-2">
+                                        <label className="text-[10px] uppercase tracking-wide text-purple-400 block mb-1">Hedge Width</label>
+                                        <select
+                                            className="w-full bg-slate-900 border border-purple-700/40 rounded px-1 py-0.5 text-xs text-white"
+                                            value={hedgeWidth}
+                                            onChange={e => setParams({ ...params, hedge_width: parseInt(e.target.value) })}
+                                        >
+                                            <option value={1}>1 step (tight)</option>
+                                            <option value={2}>2 steps (balanced)</option>
+                                            <option value={3}>3 steps (wide)</option>
+                                            <option value={4}>4 steps</option>
+                                            <option value={5}>5 steps</option>
+                                        </select>
+                                        <div className="text-[9px] text-slate-500 mt-0.5">
+                                            Long leg = {cfg.strikeStep ? `${hedgeWidth * cfg.strikeStep} pts away` : 'auto'}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="text-[10px] text-slate-400 mt-2 leading-relaxed">
+                                ⚙️ Margin, theta and hedge cost are now derived from the symbol + Black-Scholes — no
+                                manual inputs needed. The engine recomputes margin at the actual entry spot, prices
+                                the hedge leg via BS at entry, and lets the BS premium curve carry theta decay
+                                exactly as it would in live trading.
+                            </div>
+                        </div>
+                    );
+                })()}
                 
                  <div className="col-span-1 lg:col-span-1 flex items-center gap-3 bg-slate-800 p-2 rounded border border-slate-700 mt-0 h-10">
                     <input 
@@ -2307,22 +2192,6 @@ export default function Backtest() {
                                 );
                             })()}
 
-                            {/* Re-entry check toggle */}
-                            <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
-                                <input
-                                    type="checkbox"
-                                    className="w-3.5 h-3.5 accent-violet-500"
-                                    checked={params.ai_enable_reentry !== false}
-                                    onChange={e => setParams({ ...params, ai_enable_reentry: e.target.checked })}
-                                />
-                                <span className="text-[11px] text-slate-300 font-medium">Re-entry checks</span>
-                                <span className="text-[10px] text-slate-500">
-                                    {params.ai_enable_reentry !== false
-                                        ? 'AI re-evaluates rejected trades at suggested watch levels'
-                                        : 'Disabled — first-pass AI only, no re-entry second pass'}
-                                </span>
-                            </label>
-
                             {/* Fail-closed toggle — only affects LIVE engine on AI errors/timeouts */}
                             <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
                                 <input
@@ -2510,6 +2379,20 @@ export default function Backtest() {
                                         {params.ai_follow_tp !== false
                                             ? 'Use AI-suggested take-profit (realistic target)'
                                             : 'Use strategy take-profit'}
+                                    </span>
+                                </label>
+                                <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+                                    <input
+                                        type="checkbox"
+                                        className="w-3.5 h-3.5 accent-violet-500"
+                                        checked={params.use_ai_fair_entry === true}
+                                        onChange={e => setParams({ ...params, use_ai_fair_entry: e.target.checked })}
+                                    />
+                                    <span className="text-[11px] text-slate-300 font-medium">AI Fair Value Entry</span>
+                                    <span className="text-[10px] text-slate-500">
+                                        {params.use_ai_fair_entry === true
+                                            ? 'Wait ≤15 min for spot to retest AI entry level; skip if not reached'
+                                            : 'Enter at signal candle (no fair-value wait)'}
                                     </span>
                                 </label>
                                 <p className="text-[10px] text-slate-500 italic">
@@ -2953,32 +2836,6 @@ export default function Backtest() {
                 </div>
               )}
 
-              {/* Re-entry AI progress banner */}
-              {aiReentryPolling && (
-                <div className="flex items-center gap-3 bg-amber-900/20 border border-amber-500/30 rounded-lg px-4 py-2 text-xs">
-                  <span className="text-amber-300 animate-pulse">⏳</span>
-                  <span className="text-amber-200 flex-1">
-                    Re-entry check in progress
-                    {aiReentryLoopNum > 0 && (
-                      <span className="ml-2 px-1.5 py-0.5 bg-amber-700/40 text-amber-100 rounded font-mono">
-                        Loop {aiReentryLoopNum}/{MAX_REENTRY_LOOPS}
-                      </span>
-                    )}
-                    {aiReentryProgress.total > 0 && (
-                      <span className="ml-2 font-mono text-amber-100">{aiReentryProgress.done} / {aiReentryProgress.total}</span>
-                    )}
-                  </span>
-                  {aiReentryProgress.total > 0 && (
-                    <div className="flex-1 max-w-[180px] bg-slate-700 rounded-full h-1.5">
-                      <div
-                        className="bg-amber-500 h-1.5 rounded-full transition-all duration-500"
-                        style={{ width: `${Math.round((aiReentryProgress.done / aiReentryProgress.total) * 100)}%` }}
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
-
               {/* AI Summary Panel */}
               {result.ai_summary && (
                 <div className="bg-slate-800 rounded-lg overflow-hidden border border-violet-500/30">
@@ -3006,13 +2863,16 @@ export default function Backtest() {
                 const hasAiSimAvail = (aiResimMap && aiResimMap.size > 0) || result.trades.some(t => t.aiConfirmation?.suggested_sl);
                 const hasAiSlData = result.trades.some(t => t.aiConfirmation?.suggested_sl);
                 const hasAiTpData = result.trades.some(t => t.aiConfirmation?.suggested_tp);
+                const hasFveData  = result.trades.some(t => t.aiConfirmation?.suggested_entry_spot != null);
                 const chartData = showAiSim && aiSimData ? aiSimData.curve : result.equityCurve;
                 const isComparison = showAiSim && !!aiSimData;
                 const viewModes = [
-                  { key: 'strategy', label: 'Strategy', enabled: true,                 color: 'bg-slate-600 text-white' },
-                  { key: 'ai_sl',    label: 'AI SL',    enabled: hasAiSlData,           color: 'bg-amber-700/60 text-amber-200' },
-                  { key: 'ai_tp',    label: 'AI TP',    enabled: hasAiTpData,           color: 'bg-sky-700/60 text-sky-200' },
-                  { key: 'ai_both',  label: 'AI SL+TP', enabled: hasAiSlData && hasAiTpData, color: 'bg-violet-700/60 text-violet-200' },
+                  { key: 'strategy', label: 'Strategy', enabled: true,                                    color: 'bg-slate-600 text-white' },
+                  { key: 'ai_sl',    label: 'AI SL',    enabled: hasAiSlData,                             color: 'bg-amber-700/60 text-amber-200' },
+                  { key: 'ai_tp',    label: 'AI TP',    enabled: hasAiTpData,                             color: 'bg-sky-700/60 text-sky-200' },
+                  { key: 'ai_both',  label: 'AI SL+TP', enabled: hasAiSlData && hasAiTpData,             color: 'bg-violet-700/60 text-violet-200' },
+                  { key: 'ai_fve',   label: 'AI FVE',   enabled: hasAiSlData && hasAiTpData, needsData: !hasFveData, color: 'bg-teal-700/60 text-teal-200',
+                    title: hasFveData ? 'AI SL+TP with Fair Value Entry — skips trades where spot never retraced to AI entry level within 15 min' : 'No fair entry data yet — re-run AI confirmation to populate' },
                 ];
                 return (
                 <div className="bg-slate-800 rounded-lg p-4">
@@ -3028,12 +2888,13 @@ export default function Backtest() {
                             return (
                               <button
                                 key={m.key}
-                                className={`px-2.5 py-1 transition-colors ${i > 0 ? 'border-l border-slate-600' : ''} ${isActive ? m.color : 'text-slate-400 hover:text-slate-200'}`}
-                                onClick={() => selectResimView(m.key)}
-                                title={isCached ? `View ${m.label} simulation` : `Compute and view ${m.label} simulation`}
+                                className={`px-2.5 py-1 transition-colors ${i > 0 ? 'border-l border-slate-600' : ''} ${m.needsData ? 'text-slate-600 cursor-not-allowed' : isActive ? m.color : 'text-slate-400 hover:text-slate-200'}`}
+                                onClick={() => !m.needsData && selectResimView(m.key)}
+                                title={m.title || (isCached ? `View ${m.label} simulation` : `Compute and view ${m.label} simulation`)}
+                                disabled={m.needsData}
                               >
-                                {isLoading ? '⏳ ' : ''}{m.label}
-                                {!isCached && !isLoading && <span className="opacity-50 ml-1">▢</span>}
+                                {isLoading ? '⏳ ' : ''}{m.label}{m.needsData ? ' ?' : ''}
+                                {!m.needsData && !isCached && !isLoading && <span className="opacity-50 ml-1">▢</span>}
                               </button>
                             );
                           })}
@@ -3068,6 +2929,7 @@ export default function Backtest() {
                               {aiSlTpView === 'ai_sl'    && 'AI SL + Strategy TP P&L'}
                               {aiSlTpView === 'ai_tp'    && 'Strategy SL + AI TP P&L'}
                               {aiSlTpView === 'ai_both'  && 'AI SL + AI TP P&L'}
+                              {aiSlTpView === 'ai_fve'   && 'AI SL+TP + Fair Entry P&L'}
                             </p>
                             <p className={`text-sm font-bold ${aiSimData.totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                               ₹{aiSimData.totalPnl.toFixed(0)}
@@ -3151,7 +3013,6 @@ export default function Backtest() {
               {(() => {
                 const hasSpotData = result.trades.length > 0 && result.trades[0].spot_sl != null;
                 const isSwingMode = result.trades.length > 0 && result.trades[0].sl_tp_type === 'SPOT_SWING';
-                const hasReentryData = result.trades.some(t => t.ai_reentry_entry_time || t.ai_reentry_decision);
                 return (
                 <div className="bg-slate-800 rounded-lg p-4 overflow-hidden">
                   <div className="flex items-center justify-between mb-4">
@@ -3211,19 +3072,12 @@ export default function Backtest() {
                         {showAiSim && aiSimData && <>
                           <th className="px-4 py-3 bg-green-900/20 text-green-400/80 border-l border-green-700/30" title="AI-suggested stop-loss index level">AI SL</th>
                           <th className="px-4 py-3 bg-green-900/20 text-green-400/80" title="AI-suggested take-profit index level">AI TP</th>
+                          {(aiSlTpView === 'ai_fve' || (aiSlTpView === 'ai_both' && result.trades.some(t => t.aiConfirmation?.suggested_entry_spot != null))) && (
+                            <th className="px-4 py-3 bg-teal-900/20 text-teal-400/80" title="Fair Value Entry: spot level AI suggested for limit entry; SKIPPED if not reached within 15 min of signal">AI FVE Entry</th>
+                          )}
                           <th className="px-4 py-3 bg-green-900/20 text-green-400/80" title="Underlying index level where AI scenario exited">AI Exit Spot</th>
                           <th className="px-4 py-3 bg-green-900/20 text-green-400/80">AI Reason</th>
                           <th className="px-4 py-3 bg-green-900/20 text-green-400/80">AI Est. P&L</th>
-                        </>}
-                        {hasReentryData && <>
-                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80 border-l border-violet-700/30" title="Re-entry signal entry time">Re-entry Entry</th>
-                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80" title="Spot level at re-entry">Entry Spot</th>
-                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80" title="AI stop-loss for re-entry trade">Re AI SL</th>
-                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80" title="AI take-profit for re-entry trade">Re AI TP</th>
-                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80" title="Re-entry trade exit time">Re-exit Time</th>
-                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80" title="Spot level at re-entry exit">Re-exit Spot</th>
-                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80">Re-exit Reason</th>
-                          <th className="px-4 py-3 bg-violet-900/20 text-violet-400/80">Re-entry P&L</th>
                         </>}
                       </tr>
                     </thead>
@@ -3259,79 +3113,6 @@ export default function Backtest() {
                                     SL {trade.ai_spot_sl ? Number(trade.ai_spot_sl).toFixed(0) : '–'} / TP {trade.ai_spot_tp ? Number(trade.ai_spot_tp).toFixed(0) : '–'}
                                   </span>
                                 )}
-                                {trade.ai_reentry_suggested && trade.ai_reentry_level && (
-                                  <>
-                                    {/* Original AI's first suggested re-entry level (the seed for loop 1) */}
-                                    <span
-                                      className={`text-[10px] mt-0.5 font-medium px-1 py-0.5 rounded ${trade.ai_decision === 'REJECT' ? 'bg-amber-900/40 text-amber-300' : 'bg-sky-900/40 text-sky-300'}`}
-                                      title={trade.ai_reentry_note || 'Better entry level suggested'}
-                                    >
-                                      {trade.ai_decision === 'REJECT' ? '⏳' : '💡'} Watch {Number(trade.ai_reentry_level).toFixed(0)}
-                                      {trade.ai_reentry_note ? ` — ${trade.ai_reentry_note}` : ''}
-                                    </span>
-
-                                    {/* Full re-entry chain — one entry per loop attempt */}
-                                    {Array.isArray(trade.ai_reentry_attempts) && trade.ai_reentry_attempts.length > 0 ? (
-                                      <>
-                                        {trade.ai_reentry_attempts.map((att, ai) => (
-                                          <span
-                                            key={`att-${ai}`}
-                                            className={`text-[10px] mt-0.5 font-semibold px-1 py-0.5 rounded ${att.decision === 'CONFIRM' ? 'bg-green-900/60 text-green-200' : 'bg-red-900/60 text-red-200'}`}
-                                            title={att.reasoning || ''}
-                                          >
-                                            ↳ Re-entry #{att.loop} @ {att.touchPrice != null ? Number(att.touchPrice).toFixed(0) : '?'}: {att.decision === 'CONFIRM' ? '✓' : '✗'} {att.decision}
-                                            {att.confidence ? <span className="font-normal opacity-70 ml-1">{Number(att.confidence).toFixed(0)}%</span> : null}
-                                            {att.reasoning ? (
-                                              <span className="block font-normal italic opacity-70 mt-0.5" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{att.reasoning}</span>
-                                            ) : null}
-                                          </span>
-                                        ))}
-
-                                        {/* Chain terminator — explain WHY the chain stopped */}
-                                        {(() => {
-                                          const last = trade.ai_reentry_attempts[trade.ai_reentry_attempts.length - 1];
-                                          if (last.decision === 'CONFIRM') {
-                                            return (
-                                              <span className="text-[10px] mt-0.5 text-green-300/80 italic">
-                                                🎯 Re-entry executed — see Re-exit columns
-                                              </span>
-                                            );
-                                          }
-                                          // REJECT branches:
-                                          if (!last.reentry_suggested) {
-                                            return (
-                                              <span className="text-[10px] mt-0.5 px-1 py-0.5 rounded bg-slate-700/60 text-slate-300" title="The AI explicitly said no further re-entry is justified for this trade">
-                                                🛑 AI: no further re-entry suggested
-                                              </span>
-                                            );
-                                          }
-                                          // AI suggested another level — show it and its reach status
-                                          if (last.reentry_level) {
-                                            const reached = trade.ai_reentry_level_reached;
-                                            const nextLoop = last.loop + 1;
-                                            if (nextLoop > MAX_REENTRY_LOOPS) {
-                                              return (
-                                                <span className="text-[10px] mt-0.5 text-slate-400 italic" title={`AI suggested Watch ${Number(last.reentry_level).toFixed(0)} but the ${MAX_REENTRY_LOOPS}-loop cap was hit`}>
-                                                  ⏳ Watch {Number(last.reentry_level).toFixed(0)} — max {MAX_REENTRY_LOOPS} loops reached
-                                                </span>
-                                              );
-                                            }
-                                            return (
-                                              <span className="text-[10px] mt-0.5 text-slate-400 italic">
-                                                ⏳ Watch {Number(last.reentry_level).toFixed(0)} — {reached === false ? 'level not reached' : (aiReentryPolling ? 're-checking…' : 'pending')}
-                                              </span>
-                                            );
-                                          }
-                                          return null;
-                                        })()}
-                                      </>
-                                    ) : trade.ai_reentry_level_reached === false ? (
-                                      <span className="text-[10px] mt-0.5 text-slate-500 italic">↳ Level not reached</span>
-                                    ) : aiReentryPolling ? (
-                                      <span className="text-[10px] mt-0.5 text-amber-500/60 animate-pulse">↳ re-checking…</span>
-                                    ) : null}
-                                  </>
-                                )}
                                 {backtestResultId && (
                                   <div className="flex gap-1 mt-1 flex-wrap">
                                     <button
@@ -3345,17 +3126,15 @@ export default function Backtest() {
                                         ? <><Copy size={9} className="animate-pulse" /> …</>
                                         : <><Copy size={9} /> Prompt</>}
                                     </button>
-                                    {trade.ai_reentry_decision && (
+                                    {trade.aiConfirmation?.raw_response && (
                                       <button
-                                        onClick={() => copyPrompt(idx, 'reentry')}
-                                        title="Copy the exact re-entry prompt sent to the AI"
-                                        className="flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-violet-900/40 text-violet-400 hover:text-violet-200 hover:bg-violet-800/40 transition-colors"
+                                        onClick={() => copyResponse(idx, trade.aiConfirmation.raw_response)}
+                                        title="Copy the raw AI response for this trade"
+                                        className="flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-slate-700/60 text-slate-400 hover:text-slate-200 hover:bg-slate-600/60 transition-colors"
                                       >
-                                        {promptCopyState[`reentry_${idx}`] === 'done'
+                                        {responseCopyState[idx] === 'done'
                                           ? <><Check size={9} className="text-green-400" /> Copied</>
-                                          : promptCopyState[`reentry_${idx}`] === 'copying'
-                                          ? <><Copy size={9} className="animate-pulse" /> …</>
-                                          : <><Copy size={9} /> Re-entry</>}
+                                          : <><Copy size={9} /> Response</>}
                                       </button>
                                     )}
                                   </div>
@@ -3368,7 +3147,7 @@ export default function Backtest() {
                           {/* Model: which AI produced the decision (helps spot per-model bias) */}
                           <td className="px-3 py-3 text-xs">
                             {(() => {
-                              const mid = trade.aiConfirmation?.model_id || trade.ai_reentry_attempts?.[trade.ai_reentry_attempts.length - 1]?.model_id;
+                              const mid = trade.aiConfirmation?.model_id;
                               if (!mid) return aiPolling ? <span className="text-slate-600 text-[10px]">…</span> : <span className="text-slate-600 text-[10px]">-</span>;
                               const b = modelBadgeFor(mid);
                               if (!b) return <span className="text-slate-500 text-[10px]">{mid}</span>;
@@ -3435,17 +3214,53 @@ export default function Backtest() {
                                   title={aiTp ? `AI TP: ${Number(aiTp).toFixed(2)} (${isCE ? 'above' : 'below'} entry)` : 'No AI TP'}>
                                   {aiTp ? <span className="text-green-300/80">{Number(aiTp).toFixed(0)}</span> : <span className="text-slate-600">-</span>}
                                 </td>
+                                {(aiSlTpView === 'ai_fve' || (aiSlTpView === 'ai_both' && result.trades.some(t => t.aiConfirmation?.suggested_entry_spot != null))) && (
+                                  <td className="px-4 py-3 text-xs font-mono"
+                                    title={
+                                      isReject ? 'Trade rejected by AI — FVE not applicable' :
+                                      sim?.fair_entry_spot ? `Fair entry at spot ${Number(sim.fair_entry_spot).toFixed(2)}, premium ₹${sim.fair_entry_premium != null ? Number(sim.fair_entry_premium).toFixed(2) : '?'}` :
+                                      sim?.fair_skipped ? `Spot never retraced to AI target (${trade.aiConfirmation?.suggested_entry_spot ? Number(trade.aiConfirmation.suggested_entry_spot).toFixed(0) : '?'}) within 15 min — trade skipped` :
+                                      trade.aiConfirmation?.suggested_entry_spot === 0 ? 'AI assessed entry as already at fair value — no pullback needed' :
+                                      trade.aiConfirmation?.suggested_entry_spot > 0 ? `AI fair entry target: ${Number(trade.aiConfirmation.suggested_entry_spot).toFixed(0)} — run resim to simulate` :
+                                      'AI did not return a fair entry level for this trade'
+                                    }>
+                                    {isReject ? (
+                                      <span className="text-slate-600">-</span>
+                                    ) : sim?.fair_skipped ? (
+                                      <span className="flex flex-col gap-0.5">
+                                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-orange-900/50 text-orange-300 font-semibold whitespace-nowrap">⏭ Not reached</span>
+                                        {trade.aiConfirmation?.suggested_entry_spot > 0 && <span className="text-orange-400/60 text-[10px]">target {Number(trade.aiConfirmation.suggested_entry_spot).toFixed(0)}</span>}
+                                      </span>
+                                    ) : sim?.fair_entry_spot ? (
+                                      <span className="flex flex-col gap-0.5">
+                                        <span className="text-teal-300">{isCE ? '↓' : '↑'}{Number(sim.fair_entry_spot).toFixed(0)}</span>
+                                        {sim.fair_entry_premium != null && <span className="text-teal-400/70 text-[10px]">₹{Number(sim.fair_entry_premium).toFixed(0)}</span>}
+                                      </span>
+                                    ) : trade.aiConfirmation?.suggested_entry_spot === 0 ? (
+                                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-teal-900/40 text-teal-400 whitespace-nowrap">✓ Fair value</span>
+                                    ) : trade.aiConfirmation?.suggested_entry_spot > 0 ? (
+                                      <span className="flex flex-col gap-0.5">
+                                        <span className="text-slate-400 text-[10px]">⏳ {Number(trade.aiConfirmation.suggested_entry_spot).toFixed(0)}</span>
+                                        <span className="text-slate-600 text-[10px]">run resim</span>
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-600 text-[10px]">—</span>
+                                    )}
+                                  </td>
+                                )}
                                 {!sim?.ai_sim_exit || isReject ? (
                                   <>
                                     <td className="px-4 py-3 text-slate-500 text-xs font-mono">-</td>
                                     <td className="px-4 py-3 text-xs">
                                       {isReject
                                         ? <span className="px-1 py-0.5 rounded text-[10px] bg-red-900/30 text-red-500" title="AI rejected this trade — not taken">REJECTED</span>
+                                        : sim?.fair_skipped
+                                        ? <span className="px-1 py-0.5 rounded text-[10px] bg-orange-900/30 text-orange-400" title="Fair value level not reached within 15 min — trade not entered">FVE SKIPPED</span>
                                         : <span className="px-1 py-0.5 rounded text-[10px] bg-slate-700 text-slate-400">NO DATA</span>}
                                     </td>
                                     <td className={`px-4 py-3 text-xs font-bold ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                      {isReject ? <span title="Trade not taken — AI rejected">₹0</span> : Number(pnl).toFixed(2)}
-                                      {!isReject && <span className={`block text-[10px] font-normal ${diff >= 0 ? 'text-green-500/70' : 'text-red-500/70'}`}>{diff >= 0 ? '↑+' : '↓'}{diff.toFixed(0)}</span>}
+                                      {isReject || sim?.fair_skipped ? <span title={sim?.fair_skipped ? 'Trade skipped — fair entry not reached' : 'Trade not taken — AI rejected'}>₹0</span> : Number(pnl).toFixed(2)}
+                                      {!isReject && !sim?.fair_skipped && <span className={`block text-[10px] font-normal ${diff >= 0 ? 'text-green-500/70' : 'text-red-500/70'}`}>{diff >= 0 ? '↑+' : '↓'}{diff.toFixed(0)}</span>}
                                     </td>
                                   </>
                                 ) : (
@@ -3465,64 +3280,6 @@ export default function Backtest() {
                                     </td>
                                   </>
                                 )}
-                              </>
-                            );
-                          })()}
-                          {hasReentryData && (() => {
-                            const reEntry = aiReentryResimMap?.get(idx);
-                            const entryTime = reEntry?.entry_time || trade.ai_reentry_entry_time;
-                            const entrySpot = reEntry?.entry_spot ?? trade.ai_reentry_entry_price;
-                            const reAiSl = trade.ai_reentry_sl;
-                            const reAiTp = trade.ai_reentry_tp;
-                            if (!trade.ai_reentry_suggested) {
-                              return (
-                                <>
-                                  <td className="px-4 py-3 text-slate-600 text-xs border-l border-violet-700/20">-</td>
-                                  <td className="px-4 py-3 text-slate-600 text-xs">-</td>
-                                  <td className="px-4 py-3 text-slate-600 text-xs">-</td>
-                                  <td className="px-4 py-3 text-slate-600 text-xs">-</td>
-                                  <td className="px-4 py-3 text-slate-600 text-xs">-</td>
-                                  <td className="px-4 py-3 text-slate-600 text-xs">-</td>
-                                  <td className="px-4 py-3 text-slate-600 text-xs">-</td>
-                                  <td className="px-4 py-3 text-slate-600 text-xs">-</td>
-                                </>
-                              );
-                            }
-                            const isConfirmed = trade.ai_reentry_decision === 'CONFIRM';
-                            return (
-                              <>
-                                <td className="px-4 py-3 text-xs border-l border-violet-700/20">
-                                  {entryTime
-                                    ? new Date(entryTime).toLocaleString()
-                                    : (aiReentryPolling ? <span className="text-amber-500/60 animate-pulse text-[10px]">…</span> : '-')}
-                                </td>
-                                <td className="px-4 py-3 text-xs font-mono">
-                                  {entrySpot != null ? Number(entrySpot).toFixed(2) : '-'}
-                                </td>
-                                <td className="px-4 py-3 text-xs font-mono">
-                                  {reAiSl ? <span className="text-red-300/80">{Number(reAiSl).toFixed(0)}</span> : '-'}
-                                </td>
-                                <td className="px-4 py-3 text-xs font-mono">
-                                  {reAiTp ? <span className="text-green-300/80">{Number(reAiTp).toFixed(0)}</span> : '-'}
-                                </td>
-                                <td className="px-4 py-3 text-xs">
-                                  {reEntry?.exit_time
-                                    ? new Date(reEntry.exit_time).toLocaleString()
-                                    : (isConfirmed && !aiReentryResimMap ? <span className="text-amber-500/60 animate-pulse text-[10px]">simulating…</span> : '-')}
-                                </td>
-                                <td className="px-4 py-3 text-xs font-mono">
-                                  {reEntry?.exit_spot != null ? Number(reEntry.exit_spot).toFixed(2) : '-'}
-                                </td>
-                                <td className="px-4 py-3 text-xs">
-                                  {reEntry?.exit_reason ? (
-                                    <span className={`px-1 py-0.5 rounded text-[10px] ${reEntry.exit_reason === 'TP_HIT' ? 'bg-green-900/50 text-green-300' : reEntry.exit_reason === 'SL_HIT' ? 'bg-red-900/50 text-red-300' : 'bg-slate-700 text-slate-400'}`}>
-                                      {reEntry.exit_reason}
-                                    </span>
-                                  ) : '-'}
-                                </td>
-                                <td className={`px-4 py-3 text-xs font-bold ${reEntry?.exit_pnl == null ? 'text-slate-500' : reEntry.exit_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                  {reEntry?.exit_pnl != null ? `₹${Number(reEntry.exit_pnl).toFixed(2)}` : '-'}
-                                </td>
                               </>
                             );
                           })()}

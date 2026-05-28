@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, LineChart, Settings, Activity, Play, Square, Terminal, LogOut, Shield } from 'lucide-react';
+import { LayoutDashboard, LineChart, Settings, Activity, Play, Square, Terminal, LogOut, Shield, Zap } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Backtest from './pages/Backtest';
 import Optimizer from './pages/Optimizer';
@@ -10,6 +10,7 @@ import LoginPage from './pages/LoginPage';
 import AiManager from './components/AiManager'; // New Component
 import DataManager from './components/DataManager'; // New Component
 import ParityAuditDashboard from './components/ParityAuditDashboard';
+import TickStrategies from './pages/TickStrategies';
 import { AuthProvider, useAuth } from './context/AuthContext';
 
 function Sidebar() {
@@ -20,6 +21,7 @@ function Sidebar() {
     { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { path: '/backtest', icon: LineChart, label: 'Backtest' },
     { path: '/optimizer', icon: Activity, label: 'Optimizer' },
+    { path: '/tick-strategies', icon: Zap, label: 'Tick Strategies' },
     { path: '/ai-manager', icon: Terminal, label: 'AI Manager' }, // New Item
     { path: '/parity-audit', icon: Activity, label: 'Parity Audit' },
     { path: '/data-manager', icon: Square, label: 'Data Manager' }, // Archiving
@@ -142,6 +144,7 @@ function App() {
                   <Route path="/" element={<Dashboard />} />
                   <Route path="/backtest" element={<Backtest />} />
                   <Route path="/optimizer" element={<Optimizer />} />
+                  <Route path="/tick-strategies" element={<TickStrategies />} />
                   <Route path="/ai-manager" element={<AiManager />} />
                   <Route path="/parity-audit" element={<ParityAuditDashboard />} />
                   <Route path="/data-manager" element={<DataManager />} />

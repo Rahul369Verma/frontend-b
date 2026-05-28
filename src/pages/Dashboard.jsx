@@ -809,7 +809,6 @@ export default function Dashboard() {
                                                 <span className="text-xs px-2 py-0.5 rounded-full bg-violet-500/20 border border-violet-500/40 text-violet-300 flex items-center gap-1">
                                                     🤖 AI
                                                     {params.ai_follow_sl_tp && <span className="text-violet-400">SL/TP</span>}
-                                                    {params.ai_enable_reentry && <span className="text-violet-400">RE</span>}
                                                 </span>
                                             )}
                                         </div>
@@ -822,9 +821,6 @@ export default function Dashboard() {
                                         <span className="text-violet-400 font-semibold">✨ AI Risk Filter:</span>
                                         <span className={`px-1.5 py-0.5 rounded ${params.ai_follow_sl_tp ? 'bg-green-500/20 text-green-300' : 'bg-slate-700 text-slate-400'}`}>
                                             {params.ai_follow_sl_tp ? '✓ AI SL/TP' : 'Strategy SL/TP'}
-                                        </span>
-                                        <span className={`px-1.5 py-0.5 rounded ${params.ai_enable_reentry ? 'bg-green-500/20 text-green-300' : 'bg-slate-700 text-slate-400'}`}>
-                                            {params.ai_enable_reentry ? '✓ Re-entry' : 'No Re-entry'}
                                         </span>
                                         {params.ai_follow_strategy_exits && (
                                             <span className="px-1.5 py-0.5 rounded bg-green-500/20 text-green-300">✓ Strategy Exits</span>
@@ -924,6 +920,14 @@ export default function Dashboard() {
                                                 🎯 Spot Exits ({params.ai_sl_safety_buffer || 1.5}× safety)
                                             </span>
                                         )}
+                                        {params.use_ai_fair_entry && (
+                                            <span
+                                                className="px-1.5 py-0.5 rounded bg-teal-700/40 text-teal-200"
+                                                title="AI suggests a fair-value spot level after breakout. Live: limit order at suggested premium. Paper: waits for LTP to pull back. Skips if not reached in 3 candles (~15 min)."
+                                            >
+                                                🎯 Fair Entry
+                                            </span>
+                                        )}
                                         {params.enable_mastra_validator && (
                                             <span
                                                 className="px-1.5 py-0.5 rounded bg-purple-700/40 text-purple-200"
@@ -978,13 +982,13 @@ export default function Dashboard() {
                                      {Object.entries(params).map(([key, val]) => {
                                          if (key === 'strategyName') return null; // Already in header
                                          // AI settings shown in the summary bar above — skip in grid
-                                         if (['enable_ai_confirmation','use_ai_confirmation','ai_follow_sl_tp','ai_follow_sl','ai_follow_tp','ai_enable_reentry',
+                                         if (['enable_ai_confirmation','use_ai_confirmation','ai_follow_sl_tp','ai_follow_sl','ai_follow_tp',
                                               'ai_confidence_threshold','ai_models','ai_follow_strategy_exits','ai_concurrency',
                                               'use_claude_web_session','claude_web_session_key','claude_web_org_id','claude_web_model','claude_web_batch_size',
                                               'use_gemini_web_session','gemini_web_psid','gemini_web_psidts','gemini_web_psidcc','gemini_web_model','gemini_web_batch_size',
                                               'claude_thinking_enabled','claude_thinking_budget',
                                               'ai_fail_closed','ai_use_spot_exits','ai_sl_safety_buffer',
-                                              'enable_mastra_validator'].includes(key)) return null;
+                                              'use_ai_fair_entry','enable_mastra_validator'].includes(key)) return null;
 
                                          // Formatting Value
                                          let displayVal = val;
