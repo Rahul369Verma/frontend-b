@@ -42,8 +42,12 @@ export const INSTRUMENT_CONFIG = {
         exchange: "NSE",
         lotSize: 65,
         strikeStep: 50,
-        expiryDay: 4,     // Thursday
-        expiryType: "MONTHLY", // Weekly Retained
+        expiryDay: 2,     // Tuesday — see backend/logic/constants.js for the
+                          // SEBI Oct 2024 + NSE Sept 2025 rationale. Pre-fix
+                          // this was 4 (Thursday) which produced wrong dates
+                          // in the fallback expiry generator.
+        expiryType: "WEEKLY", // NIFTY 50 retained weekly options; last Tuesday
+                              // of each month is the monthly futures expiry.
         min_sl_range: [5, 25],
         marginPct: 0.15
     },

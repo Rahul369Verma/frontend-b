@@ -35,10 +35,14 @@ export function GlobalProvider({ children }) {
     claude_web_batch_size: 1,
     // Gemini web session — same defaults as Claude.
     gemini_web_batch_size: 1,
-    // Claude Extended Thinking — off by default; budget defaults to 32k tokens (max effort)
-    // when the toggle is flipped on. Applies to both Anthropic API + Claude.ai web models.
+    // Claude Extended Thinking — off by default. `claude_effort` is the source of truth
+    // (matches claude.ai's web UI enum); `claude_thinking_budget` is derived from it
+    // and only used for the Anthropic API path (which takes a numeric budget_tokens).
+    // For claude-web/*, we additionally send `effort` + `thinking_mode` on the
+    // conversation create body so 4.8 picks the right reasoning depth.
     claude_thinking_enabled: false,
-    claude_thinking_budget: 32000,
+    claude_effort: 'high',           // 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+    claude_thinking_budget: 32000,   // derived; kept for API path back-compat
     // Live engine fail-closed flag — when true, AI errors/timeouts return REJECT
     // (skip the trade) instead of the historical fail-open CONFIRM (which was
     // misleading on Telegram and only gated by the confidence threshold).

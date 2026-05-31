@@ -1,8 +1,24 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { io } from 'socket.io-client';
-import { Zap, Plus, Play, Pause, Trash2, Activity, TrendingUp, TrendingDown, Clock, AlertTriangle } from 'lucide-react';
-import { INSTRUMENT_CONFIG } from '../constants';
+import { Zap, Plus, Play, Pause, Trash2, Activity, TrendingUp, TrendingDown, Clock, AlertTriangle, Octagon, Power } from 'lucide-react';
+import { INSTRUMENT_CONFIG, MONTH_NAMES } from '../constants';
+import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
+
+// Build a Fyers futures symbol from an index key + expiry date.
+//   buildFuturesSymbol('NSE:NIFTYBANK-INDEX', '2026-06-30')
+//     → 'NSE:BANKNIFTY26JUNFUT'
+// Returns null when the index isn't in INSTRUMENT_CONFIG (e.g. raw custom
+// override) — the caller falls back to the manual text input in that case.
+function buildFuturesSymbol(indexKey, expiryDateStr) {
+    const cfg = INSTRUMENT_CONFIG[indexKey];
+    if (!cfg || !expiryDateStr) return null;
+    const d = new Date(expiryDateStr);
+    if (Number.isNaN(d.getTime())) return null;
+    const yy = String(d.getFullYear()).slice(-2);
+    const mmm = MONTH_NAMES[d.getMonth()];
+    return `${cfg.exchange}:${cfg.underlying}${yy}${mmm}FUT`;
+}
 
 // Tick-driven strategy management. PAPER-only in Phase 1 — strategies fire
 // signals against the raw Fyers tick stream and emit paper trades into the
@@ -20,10 +36,28 @@ export default function TickStrategies() {
     const [tradesTotal, setTradesTotal] = useState(0);
 
     const [createOpen, setCreateOpen] = useState(false);
-    const [form, setForm] = useState({ name: '', strategyType: '', symbol: 'NSE:NIFTYBANK-INDEX', params: {}, presetId: '' });
+    // form.symbol is the FINAL symbol sent to backend (the one fyersData
+    // subscribes to). We derive it from (indexSymbol + dataSource + futuresExpiry)
+    // unless the user types into the manual override, which sets symbol directly.
+    const [form, setForm] = useState({
+        name: '',
+        strategyType: '',
+        indexSymbol: 'NSE:NIFTYBANK-INDEX',
+        dataSource: 'SPOT',           // 'SPOT' | 'FUT'
+        futuresExpiry: '',            // YYYY-MM-DD when dataSource=FUT
+        symbol: 'NSE:NIFTYBANK-INDEX',
+        params: {},
+        presetId: '',
+    });
     const [editingId, setEditingId] = useState(null);
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(false);
+
+    // Expiry list for the currently-selected index. Loaded lazily when the
+    // user switches dataSource to FUT — calling /api/expiry on every dropdown
+    // open would be wasteful.
+    const [expiryDates, setExpiryDates] = useState([]);
+    const [expiryLoading, setExpiryLoading] = useState(false);
 
     const fetchAll = async () => {
         try {
@@ -56,33 +90,107 @@ export default function TickStrategies() {
 
     const openCreate = (preset) => {
         const t = preset || Object.keys(types)[0] || '';
+        const idx = 'NSE:NIFTYBANK-INDEX';
         setForm({
             name: '',
             strategyType: t,
-            symbol: 'NSE:NIFTYBANK-INDEX',
+            indexSymbol: idx,
+            dataSource: 'SPOT',
+            futuresExpiry: '',
+            symbol: idx,
             params: t ? { ...(types[t]?.defaults || {}) } : {},
             presetId: '',  // "custom" until the user picks a preset
         });
         setEditingId(null);
         setCreateOpen(true);
         setError(null);
+        setExpiryDates([]);
     };
 
     const openEdit = (strategy) => {
+        // Best-effort reverse-mapping of the stored symbol back to (index, dataSource).
+        // Exact match in INSTRUMENT_CONFIG → SPOT mode. A "*FUT" symbol → FUT mode
+        // with indexSymbol matched by underlying. Anything else stays in manual
+        // override (indexSymbol left as-is so the dropdown won't reset state).
+        let indexSymbol = strategy.symbol;
+        let dataSource = 'SPOT';
+        let futuresExpiry = '';
+        if (!INSTRUMENT_CONFIG[strategy.symbol]) {
+            const futMatch = /([A-Z]+):([A-Z0-9]+?)(\d{2})([A-Z]{3})FUT$/.exec(strategy.symbol || '');
+            if (futMatch) {
+                const [, exch, underlying] = futMatch;
+                // Find the INSTRUMENT_CONFIG key that matches exchange + underlying
+                const matched = Object.entries(INSTRUMENT_CONFIG).find(
+                    ([, cfg]) => cfg.exchange === exch && cfg.underlying === underlying
+                );
+                if (matched) {
+                    indexSymbol = matched[0];
+                    dataSource = 'FUT';
+                    // We can't recover the exact expiry date from yy+MMM alone
+                    // without ambiguity — leave blank and let the user re-pick.
+                }
+            }
+        }
         setForm({
             name: strategy.name,
             strategyType: strategy.strategyType,
+            indexSymbol,
+            dataSource,
+            futuresExpiry,
             symbol: strategy.symbol,
             params: { ...(types[strategy.strategyType]?.defaults || {}), ...(strategy.params || {}) },
-            // Editing always starts in "custom" — we don't try to reverse-match
-            // an existing strategy's params back to a preset id. If the user
-            // wants to reset to a preset, they pick one explicitly.
+            // Editing always starts in "custom" preset — we don't try to reverse-
+            // match an existing strategy's params back to a preset id.
             presetId: '',
         });
         setEditingId(strategy._id);
         setCreateOpen(true);
         setError(null);
+        setExpiryDates([]);
     };
+
+    // Fetch expiry dates whenever the user switches to FUT (or changes index
+    // while in FUT). Cached per-index implicitly by React: we re-fetch when
+    // indexSymbol changes because that's the input to the API call.
+    useEffect(() => {
+        if (!createOpen) return;
+        if (form.dataSource !== 'FUT') return;
+        if (!form.indexSymbol || !INSTRUMENT_CONFIG[form.indexSymbol]) return;
+        let cancelled = false;
+        setExpiryLoading(true);
+        fetchExpiriesForSymbol(form.indexSymbol, 4, 1)
+            .then(list => {
+                if (cancelled) return;
+                setExpiryDates(list);
+                // If we don't have an expiry picked yet, default to the nearest
+                // future one — matches Backtest's default.
+                setForm(f => {
+                    if (f.futuresExpiry) return f;
+                    const next = list.find(e => !e.isPast) || list[0];
+                    return next ? { ...f, futuresExpiry: next.date } : f;
+                });
+            })
+            .catch(err => console.warn('Expiry fetch failed:', err.message))
+            .finally(() => { if (!cancelled) setExpiryLoading(false); });
+        return () => { cancelled = true; };
+    }, [createOpen, form.dataSource, form.indexSymbol]);
+
+    // Derive form.symbol from (indexSymbol, dataSource, futuresExpiry).
+    // Skipped when the dropdowns don't fully resolve a symbol — keeps the
+    // user's manual override input intact.
+    useEffect(() => {
+        if (!createOpen) return;
+        if (form.dataSource === 'SPOT') {
+            if (form.indexSymbol && form.symbol !== form.indexSymbol) {
+                setForm(f => ({ ...f, symbol: f.indexSymbol }));
+            }
+        } else if (form.dataSource === 'FUT') {
+            const built = buildFuturesSymbol(form.indexSymbol, form.futuresExpiry);
+            if (built && form.symbol !== built) {
+                setForm(f => ({ ...f, symbol: built }));
+            }
+        }
+    }, [createOpen, form.dataSource, form.indexSymbol, form.futuresExpiry]);
 
     const onTypeChange = (newType) => {
         setForm(f => ({ ...f, strategyType: newType, params: { ...(types[newType]?.defaults || {}) }, presetId: '' }));
@@ -147,6 +255,37 @@ export default function TickStrategies() {
         }
     };
 
+    // ── Kill-switch handlers ──────────────────────────────────────────────
+    // Halt blocks new entries (open positions still exit on TP/SL/max-hold).
+    // Kill-all halts AND force-flats every open paper position at last LTP.
+    // Both are wrapped in confirm dialogs because they are mass actions.
+    const handleHalt = async () => {
+        const reason = window.prompt('Halt the tick engine?\nReason (logged + telegrammed):', 'manual halt');
+        if (reason == null) return;
+        try {
+            await axios.post(`${API_URL}/tick-strategies/halt`, { reason, actor: 'operator' });
+            await fetchAll();
+        } catch (err) { alert('Halt failed: ' + (err.response?.data?.error || err.message)); }
+    };
+    const handleResume = async () => {
+        if (!window.confirm('Resume tick engine? New entries will be permitted again.')) return;
+        try {
+            await axios.post(`${API_URL}/tick-strategies/resume`, { actor: 'operator' });
+            await fetchAll();
+        } catch (err) { alert('Resume failed: ' + (err.response?.data?.error || err.message)); }
+    };
+    const handleKillAll = async () => {
+        const openCount = snapshot?.totals?.openPositions || 0;
+        const reason = window.prompt(`KILL ALL: force-close every open paper position (${openCount} currently) and halt the engine. Type the reason:`, 'kill-all');
+        if (reason == null) return;
+        if (!window.confirm(`Confirm KILL ALL: close ${openCount} position(s) at last LTP and halt entries?`)) return;
+        try {
+            const res = await axios.post(`${API_URL}/tick-strategies/kill-all`, { reason, actor: 'operator' });
+            alert(`Closed ${res.data.closed} position(s). Engine is halted.`);
+            await fetchAll();
+        } catch (err) { alert('Kill-all failed: ' + (err.response?.data?.error || err.message)); }
+    };
+
     // Merge runtime snapshot stats onto the persisted strategy docs so each
     // card can show live state (open position, hit count, PnL) without two
     // separate lookups in render.
@@ -173,14 +312,59 @@ export default function TickStrategies() {
                         These can't be backtested against 1-min candles, so they run paper-only against the live tick stream.
                     </p>
                 </div>
-                <button
-                    onClick={() => openCreate()}
-                    disabled={Object.keys(types).length === 0}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:bg-slate-700 disabled:text-slate-500 text-black font-semibold transition"
-                >
-                    <Plus className="w-4 h-4" /> New Tick Strategy
-                </button>
+                <div className="flex items-center gap-2">
+                    {/* Halt / Resume / Kill — emergency controls */}
+                    {snapshot?.engine?.halted ? (
+                        <button
+                            onClick={handleResume}
+                            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white font-semibold text-sm transition"
+                            title="Resume tick engine (allow new entries)"
+                        >
+                            <Play className="w-4 h-4" /> Resume
+                        </button>
+                    ) : (
+                        <button
+                            onClick={handleHalt}
+                            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-600/90 hover:bg-amber-700 text-white font-semibold text-sm transition"
+                            title="Halt — block new entries; open positions still exit normally"
+                        >
+                            <Octagon className="w-4 h-4" /> Halt
+                        </button>
+                    )}
+                    <button
+                        onClick={handleKillAll}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold text-sm transition"
+                        title="KILL ALL — force-flat every open position + halt entries"
+                    >
+                        <Power className="w-4 h-4" /> KILL ALL
+                    </button>
+                    <button
+                        onClick={() => openCreate()}
+                        disabled={Object.keys(types).length === 0}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:bg-slate-700 disabled:text-slate-500 text-black font-semibold transition"
+                    >
+                        <Plus className="w-4 h-4" /> New Tick Strategy
+                    </button>
+                </div>
             </div>
+
+            {/* Halt banner — pulses red when engine is halted */}
+            {snapshot?.engine?.halted && (
+                <div className="bg-red-950 border border-red-700 rounded-xl p-4 flex items-start gap-3 animate-pulse">
+                    <Octagon className="w-6 h-6 text-red-400 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                        <h3 className="text-red-200 font-bold mb-1">🛑 Tick engine is HALTED — no new entries will fire</h3>
+                        <p className="text-red-200/80 text-sm">
+                            Halted by <span className="font-mono">{snapshot.engine.haltActor || 'system'}</span>:
+                            {' '}<span className="font-semibold">{snapshot.engine.haltReason || '(no reason)'}</span>
+                            {snapshot.engine.haltAt && ` · since ${new Date(snapshot.engine.haltAt).toLocaleTimeString()}`}
+                        </p>
+                        <p className="text-red-200/60 text-xs mt-1">
+                            Open positions still exit normally on TP/SL/max-hold. Click <span className="font-semibold">Resume</span> to re-enable new entries.
+                        </p>
+                    </div>
+                </div>
+            )}
 
             {/* Totals strip */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -244,28 +428,66 @@ export default function TickStrategies() {
                                     <th className="text-right py-2 pr-3">Entry</th>
                                     <th className="text-right py-2 pr-3">Exit</th>
                                     <th className="text-right py-2 pr-3">PnL pts</th>
+                                    <th className="text-right py-2 pr-3" title="Estimated net rupee PnL after Indian options charges + slippage, projected onto an ATM option leg">Net ₹ (est)</th>
                                     <th className="text-right py-2 pr-3">Hold</th>
                                     <th className="text-left py-2 pr-3">Status</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {trades.map(t => (
-                                    <tr key={t._id} className="border-b border-slate-800 hover:bg-slate-800/40">
-                                        <td className="py-2 pr-3 text-slate-400 font-mono text-xs">{new Date(t.entryTime).toLocaleTimeString()}</td>
-                                        <td className="py-2 pr-3 text-slate-300">{t.strategyName}</td>
-                                        <td className="py-2 pr-3 font-mono text-slate-300 text-xs">{t.symbol}</td>
-                                        <td className={`py-2 pr-3 font-bold ${t.direction === 'LONG' ? 'text-green-400' : 'text-red-400'}`}>{t.direction}</td>
-                                        <td className="py-2 pr-3 text-right font-mono">{t.entryPrice?.toFixed(2)}</td>
-                                        <td className="py-2 pr-3 text-right font-mono">{t.exitPrice != null ? t.exitPrice.toFixed(2) : '—'}</td>
-                                        <td className={`py-2 pr-3 text-right font-mono font-bold ${(t.pnlPoints || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                            {t.pnlPoints != null ? (t.pnlPoints >= 0 ? '+' : '') + t.pnlPoints.toFixed(2) : '—'}
-                                        </td>
-                                        <td className="py-2 pr-3 text-right font-mono text-slate-400 text-xs">{t.holdMs ? `${(t.holdMs / 1000).toFixed(1)}s` : '—'}</td>
-                                        <td className="py-2 pr-3">
-                                            <span className={`text-xs px-2 py-0.5 rounded ${t.status === 'OPEN' ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-700 text-slate-400'}`}>{t.status}</span>
-                                        </td>
-                                    </tr>
-                                ))}
+                                {trades.map(t => {
+                                    // For OPEN trades, surface the LIVE unrealized PnL/hold time
+                                    // from the snapshot rather than the persisted defaults (0).
+                                    // We match the snapshot openPosition by tickTradeId.
+                                    const liveOpen = t.status === 'OPEN'
+                                        ? (snapshot.strategies || []).find(s => s.openPosition?.tickTradeId === String(t._id))?.openPosition
+                                        : null;
+                                    const displayPnl = liveOpen?.unrealizedPoints
+                                        ?? (t.pnlPoints != null && t.status === 'CLOSED' ? t.pnlPoints : null);
+                                    const displayHoldMs = liveOpen?.holdMs ?? t.holdMs;
+                                    const displayExit = t.exitPrice != null
+                                        ? t.exitPrice.toFixed(2)
+                                        : (liveOpen?.currentLtp != null ? `${liveOpen.currentLtp.toFixed(2)} *` : '—');
+                                    // Net ₹: from persisted option_estimate on CLOSED rows; from live
+                                    // snapshot estimate on OPEN rows; null when book data missing.
+                                    const netRupees = t.status === 'CLOSED'
+                                        ? t.option_estimate?.net_pnl
+                                        : liveOpen?.unrealizedOption?.net_pnl;
+                                    const netTooltip = liveOpen?.unrealizedOption
+                                        ? `Live estimate — gross ₹${liveOpen.unrealizedOption.gross_pnl?.toFixed(0)}, charges ₹${liveOpen.unrealizedOption.charges?.total?.toFixed(0)}, slippage ₹${liveOpen.unrealizedOption.slippage_cost?.toFixed(0)}`
+                                        : t.option_estimate
+                                            ? `Gross ₹${t.option_estimate.gross_pnl}, charges ₹${t.option_estimate.charges?.total}, slippage ₹${t.option_estimate.slippage_cost}`
+                                            : 'Options-leg estimate not available';
+                                    return (
+                                        <tr key={t._id} className="border-b border-slate-800 hover:bg-slate-800/40">
+                                            <td className="py-2 pr-3 text-slate-400 font-mono text-xs">{new Date(t.entryTime).toLocaleTimeString()}</td>
+                                            <td className="py-2 pr-3 text-slate-300">{t.strategyName}</td>
+                                            <td className="py-2 pr-3 font-mono text-slate-300 text-xs">{t.symbol}</td>
+                                            <td className={`py-2 pr-3 font-bold ${t.direction === 'LONG' ? 'text-green-400' : 'text-red-400'}`}>{t.direction}</td>
+                                            <td className="py-2 pr-3 text-right font-mono">{t.entryPrice?.toFixed(2)}</td>
+                                            <td className="py-2 pr-3 text-right font-mono" title={liveOpen ? 'Live LTP (position still open)' : ''}>
+                                                {displayExit}
+                                            </td>
+                                            <td className={`py-2 pr-3 text-right font-mono font-bold ${displayPnl == null ? 'text-slate-500' : (displayPnl >= 0 ? 'text-green-400' : 'text-red-400')}`}
+                                                title={liveOpen ? 'Unrealized — updates live' : ''}>
+                                                {displayPnl != null
+                                                    ? (displayPnl >= 0 ? '+' : '') + displayPnl.toFixed(2) + (liveOpen ? ' (live)' : '')
+                                                    : '—'}
+                                            </td>
+                                            <td className={`py-2 pr-3 text-right font-mono ${netRupees == null ? 'text-slate-500' : (netRupees >= 0 ? 'text-green-400' : 'text-red-400')}`}
+                                                title={netTooltip}>
+                                                {netRupees != null
+                                                    ? (netRupees >= 0 ? '+' : '') + Math.round(netRupees).toLocaleString()
+                                                    : '—'}
+                                            </td>
+                                            <td className="py-2 pr-3 text-right font-mono text-slate-400 text-xs">
+                                                {displayHoldMs ? `${(displayHoldMs / 1000).toFixed(1)}s` : '—'}
+                                            </td>
+                                            <td className="py-2 pr-3">
+                                                <span className={`text-xs px-2 py-0.5 rounded ${t.status === 'OPEN' ? 'bg-amber-500/20 text-amber-300 animate-pulse' : 'bg-slate-700 text-slate-400'}`}>{t.status}</span>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
@@ -308,10 +530,10 @@ export default function TickStrategies() {
                         />
                     </FormField>
 
-                    <FormField label="Symbol">
+                    <FormField label="Underlying">
                         <select
-                            value={form.symbol}
-                            onChange={e => setForm(f => ({ ...f, symbol: e.target.value }))}
+                            value={form.indexSymbol}
+                            onChange={e => setForm(f => ({ ...f, indexSymbol: e.target.value, futuresExpiry: '' }))}
                             className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
                         >
                             <optgroup label="Indices">
@@ -350,15 +572,54 @@ export default function TickStrategies() {
                                     ))}
                             </optgroup>
                         </select>
+                    </FormField>
+
+                    <FormField label="Data Source">
+                        <select
+                            value={form.dataSource}
+                            onChange={e => setForm(f => ({ ...f, dataSource: e.target.value, futuresExpiry: e.target.value === 'SPOT' ? '' : f.futuresExpiry }))}
+                            className="w-full bg-slate-800 border border-blue-800 rounded px-3 py-2 text-slate-200"
+                        >
+                            <option value="SPOT">Spot / Index (no per-tick volume)</option>
+                            <option value="FUT">Futures Contract (recommended)</option>
+                        </select>
+                        <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+                            {form.dataSource === 'SPOT'
+                                ? '⚠️ Index spot ticks report vol=0 — volume-driven strategies (Large Order, CVD, VWAP Reversion) will never trigger. Use this only for price-only strategies.'
+                                : '✓ Futures contracts carry per-tick traded volume — required for any volume-aware strategy.'}
+                        </p>
+                    </FormField>
+
+                    {form.dataSource === 'FUT' && (
+                        <FormField label="Futures Expiry Date">
+                            <select
+                                value={form.futuresExpiry}
+                                onChange={e => setForm(f => ({ ...f, futuresExpiry: e.target.value }))}
+                                className="w-full bg-slate-800 border border-purple-900 rounded px-3 py-2 text-slate-200"
+                                disabled={expiryLoading}
+                            >
+                                <option value="">{expiryLoading ? 'Loading…' : '— select expiry —'}</option>
+                                {expiryDates.map(exp => (
+                                    <option key={exp.date} value={exp.date} disabled={exp.isPast}>
+                                        {exp.label}{exp.isPast ? ' (past)' : ''}
+                                    </option>
+                                ))}
+                            </select>
+                            <p className="text-xs text-slate-500 mt-1.5">
+                                Most index futures roll monthly. The current-month contract has the deepest liquidity for tick strategies.
+                            </p>
+                        </FormField>
+                    )}
+
+                    <FormField label="Resolved Symbol (sent to Fyers)">
                         <input
                             type="text"
                             value={form.symbol}
                             onChange={e => setForm(f => ({ ...f, symbol: e.target.value }))}
-                            placeholder="Or type custom (e.g. NSE:NIFTY25NOVFUT)"
-                            className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs mt-2 font-mono text-slate-300"
+                            className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200 font-mono text-sm"
                         />
-                        <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
-                            ⚠️ Volume-driven strategies need a <span className="text-amber-300">futures contract</span> (e.g. <code className="bg-slate-700 px-1">NSE:NIFTY25NOVFUT</code>) — index symbols report <code className="bg-slate-700 px-1">vol=0</code> per tick, so the burst gate never fires.
+                        <p className="text-xs text-slate-500 mt-1">
+                            Auto-built from the selections above. Editable — type a custom symbol if you need one not in the lists (e.g. <code className="bg-slate-700 px-1">NSE:NIFTY25NOVFUT</code>).
                         </p>
                     </FormField>
 
@@ -463,28 +724,73 @@ function StrategyCard({ strategy: s, typeMeta, onToggle, onEdit, onDelete }) {
                             <span className="text-[10px] px-2 py-0.5 rounded bg-slate-700 text-slate-300 font-mono">{s.symbol}</span>
                         </div>
                         <p className="text-xs text-slate-500 mt-0.5">
-                            {s.isActive ? '🟢 Listening to ticks' : '⏸ Paused'}
+                            {rt?.errors?.autoDeactivatedAt && !s.isActive
+                                ? <span className="text-red-400 font-semibold">⚠️ Auto-deactivated (errors)</span>
+                                : (s.isActive ? '🟢 Listening to ticks' : '⏸ Paused')}
+                            {rt?.errors?.total > 0 && (
+                                <span
+                                    className={`ml-2 ${rt.errors.consecutive > 0 ? 'text-red-400' : 'text-amber-400'}`}
+                                    title={`Last error: ${rt.errors.lastMessage}\n${rt.errors.consecutive > 0 ? `Consecutive: ${rt.errors.consecutive}` : 'Recovered'}`}
+                                >
+                                    · {rt.errors.total} err{rt.errors.total === 1 ? '' : 's'}
+                                    {rt.errors.consecutive > 0 ? ` (${rt.errors.consecutive} streak)` : ''}
+                                </span>
+                            )}
                             {rt?.health && s.isActive && (
                                 <span className={`ml-2 ${rt.health.warnedNoVol ? 'text-amber-400' : 'text-slate-500'}`}>
-                                    · {rt.health.totalTicks} ticks
+                                    · <span className={rt.health.ticksPerSec > 0 ? 'text-cyan-400 font-semibold' : ''}>{rt.health.ticksPerSec || 0} t/s</span>
+                                    {' '}({rt.health.totalTicks} total
                                     {rt.health.totalTicks > 0 && (
                                         rt.health.ticksWithVol > 0
-                                            ? ` (${Math.round((rt.health.ticksWithVol / rt.health.totalTicks) * 100)}% w/ vol)`
-                                            : ' (no volume — wrong symbol?)'
+                                            ? `, ${Math.round((rt.health.ticksWithVol / rt.health.totalTicks) * 100)}% w/vol`
+                                            : ', no volume — wrong symbol?'
+                                    )})
+                                </span>
+                            )}
+                            {open && (
+                                <span className="ml-1">
+                                    {' · '}
+                                    Open <span className={open.direction === 'LONG' ? 'text-green-400 font-semibold' : 'text-red-400 font-semibold'}>{open.direction}</span>
+                                    {' @ '}{open.entryPrice?.toFixed(2)}, held {(open.holdMs / 1000).toFixed(1)}s
+                                    {open.unrealizedPoints != null && (
+                                        <span className={`ml-1 font-mono ${open.unrealizedPoints >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                            ({open.unrealizedPoints >= 0 ? '+' : ''}{open.unrealizedPoints.toFixed(2)} pts)
+                                        </span>
+                                    )}
+                                    {open.unrealizedOption?.net_pnl != null && (
+                                        <span className={`ml-1 font-mono ${open.unrealizedOption.net_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}
+                                              title={`Estimated net option-leg PnL if closed now (gross ₹${open.unrealizedOption.gross_pnl?.toFixed(0)}, charges ₹${open.unrealizedOption.charges?.total?.toFixed(0)}, slippage ₹${open.unrealizedOption.slippage_cost?.toFixed(0)})`}>
+                                            · est net ₹{open.unrealizedOption.net_pnl >= 0 ? '+' : ''}{open.unrealizedOption.net_pnl.toFixed(0)}
+                                        </span>
                                     )}
                                 </span>
                             )}
-                            {open && ` · Open ${open.direction} @ ${open.entryPrice?.toFixed(2)}, held ${(open.holdMs / 1000).toFixed(1)}s`}
                         </p>
                     </div>
                 </div>
                 <div className="flex items-center gap-4 text-sm">
                     <Stat label="Trades" value={stats.totalTrades} />
-                    <Stat label="Win %" value={winRate != null ? `${winRate.toFixed(0)}%` : '—'} />
+                    <Stat
+                        label="Win % (net)"
+                        value={
+                            stats.totalTrades > 0 && stats.winsNet != null
+                                ? `${((stats.winsNet / stats.totalTrades) * 100).toFixed(0)}%`
+                                : (winRate != null ? `${winRate.toFixed(0)}%*` : '—')
+                        }
+                    />
                     <Stat
                         label="PnL pts"
                         value={(stats.totalPnl >= 0 ? '+' : '') + stats.totalPnl.toFixed(2)}
                         color={stats.totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}
+                    />
+                    <Stat
+                        label="Net ₹ (est)"
+                        value={
+                            stats.optionNetPnl != null
+                                ? (stats.optionNetPnl >= 0 ? '+' : '') + Math.round(stats.optionNetPnl).toLocaleString()
+                                : '—'
+                        }
+                        color={(stats.optionNetPnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}
                     />
                     <button onClick={onEdit} className="text-xs px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-200">Edit</button>
                     <button onClick={onDelete} className="p-2 rounded text-red-400 hover:bg-red-500/10" title="Delete">

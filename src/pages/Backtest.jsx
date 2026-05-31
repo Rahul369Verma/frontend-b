@@ -23,6 +23,7 @@ const FALLBACK_GEMINI_MODELS = [
     { id: 'claude-haiku-4-5-20251001',      label: 'Claude Haiku 4.5 ⚡',        quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
     { id: 'claude-sonnet-4-6',              label: 'Claude Sonnet 4.6 ⭐',       quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
     { id: 'claude-opus-4-7',               label: 'Claude Opus 4.7 🎯',          quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
+    { id: 'claude-opus-4-8',               label: 'Claude Opus 4.8 🎯',          quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
 ];
 
 // Group resolver — maps model ID prefix → user-friendly group label.
@@ -471,7 +472,7 @@ export default function Backtest() {
       // Cookies live in global Settings (not in params), so they're already
       // absent here — kept in the exclude list for defensive cleanliness.
       'use_claude_web_session', 'claude_web_model', 'claude_web_batch_size',
-      'claude_thinking_enabled', 'claude_thinking_budget',
+      'claude_thinking_enabled', 'claude_thinking_budget', 'claude_effort',
       'use_gemini_web_session', 'gemini_web_model', 'gemini_web_batch_size',
       // Ensemble / RL
       'use_ensemble', 'ensemble_models',
@@ -554,6 +555,7 @@ export default function Backtest() {
               gemini_web_batch_size: 1,
               claude_thinking_enabled: !!params.claude_thinking_enabled && modelId.startsWith('claude'),
               claude_thinking_budget: parseInt(params.claude_thinking_budget, 10) || 32000,
+              claude_effort: params.claude_effort || 'high',
               enable_web_research: false,  // Not useful for param tuning
           });
           const jobId = startRes.data?.job_id;
@@ -1985,7 +1987,8 @@ export default function Backtest() {
                                                 >
                                                     <option value="claude-web/claude-haiku-4-5">Claude Haiku 4.5 (fastest)</option>
                                                     <option value="claude-web/claude-sonnet-4-6">Claude Sonnet 4.6 (balanced)</option>
-                                                    <option value="claude-web/claude-opus-4-7">Claude Opus 4.7 (slowest, best)</option>
+                                                    <option value="claude-web/claude-opus-4-7">Claude Opus 4.7 (strong reasoning)</option>
+                                                    <option value="claude-web/claude-opus-4-8">Claude Opus 4.8 (newest, best)</option>
                                                 </select>
                                             </div>
                                         </div>
@@ -2146,40 +2149,42 @@ export default function Backtest() {
                                         {!!params.claude_thinking_enabled && (
                                             <>
                                                 <p className="text-[10px] text-slate-400 leading-snug">
-                                                    Claude runs a budgeted internal reasoning pass before answering.
+                                                    Claude runs an internal reasoning pass before answering.
                                                     Applies to <b>both</b> Anthropic API <i>and</i> Claude.ai web sessions.
-                                                    For web sessions, <code className="bg-slate-900 px-1">paprika_mode: "extended"</code>
-                                                    is set on the conversation at creation time (matches what claude.ai's UI sends).
+                                                    For web sessions we send <code className="bg-slate-900 px-1">effort</code>{' '}
+                                                    + <code className="bg-slate-900 px-1">thinking_mode: "auto"</code>{' '}
+                                                    (matches claude.ai's UI dropdown for Opus 4.8).
                                                 </p>
                                                 <div>
                                                     <label className="block text-[10px] text-orange-300 mb-1">
-                                                        Thinking budget <span className="text-slate-500">(tokens; higher = more reasoning, slower)</span>
+                                                        Thinking effort <span className="text-slate-500">(higher = more reasoning, slower)</span>
                                                     </label>
-                                                    <div className="flex items-center gap-2">
-                                                        <input
-                                                            type="range"
-                                                            min="1024"
-                                                            max="64000"
-                                                            step="1024"
-                                                            className="flex-1 accent-orange-500"
-                                                            value={parseInt(params.claude_thinking_budget, 10) || 32000}
-                                                            onChange={e => setParams({
+                                                    <select
+                                                        className="w-full bg-slate-900 border border-orange-700/40 rounded p-1.5 text-white text-xs"
+                                                        value={params.claude_effort || 'high'}
+                                                        onChange={e => {
+                                                            const eff = e.target.value;
+                                                            // Keep claude_thinking_budget in sync for the Anthropic API path,
+                                                            // which takes a numeric budget_tokens (web ignores it).
+                                                            const budgetForEffort = {
+                                                                low: 4096, medium: 16000, high: 32000, xhigh: 48000, max: 64000,
+                                                            }[eff] || 32000;
+                                                            setParams({
                                                                 ...params,
-                                                                claude_thinking_budget: parseInt(e.target.value, 10),
-                                                            })}
-                                                        />
-                                                        <span className="font-mono text-xs text-orange-200 w-16 text-right">
-                                                            {(parseInt(params.claude_thinking_budget, 10) || 32000).toLocaleString()}
-                                                        </span>
-                                                    </div>
+                                                                claude_effort: eff,
+                                                                claude_thinking_budget: budgetForEffort,
+                                                            });
+                                                        }}
+                                                    >
+                                                        <option value="low">⚡ Low — quick reasoning (~4k tokens)</option>
+                                                        <option value="medium">✅ Medium — balanced (~16k tokens)</option>
+                                                        <option value="high">🎯 High — deep reasoning (~32k, recommended)</option>
+                                                        <option value="xhigh">🚀 X-High — very deep (~48k tokens)</option>
+                                                        <option value="max">🔥 Max — heaviest (~64k tokens)</option>
+                                                    </select>
                                                     <p className="text-[10px] text-slate-500 mt-1 leading-snug">
-                                                        {(() => {
-                                                            const b = parseInt(params.claude_thinking_budget, 10) || 32000;
-                                                            if (b <= 4096)  return '⚡ Low effort — quick reasoning, minimal extra cost.';
-                                                            if (b <= 16000) return '✅ Moderate — balanced reasoning depth for most signals.';
-                                                            if (b <= 32000) return '🎯 High effort — deep reasoning, recommended max for trading decisions.';
-                                                            return '🔥 Heavy — may not fit smaller models; high token cost on API.';
-                                                        })()}
+                                                        Web session: sent as <code>effort</code> on conversation create (Opus 4.8 honours it).
+                                                        Anthropic API: mapped to <code>budget_tokens</code> for the thinking block.
                                                     </p>
                                                 </div>
                                                 <p className="text-[10px] text-amber-400/80 leading-snug">
@@ -3340,7 +3345,8 @@ export default function Backtest() {
                                       className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
                                   >
                                       <optgroup label="🌐 Web Sessions (no API cost)">
-                                          <option value="claude-web/claude-opus-4-7">Claude Opus 4.7 (web) — strongest reasoning</option>
+                                          <option value="claude-web/claude-opus-4-8">Claude Opus 4.8 (web) — newest, best (NEW)</option>
+                                          <option value="claude-web/claude-opus-4-7">Claude Opus 4.7 (web) — strong reasoning</option>
                                           <option value="claude-web/claude-sonnet-4-6">Claude Sonnet 4.6 (web) — balanced</option>
                                           <option value="claude-web/claude-haiku-4-5">Claude Haiku 4.5 (web) — fastest</option>
                                           {/* Latest 2026 Gemini models from gemini.google.com */}
@@ -3356,6 +3362,7 @@ export default function Backtest() {
                                           <option value="gemini-2.5-pro">Gemini 2.5 Pro (API)</option>
                                           <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (API)</option>
                                           <option value="claude-opus-4-7">Claude Opus 4.7 (API)</option>
+                                          <option value="claude-opus-4-8">Claude Opus 4.8 (API)</option>
                                       </optgroup>
                                   </select>
                                   <p className="text-[10px] text-slate-500 mt-1">
