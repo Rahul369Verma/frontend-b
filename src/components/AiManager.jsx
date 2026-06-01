@@ -206,7 +206,7 @@ function JobCard({ job, onStop, expanded, onToggleExpand }) {
 const AiManager = () => {
     const [status,        setStatus]        = useState({ status: 'loading', model_trained: false });
     const [loadingStatus, setLoadingStatus] = useState(false);
-    const [activeTab,     setActiveTab]     = useState('static');
+    const [activeTab,     setActiveTab]     = useState('rl');   // RL Agent is the default tab
 
     // Static model training
     const [trainConfig,  setTrainConfig]  = useState({ symbol: 'NSE:NIFTYBANK-INDEX', start_date: '2024-01-01', end_date: '2024-02-01', epochs: 50, lookback: 10 });

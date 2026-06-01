@@ -357,7 +357,7 @@ export default function TickStrategies() {
                         <p className="text-red-200/80 text-sm">
                             Halted by <span className="font-mono">{snapshot.engine.haltActor || 'system'}</span>:
                             {' '}<span className="font-semibold">{snapshot.engine.haltReason || '(no reason)'}</span>
-                            {snapshot.engine.haltAt && ` · since ${new Date(snapshot.engine.haltAt).toLocaleTimeString()}`}
+                            {snapshot.engine.haltAt && ` · since ${new Date(snapshot.engine.haltAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} IST`}
                         </p>
                         <p className="text-red-200/60 text-xs mt-1">
                             Open positions still exit normally on TP/SL/max-hold. Click <span className="font-semibold">Resume</span> to re-enable new entries.
@@ -365,6 +365,37 @@ export default function TickStrategies() {
                     </div>
                 </div>
             )}
+
+            {/* Market-hours pill — hidden on older backends that don't emit engine.marketOpen */}
+            {snapshot?.engine?.marketOpen !== undefined && (() => {
+                const exch = snapshot.engine.exchange || 'NSE';
+                if (snapshot.engine.marketOpen) {
+                    const closesAt = snapshot.engine.sessionClosesAt
+                        ? new Date(snapshot.engine.sessionClosesAt).toLocaleTimeString('en-IN', {
+                            timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false,
+                        })
+                        : '—';
+                    return (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-green-500/20 text-green-300 border border-green-500/40">
+                            ● {exch} Open — closes {closesAt} IST
+                        </span>
+                    );
+                }
+                let dayLabel = '—';
+                let timeLabel = '—';
+                if (snapshot.engine.nextSessionAt) {
+                    const d = new Date(snapshot.engine.nextSessionAt);
+                    dayLabel = d.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short' });
+                    timeLabel = d.toLocaleTimeString('en-IN', {
+                        timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false,
+                    });
+                }
+                return (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                        ● {exch} Closed — next open {dayLabel} {timeLabel} IST
+                    </span>
+                );
+            })()}
 
             {/* Totals strip */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -386,6 +417,7 @@ export default function TickStrategies() {
                             key={s._id}
                             strategy={s}
                             typeMeta={types[s.strategyType]}
+                            engineMarketOpen={snapshot?.engine?.marketOpen}
                             onToggle={() => toggleActive(s)}
                             onEdit={() => openEdit(s)}
                             onDelete={() => deleteStrategy(s)}
@@ -459,7 +491,7 @@ export default function TickStrategies() {
                                             : 'Options-leg estimate not available';
                                     return (
                                         <tr key={t._id} className="border-b border-slate-800 hover:bg-slate-800/40">
-                                            <td className="py-2 pr-3 text-slate-400 font-mono text-xs">{new Date(t.entryTime).toLocaleTimeString()}</td>
+                                            <td className="py-2 pr-3 text-slate-400 font-mono text-xs">{new Date(t.entryTime).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</td>
                                             <td className="py-2 pr-3 text-slate-300">{t.strategyName}</td>
                                             <td className="py-2 pr-3 font-mono text-slate-300 text-xs">{t.symbol}</td>
                                             <td className={`py-2 pr-3 font-bold ${t.direction === 'LONG' ? 'text-green-400' : 'text-red-400'}`}>{t.direction}</td>
@@ -699,11 +731,33 @@ function StatBox({ label, value, icon: Icon, color }) {
     );
 }
 
-function StrategyCard({ strategy: s, typeMeta, onToggle, onEdit, onDelete }) {
+function StrategyCard({ strategy: s, typeMeta, engineMarketOpen, onToggle, onEdit, onDelete }) {
     const rt = s.runtime;
     const open = rt?.openPosition;
     const stats = rt?.stats || { totalTrades: 0, wins: 0, totalPnl: 0 };
     const winRate = stats.totalTrades > 0 ? (stats.wins / stats.totalTrades) * 100 : null;
+
+    // Stream-health dot + label. Falls back to the legacy 🟢/⏸ behavior when
+    // the backend hasn't surfaced engine.marketOpen (older snapshot shape).
+    const tps = rt?.health?.ticksPerSec ?? 0;
+    const totalTicks = rt?.health?.totalTicks ?? 0;
+    let streamDot = null;        // emoji dot prefix
+    let streamSuffix = '';       // extra suffix appended to the listening label
+    if (s.isActive) {
+        if (engineMarketOpen === undefined) {
+            streamDot = '🟢';    // legacy fallback
+        } else if (engineMarketOpen === false) {
+            streamDot = '⚪';
+            streamSuffix = ' (market closed)';
+        } else if (tps > 0) {
+            streamDot = '🟢';
+        } else if (totalTicks > 0) {
+            streamDot = '🟡';
+            streamSuffix = ' (stale)';
+        } else {
+            streamDot = '🔴';
+        }
+    }
     return (
         <div className="bg-slate-800 rounded-lg border border-slate-600 overflow-hidden">
             <div className="p-4 flex items-center justify-between gap-4 flex-wrap">
@@ -726,7 +780,7 @@ function StrategyCard({ strategy: s, typeMeta, onToggle, onEdit, onDelete }) {
                         <p className="text-xs text-slate-500 mt-0.5">
                             {rt?.errors?.autoDeactivatedAt && !s.isActive
                                 ? <span className="text-red-400 font-semibold">⚠️ Auto-deactivated (errors)</span>
-                                : (s.isActive ? '🟢 Listening to ticks' : '⏸ Paused')}
+                                : (s.isActive ? `${streamDot} Listening to ticks${streamSuffix}` : '⏸ Paused')}
                             {rt?.errors?.total > 0 && (
                                 <span
                                     className={`ml-2 ${rt.errors.consecutive > 0 ? 'text-red-400' : 'text-amber-400'}`}
@@ -813,16 +867,24 @@ function Stat({ label, value, color = 'text-white' }) {
 
 function EventRow({ ev }) {
     const isEntry = ev.kind === 'ENTRY';
+    const isExit  = ev.kind === 'EXIT';
     const isWarn  = ev.kind === 'WARNING';
-    const Icon = isWarn ? AlertTriangle
+    const isStreamHealthy = ev.kind === 'STREAM_HEALTHY';
+    const isStreamStale   = ev.kind === 'STREAM_STALE';
+    const Icon = isWarn || isStreamStale ? AlertTriangle
+        : isStreamHealthy ? Activity
         : isEntry ? (ev.direction === 'LONG' ? TrendingUp : TrendingDown)
         : Clock;
-    const color = isWarn ? 'text-amber-400'
+    const color = isWarn || isStreamStale ? 'text-amber-400'
+        : isStreamHealthy ? 'text-green-400'
         : isEntry ? (ev.direction === 'LONG' ? 'text-green-400' : 'text-red-400')
-        : (ev.pnl >= 0 ? 'text-green-400' : 'text-red-400');
-    const rowCls = isWarn
+        : isExit ? (ev.pnl >= 0 ? 'text-green-400' : 'text-red-400')
+        : 'text-slate-400';
+    const rowCls = isWarn || isStreamStale
         ? 'bg-amber-900/20 border-amber-700/40'
-        : 'bg-slate-900/40 border-slate-800';
+        : isStreamHealthy
+            ? 'bg-green-900/10 border-green-800/40'
+            : 'bg-slate-900/40 border-slate-800';
     return (
         <div className={`flex items-start gap-3 p-2 rounded border ${rowCls}`}>
             <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${color}`} />
@@ -837,12 +899,14 @@ function EventRow({ ev }) {
                     {isEntry && <span className="text-xs text-slate-400 font-mono">@ {ev.entryPrice?.toFixed(2)}</span>}
                     {ev.kind === 'EXIT' && (
                         <span className="text-xs text-slate-400 font-mono">
-                            {ev.entryPrice?.toFixed(2)} → {ev.exitPrice?.toFixed(2)} · {(ev.pnlPoints >= 0 ? '+' : '') + ev.pnlPoints?.toFixed(2)} pts · {(ev.holdMs / 1000).toFixed(1)}s
+                            {ev.entryPrice?.toFixed(2)} → {ev.exitPrice?.toFixed(2)}
+                            {ev.pnlPoints != null && ` · ${ev.pnlPoints >= 0 ? '+' : ''}${ev.pnlPoints.toFixed(2)} pts`}
+                            {ev.holdMs != null && ` · ${(ev.holdMs / 1000).toFixed(1)}s`}
                         </span>
                     )}
-                    <span className="text-xs text-slate-500 ml-auto font-mono">{new Date(ev.time).toLocaleTimeString()}</span>
+                    <span className="text-xs text-slate-500 ml-auto font-mono">{new Date(ev.time).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</span>
                 </div>
-                <p className={`text-xs mt-0.5 ${isWarn ? 'text-amber-200' : 'text-slate-500 truncate'}`}>{ev.reason}</p>
+                <p className={`text-xs mt-0.5 ${isWarn || isStreamStale ? 'text-amber-200' : isStreamHealthy ? 'text-green-200' : 'text-slate-500 truncate'}`}>{ev.reason}</p>
             </div>
         </div>
     );
