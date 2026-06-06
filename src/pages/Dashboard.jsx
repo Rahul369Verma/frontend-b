@@ -130,7 +130,20 @@ export default function Dashboard() {
   useEffect(() => {
       const fetchMongoTrades = async () => {
         try {
-            const response = await axios.get(`${API_URL}/trades?page=${tradesPage}&limit=${tradesLimit}&symbol=${tradesSearch}`);
+            // Smart filter: if the search box contains hex-only chars (6+) it's
+            // probably a trade ID short suffix — route it to the trade_id filter.
+            // Anything else goes to the symbol filter as before.
+            const term = (tradesSearch || '').trim();
+            const looksLikeTradeId = /^[a-fA-F0-9]{6,24}$/.test(term);
+            const params = new URLSearchParams({
+                page: String(tradesPage),
+                limit: String(tradesLimit),
+            });
+            if (term) {
+                if (looksLikeTradeId) params.set('trade_id', term);
+                else params.set('symbol', term);
+            }
+            const response = await axios.get(`${API_URL}/trades?${params.toString()}`);
             if (response.data) {
                  setMongoTrades(response.data.trades || []);
                  setTradesTotal(response.data.total || 0);
@@ -425,6 +438,49 @@ export default function Dashboard() {
   // disable itself, preventing accidental double-clicks during the ~500ms
   // broker round-trip.
   const [closingSymbols, setClosingSymbols] = useState({});
+  // Per-position accordion toggle for the AI In-flight Review history.
+  // Keyed by spotSymbol/symbol so each card's accordion is independent.
+  const [reviewsExpanded, setReviewsExpanded] = useState({});
+  // Last-copied trade ID for a brief "copied" affordance on the badge.
+  const [copiedTradeId, setCopiedTradeId] = useState(null);
+
+  // Shortens a Mongo ObjectId (24 hex chars) for display: last 6 chars,
+  // uppercased. e.g. "67abc...01F4" → "01F4DE". Returns '—' for empty input.
+  const shortTradeId = (id) => {
+    if (!id || typeof id !== 'string') return '—';
+    return id.slice(-6).toUpperCase();
+  };
+  // Copy the full trade ID to clipboard with a transient visual confirmation.
+  // The user can paste it into the Trade History search box (which now also
+  // matches against trade_id) to filter every event tied to that trade.
+  const copyTradeId = (id) => {
+    if (!id) return;
+    try {
+      navigator.clipboard.writeText(id);
+      setCopiedTradeId(id);
+      setTimeout(() => setCopiedTradeId(prev => (prev === id ? null : prev)), 1500);
+    } catch (_) { /* clipboard blocked — no-op */ }
+  };
+  // Self-contained badge component. Click copies the full ID.
+  const TradeIdBadge = ({ id, label = 'ID' }) => {
+    if (!id) return null;
+    const copied = copiedTradeId === id;
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); copyTradeId(id); }}
+        title={`Trade ID: ${id}\nClick to copy. Paste into Trade History search to filter.`}
+        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold transition-colors ${
+          copied
+            ? 'bg-emerald-700/60 text-emerald-100'
+            : 'bg-slate-700/60 hover:bg-slate-600/80 text-slate-300 hover:text-white'
+        }`}
+      >
+        <span className="text-slate-500 font-sans tracking-wide">{label}</span>
+        <span>{copied ? '✓ copied' : shortTradeId(id)}</span>
+      </button>
+    );
+  };
   const handleClosePosition = async (pos) => {
       const key = pos.spotSymbol || pos.symbol;
       const pnlStr = pos.pnl != null
@@ -444,6 +500,37 @@ export default function Dashboard() {
           }
       } catch (err) {
           alert(`❌ Close failed: ${err.response?.data?.error || err.message}`);
+      } finally {
+          setClosingSymbols(s => { const n = { ...s }; delete n[key]; return n; });
+      }
+  };
+
+  // Force-close an ORPHAN position — bypasses the engine path (which doesn't
+  // know about the orphan) and marks the Trade doc CLOSED directly with a
+  // best-effort exit price taken from the live socket cache server-side.
+  // PAPER-only; LIVE orphans must be reconciled at the broker first.
+  const handleForceCloseOrphan = async (pos) => {
+      if (!pos?.trade_id) { alert('No trade_id on this position — cannot force-close.'); return; }
+      const pnlStr = pos.pnl != null
+          ? ` (PnL ${pos.pnl >= 0 ? '+' : ''}₹${Math.round(pos.pnl).toLocaleString()})`
+          : '';
+      if (!window.confirm(
+          `Force-close orphan ${pos.symbol}${pnlStr}?\n\n` +
+          `This marks the Trade doc CLOSED at the current LTP without going through the engine. ` +
+          `Use only when the engine isn't actively monitoring this position.`
+      )) return;
+      const key = `orphan:${pos.trade_id}`;
+      setClosingSymbols(s => ({ ...s, [key]: true }));
+      try {
+          const res = await axios.post(`${API_URL}/engine/force-close-orphan`, { tradeId: pos.trade_id });
+          if (res.data?.success) {
+              console.log(`✅ Orphan force-closed: ${pos.symbol}`, res.data);
+              setPositions(prev => prev.filter(p => p.trade_id !== pos.trade_id));
+          } else {
+              alert(`❌ Force-close failed: ${res.data?.error || 'Unknown error'}`);
+          }
+      } catch (err) {
+          alert(`❌ Force-close failed: ${err.response?.data?.error || err.message}`);
       } finally {
           setClosingSymbols(s => { const n = { ...s }; delete n[key]; return n; });
       }
@@ -1341,17 +1428,32 @@ export default function Dashboard() {
                       // Spot move since entry
                       const spotMove = (spotLtp != null && entrySpot != null) ? (spotLtp - entrySpot) : null;
 
+                      const isOrphan = !!pos.orphan;
                       return (
                           <div
-                              key={pos.spotSymbol || pos.symbol || i}
+                              key={pos.trade_id || `${pos.spotSymbol || ''}-${pos.symbol}` || i}
                               className={`rounded-lg border p-3 transition-colors ${
-                                  pnl > 0
-                                      ? 'border-emerald-700/50 bg-emerald-950/10'
-                                      : pnl < 0
-                                          ? 'border-rose-700/50 bg-rose-950/10'
-                                          : 'border-slate-700 bg-slate-900/40'
+                                  isOrphan
+                                      ? 'border-amber-700/60 bg-amber-950/15'
+                                      : pnl > 0
+                                          ? 'border-emerald-700/50 bg-emerald-950/10'
+                                          : pnl < 0
+                                              ? 'border-rose-700/50 bg-rose-950/10'
+                                              : 'border-slate-700 bg-slate-900/40'
                               }`}
                           >
+                              {/* ── Orphan banner: position exists in DB but the
+                                  engine isn't tracking it (sibling on same
+                                  underlying overwrote it in memory). Engine
+                                  won't auto-SL/TP. Operator must Force-Close. */}
+                              {isOrphan && (
+                                  <div className="mb-2 px-2 py-1.5 rounded border border-amber-700/60 bg-amber-950/40 text-amber-200 text-[11px] leading-snug">
+                                      <div className="font-bold mb-0.5">⚠ Orphan position — not actively monitored</div>
+                                      <div className="text-amber-300/80">
+                                          {pos.orphan_reason || 'The engine is monitoring a sibling on the same underlying. Auto-SL/TP will not fire on this trade.'}
+                                      </div>
+                                  </div>
+                              )}
                               {/* ── Row 1: badges + symbol + live PnL ── */}
                               <div className="flex items-center justify-between gap-2 mb-2">
                                   <div className="flex items-center gap-2 min-w-0 flex-wrap">
@@ -1361,6 +1463,14 @@ export default function Dashboard() {
                                       <span className="font-mono text-sm text-white truncate" title={pos.symbol}>
                                           {pos.symbol}
                                       </span>
+                                      {pos.trade_id && (
+                                          <TradeIdBadge id={pos.trade_id} label="ID" />
+                                      )}
+                                      {isOrphan && (
+                                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-700/40 text-amber-200 font-bold" title="DB row exists but engine doesn't monitor this position">
+                                              ORPHAN
+                                          </span>
+                                      )}
                                       {pos.mode && (
                                           <span className={`text-[10px] px-1.5 py-0.5 rounded ${pos.mode === 'LIVE' ? 'bg-red-700/40 text-red-200' : 'bg-slate-700 text-slate-300'}`}>
                                               {pos.mode}
@@ -1501,10 +1611,163 @@ export default function Dashboard() {
                                       📋 {pos.aiReasoning}
                                   </div>
                               )}
-                              {/* ── Close button — manual exit for THIS position only ── */}
+
+                              {/* ── AI In-flight Review accordion ──────────────────────
+                                  Shows every periodic review the AI performed while the
+                                  position was open: HOLD / CLOSE_NOW / UPDATE_SL / UPDATE_TP
+                                  with timestamp, confidence, reasoning, and whether the
+                                  verdict was actually applied. Only rendered when the
+                                  strategy has ai_inflight_review_enabled. */}
+                              {pos.inflight_review_enabled && (() => {
+                                  const reviews = Array.isArray(pos.inflight_reviews) ? pos.inflight_reviews : [];
+                                  const key = pos.spotSymbol || pos.symbol;
+                                  const expanded = !!reviewsExpanded[key];
+                                  const intervalMin = pos.inflight_review_interval_min || 15;
+                                  const lastReview = reviews[0]; // newest-first from server
+                                  const ACTION_STYLE = {
+                                      HOLD:      { txt: 'HOLD',      cls: 'bg-slate-700/60 text-slate-300' },
+                                      CLOSE_NOW: { txt: 'CLOSE',     cls: 'bg-rose-700/40 text-rose-200' },
+                                      UPDATE_SL: { txt: 'UPDATE SL', cls: 'bg-amber-700/40 text-amber-200' },
+                                      UPDATE_TP: { txt: 'UPDATE TP', cls: 'bg-cyan-700/40 text-cyan-200' },
+                                      ERROR:     { txt: 'ERROR',     cls: 'bg-rose-900/40 text-rose-300' },
+                                  };
+                                  return (
+                                      <div className="mt-2 border-t border-slate-800/50 pt-2">
+                                          <button
+                                              onClick={() => setReviewsExpanded(prev => ({ ...prev, [key]: !prev[key] }))}
+                                              className="w-full flex items-center justify-between text-[11px] text-slate-400 hover:text-slate-200 transition-colors"
+                                              title={`AI re-reviews this trade every ${intervalMin} min`}
+                                          >
+                                              <span className="flex items-center gap-2">
+                                                  <span>{expanded ? '▼' : '▶'}</span>
+                                                  <span className="font-semibold">🔄 AI In-flight Reviews</span>
+                                                  <span className="text-slate-600">·</span>
+                                                  <span className="font-mono text-slate-500">{reviews.length}</span>
+                                                  <span className="text-slate-600 text-[10px]">(every {intervalMin}m)</span>
+                                              </span>
+                                              {lastReview && (
+                                                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${ACTION_STYLE[lastReview.action]?.cls || 'bg-slate-700/60 text-slate-300'}`}>
+                                                      latest: {ACTION_STYLE[lastReview.action]?.txt || lastReview.action}
+                                                      {lastReview.confidence != null && ` ${lastReview.confidence}%`}
+                                                  </span>
+                                              )}
+                                          </button>
+
+                                          {expanded && (
+                                              <div className="mt-2 space-y-2 max-h-64 overflow-y-auto pr-1">
+                                                  {reviews.length === 0 ? (
+                                                      <div className="text-[11px] text-slate-500 italic px-2 py-3 text-center bg-slate-900/40 rounded border border-dashed border-slate-700">
+                                                          No reviews yet. First review fires ~{intervalMin} min after entry.
+                                                      </div>
+                                                  ) : reviews.map((r, idx) => {
+                                                      const style = ACTION_STYLE[r.action] || { txt: r.action, cls: 'bg-slate-700/60 text-slate-300' };
+                                                      const ts = r.ts ? new Date(r.ts) : null;
+                                                      const tsStr = ts ? ts.toLocaleTimeString('en-IN', { hour12: false }) : '—';
+                                                      const dateStr = ts ? ts.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }) : '';
+                                                      const heldMin = r.held_seconds != null ? Math.round(r.held_seconds / 60) : null;
+                                                      const pnlVal = r.pnl_rs;
+                                                      const applied = r.applied;
+                                                      return (
+                                                          <div
+                                                              key={`${r.ts}-${idx}`}
+                                                              className="bg-slate-900/50 border border-slate-800 rounded p-2 text-[11px]"
+                                                          >
+                                                              <div className="flex items-center justify-between gap-2 mb-1">
+                                                                  <div className="flex items-center gap-2 min-w-0">
+                                                                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${style.cls}`}>
+                                                                          {style.txt}
+                                                                      </span>
+                                                                      {r.confidence != null && (
+                                                                          <span className="text-violet-300 font-mono text-[10px]">{r.confidence}%</span>
+                                                                      )}
+                                                                      {applied === true && (
+                                                                          <span className="text-emerald-400 text-[10px]" title="Verdict applied">✓ applied</span>
+                                                                      )}
+                                                                      {applied === false && (
+                                                                          <span
+                                                                              className="text-amber-400 text-[10px]"
+                                                                              title={r.rejection_reason || 'Sanity check rejected this verdict'}
+                                                                          >
+                                                                              ⚠ rejected
+                                                                          </span>
+                                                                      )}
+                                                                  </div>
+                                                                  <div className="text-slate-500 font-mono text-[10px] whitespace-nowrap">
+                                                                      {dateStr} {tsStr}
+                                                                  </div>
+                                                              </div>
+                                                              {r.reasoning && (
+                                                                  <div className="text-slate-300 leading-snug whitespace-pre-wrap break-words">
+                                                                      {r.reasoning}
+                                                                  </div>
+                                                              )}
+                                                              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-slate-500 font-mono">
+                                                                  {heldMin != null && <span>held {heldMin}m</span>}
+                                                                  {pnlVal != null && (
+                                                                      <span className={pnlVal > 0 ? 'text-emerald-400' : pnlVal < 0 ? 'text-rose-400' : 'text-slate-500'}>
+                                                                          PnL ₹{Math.round(pnlVal)}
+                                                                      </span>
+                                                                  )}
+                                                                  {r.current_spot != null && (
+                                                                      <span>spot {Number(r.current_spot).toFixed(2)}</span>
+                                                                  )}
+                                                                  {r.current_option_price != null && (
+                                                                      <span>opt ₹{Number(r.current_option_price).toFixed(2)}</span>
+                                                                  )}
+                                                                  {r.new_sl != null && (
+                                                                      <span className="text-amber-300">new SL {Number(r.new_sl).toFixed(2)}</span>
+                                                                  )}
+                                                                  {r.new_tp != null && (
+                                                                      <span className="text-cyan-300">new TP {Number(r.new_tp).toFixed(2)}</span>
+                                                                  )}
+                                                                  {r.model && (
+                                                                      <span className="text-slate-600 truncate" title={r.model}>
+                                                                          {String(r.model).replace(/^claude-web\/|^gemini-web\//, '')}
+                                                                      </span>
+                                                                  )}
+                                                              </div>
+                                                              {r.rejection_reason && applied === false && (
+                                                                  <div className="mt-1 text-amber-400/70 text-[10px] italic">
+                                                                      {r.rejection_reason}
+                                                                  </div>
+                                                              )}
+                                                          </div>
+                                                      );
+                                                  })}
+                                              </div>
+                                          )}
+                                      </div>
+                                  );
+                              })()}
+
+                              {/* ── Close button — engine-managed exit for monitored
+                                  positions; force-close for orphans (engine
+                                  doesn't know about them so closePosition is a
+                                  no-op). Both paths confirm with the user before
+                                  hitting the server. */}
                               {(() => {
-                                  const lockKey = pos.spotSymbol || pos.symbol;
+                                  const lockKey = isOrphan ? `orphan:${pos.trade_id}` : (pos.spotSymbol || pos.symbol);
                                   const isClosing = !!closingSymbols[lockKey];
+                                  if (isOrphan) {
+                                      return (
+                                          <div className="mt-2 pt-2 border-t border-amber-800/40 flex justify-end">
+                                              <button
+                                                  onClick={() => handleForceCloseOrphan(pos)}
+                                                  disabled={isClosing || !pos.trade_id || pos.mode === 'LIVE'}
+                                                  className={`text-[11px] px-3 py-1 rounded font-bold transition-colors ${
+                                                      isClosing || !pos.trade_id || pos.mode === 'LIVE'
+                                                          ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                                                          : 'bg-amber-700/40 hover:bg-amber-700/70 text-amber-100 hover:text-white border border-amber-700/60'
+                                                  }`}
+                                                  title={pos.mode === 'LIVE'
+                                                      ? 'LIVE orphan — close at broker; engine will reconcile.'
+                                                      : 'Mark this orphan Trade doc CLOSED at current LTP.'}
+                                              >
+                                                  {isClosing ? '⏳ Closing…' : pos.mode === 'LIVE' ? '🔒 Close at Broker' : '🧹 Force-Close Orphan'}
+                                              </button>
+                                          </div>
+                                      );
+                                  }
                                   return (
                                       <div className="mt-2 pt-2 border-t border-slate-800/50 flex justify-end">
                                           <button
@@ -1670,6 +1933,7 @@ export default function Dashboard() {
                 <table className="w-full text-left border-collapse text-sm">
                     <thead>
                         <tr className="text-slate-400 border-b border-slate-700">
+                            <th className="p-3">Trade ID</th>
                             <th className="p-3">Entry Time</th>
                             <th className="p-3">Exit Time</th>
                             <th className="p-3">Status</th>
@@ -1684,10 +1948,16 @@ export default function Dashboard() {
                     <tbody>
                         {mongoTrades.map((trade, i) => (
                             <tr key={i} className="border-b border-slate-800 hover:bg-slate-800/50">
+                                {/* Trade ID — same ObjectId for ENTRY + EXIT (the
+                                    same doc is updated, not duplicated). Click to
+                                    copy the full hex for searching everywhere. */}
+                                <td className="p-3">
+                                    <TradeIdBadge id={trade.trade_id || trade._id} label="" />
+                                </td>
                                 {/* Entry Time (Fallback to timestamp for old logs if action is BUY/ENTRY) */}
                                 <td className="p-3 text-slate-300">
-                                    {trade.entryTime 
-                                        ? new Date(trade.entryTime).toLocaleString() 
+                                    {trade.entryTime
+                                        ? new Date(trade.entryTime).toLocaleString()
                                         : (trade.action === 'ENTRY' || trade.action === 'BUY' ? new Date(trade.timestamp).toLocaleString() : '-')}
                                 </td>
                                 
@@ -1846,6 +2116,7 @@ export default function Dashboard() {
                               <tr>
                                   <th className="p-2 text-left w-32">When</th>
                                   <th className="p-2 text-left w-32">Type</th>
+                                  <th className="p-2 text-left w-20">Trade ID</th>
                                   <th className="p-2 text-left">Symbol</th>
                                   <th className="p-2 text-left">Strategy</th>
                                   <th className="p-2 text-left">Side</th>
@@ -1857,7 +2128,7 @@ export default function Dashboard() {
                           <tbody className="divide-y divide-slate-800">
                               {activityEvents.length === 0 && !activityLoading && (
                                   <tr>
-                                      <td colSpan={8} className="p-6 text-center text-slate-500 italic">
+                                      <td colSpan={9} className="p-6 text-center text-slate-500 italic">
                                           No activity in the selected window.
                                       </td>
                                   </tr>
@@ -1939,6 +2210,13 @@ export default function Dashboard() {
                                       <tr key={i} className={`text-slate-300 ${rowTone}`}>
                                           <td className="p-2 font-mono text-[11px] text-slate-400 whitespace-nowrap">{tsStr}</td>
                                           <td className="p-2 text-[11px]">{typeBadge}</td>
+                                          <td className="p-2 text-[11px]">
+                                              {ev.trade_id ? (
+                                                  <TradeIdBadge id={String(ev.trade_id)} label="" />
+                                              ) : (
+                                                  <span className="text-slate-600">—</span>
+                                              )}
+                                          </td>
                                           <td className="p-2 text-xs truncate max-w-[180px]" title={ev.symbol || ''}>{ev.symbol || '—'}</td>
                                           <td className="p-2 text-xs text-slate-400 truncate max-w-[140px]" title={ev.strategyName || ''}>{ev.strategyName || '—'}</td>
                                           <td className="p-2 text-xs">{ev.side || '—'}</td>

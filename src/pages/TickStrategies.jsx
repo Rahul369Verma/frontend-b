@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { io } from 'socket.io-client';
-import { Zap, Plus, Play, Pause, Trash2, Activity, TrendingUp, TrendingDown, Clock, AlertTriangle, Octagon, Power } from 'lucide-react';
+import { Zap, Plus, Play, Pause, Trash2, Activity, TrendingUp, TrendingDown, Clock, AlertTriangle, Octagon, Power, Eye, Square, Layers, Sliders } from 'lucide-react';
 import { INSTRUMENT_CONFIG, MONTH_NAMES } from '../constants';
 import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 
@@ -58,6 +58,20 @@ export default function TickStrategies() {
     // open would be wasteful.
     const [expiryDates, setExpiryDates] = useState([]);
     const [expiryLoading, setExpiryLoading] = useState(false);
+
+    // ── Tick Recordings state ─────────────────────────────────────────────
+    // Recordings live in their own collection on the backend; they are not
+    // piggy-backed onto the tick_strategy_event snapshot, so we poll the list
+    // endpoint on a short interval. See §5.5 of the design spec.
+    const [recordings, setRecordings] = useState([]);
+    const [recordingFormOpen, setRecordingFormOpen] = useState(false);
+    const [samplePreview, setSamplePreview] = useState({ open: false, recordingId: null });
+    const [replayModal, setReplayModal] = useState({ open: false, recordingId: null });
+    // Backend feature-gate: older backends don't expose /api/tick-recordings.
+    // We start optimistic (true) and flip to false the first time the list
+    // fetch returns a 404 (route not mounted) so the entire section + "New
+    // Recording" button get hidden instead of rendering broken ghosts.
+    const [recordingsSupported, setRecordingsSupported] = useState(true);
 
     const fetchAll = async () => {
         try {
@@ -196,6 +210,81 @@ export default function TickStrategies() {
         setForm(f => ({ ...f, strategyType: newType, params: { ...(types[newType]?.defaults || {}) }, presetId: '' }));
     };
 
+    // ── Recordings fetch + poll ───────────────────────────────────────────
+    // Independent poll (NOT piggy-backed on the tick_strategy_event socket)
+    // because recording status is not user-facing-urgent — a 3s lag on tick
+    // counts is invisible. See §5.5.
+    const fetchRecordings = async () => {
+        try {
+            const r = await axios.get(`${API_URL}/tick-recordings`);
+            setRecordings(r.data.recordings || []);
+            // First successful fetch confirms the backend supports recordings.
+            // (Idempotent — repeated sets to true are cheap.)
+            setRecordingsSupported(true);
+        } catch (err) {
+            // 404 → route not mounted (older backend). Hide the section
+            // entirely so the user isn't shown a broken empty list with
+            // disabled buttons. Other errors (network blip, 500) keep the
+            // section visible so it can recover on the next poll.
+            if (err.response?.status === 404) {
+                setRecordingsSupported(false);
+            } else {
+                console.warn('Failed to fetch recordings:', err.message);
+            }
+        }
+    };
+    useEffect(() => {
+        let cancelled = false;
+        const tick = async () => {
+            if (cancelled) return;
+            await fetchRecordings();
+        };
+        tick();
+        const interval = setInterval(tick, 3000);
+        return () => { cancelled = true; clearInterval(interval); };
+    }, []);
+
+    const startRecording = async ({ name, symbols, autoStopMinutes }) => {
+        const payload = { name, symbols };
+        if (autoStopMinutes != null && autoStopMinutes !== '') {
+            payload.autoStopMinutes = Number(autoStopMinutes);
+        }
+        await axios.post(`${API_URL}/tick-recordings/start`, payload);
+        await fetchRecordings();
+    };
+
+    // Optimistic UI: flip the row to STOPPED locally so the action buttons
+    // (sample / replay / delete) become enabled immediately. Roll back to
+    // the prior state on error.
+    const stopRecording = async (rec) => {
+        const prev = recordings;
+        setRecordings(curr => curr.map(r => r._id === rec._id
+            ? { ...r, status: 'STOPPED', stoppedAt: new Date().toISOString(), isActive: false }
+            : r));
+        try {
+            await axios.post(`${API_URL}/tick-recordings/${rec._id}/stop`);
+            await fetchRecordings();
+        } catch (err) {
+            setRecordings(prev);
+            alert('Stop failed: ' + (err.response?.data?.error || err.message));
+            fetchRecordings();
+        }
+    };
+
+    const deleteRecording = async (rec) => {
+        if (!window.confirm(`Delete recording "${rec.name}" and all ${(rec.tickCount || 0).toLocaleString()} ticks? This cannot be undone.`)) return;
+        const prev = recordings;
+        setRecordings(curr => curr.filter(r => r._id !== rec._id));
+        try {
+            await axios.delete(`${API_URL}/tick-recordings/${rec._id}`);
+            await fetchRecordings();
+        } catch (err) {
+            setRecordings(prev);
+            alert('Delete failed: ' + (err.response?.data?.error || err.message));
+            fetchRecordings();
+        }
+    };
+
     const applyPreset = (presetId) => {
         if (!presetId) {
             setForm(f => ({ ...f, presetId: '' }));  // user picked "Custom" — keep current params
@@ -236,22 +325,44 @@ export default function TickStrategies() {
         }
     };
 
+    // Optimistic UI: flip isActive in local state immediately so rapid
+    // start/stop/start clicks reflect the *latest* user intent instead of
+    // showing stale state for the duration of the API round-trip. On error
+    // we roll back to the pre-click value AND refetch so the UI reconverges
+    // with the server (covers the case where the server processed the call
+    // but returned an error after partial mutation).
     const toggleActive = async (s) => {
+        const prev = s.isActive;
+        const next = !prev;
+        setStrategies(curr => curr.map(x => x._id === s._id ? { ...x, isActive: next } : x));
         try {
-            await axios.post(`${API_URL}/tick-strategies/${s._id}/toggle`, { isActive: !s.isActive });
+            await axios.post(`${API_URL}/tick-strategies/${s._id}/toggle`, { isActive: next });
+            // Refresh to pick up runtime state (open positions, hit counters)
+            // that the optimistic flip doesn't know about.
             await fetchAll();
         } catch (err) {
+            // Roll back the optimistic update.
+            setStrategies(curr => curr.map(x => x._id === s._id ? { ...x, isActive: prev } : x));
             alert('Toggle failed: ' + (err.response?.data?.error || err.message));
+            // Re-sync from server in case our snapshot has drifted.
+            fetchAll();
         }
     };
 
     const deleteStrategy = async (s) => {
         if (!window.confirm(`Delete "${s.name}"? Open paper position (if any) will be closed at last LTP.`)) return;
+        // Optimistic remove. If the server rejects (rare — usually a race
+        // with another tab deleting first) we re-add it on rollback by
+        // refetching the canonical list.
+        const prev = strategies;
+        setStrategies(curr => curr.filter(x => x._id !== s._id));
         try {
             await axios.delete(`${API_URL}/tick-strategies/${s._id}`);
             await fetchAll();
         } catch (err) {
+            setStrategies(prev);
             alert('Delete failed: ' + (err.response?.data?.error || err.message));
+            fetchAll();
         }
     };
 
@@ -360,9 +471,17 @@ export default function TickStrategies() {
                             {snapshot.engine.haltAt && ` · since ${new Date(snapshot.engine.haltAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} IST`}
                         </p>
                         <p className="text-red-200/60 text-xs mt-1">
-                            Open positions still exit normally on TP/SL/max-hold. Click <span className="font-semibold">Resume</span> to re-enable new entries.
+                            Open positions still exit normally on TP/SL/max-hold.
                         </p>
                     </div>
+                    {/* Prominent Resume button inside the banner — the toolbar button is easy to miss when halted. */}
+                    <button
+                        onClick={handleResume}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-500 text-white font-semibold rounded-lg flex-shrink-0 self-center shadow-lg shadow-green-900/50"
+                        title="Resume tick engine (allow new entries)"
+                    >
+                        <Play className="w-4 h-4" /> Resume Engine
+                    </button>
                 </div>
             )}
 
@@ -443,6 +562,36 @@ export default function TickStrategies() {
                 )}
             </div>
 
+            {/* Tick Recordings — captures raw tick stream for replay/backtest.
+                Sits between Live Event Feed and Paper Trade Log per the design
+                spec's cognitive flow: strategies → events → recordings → trades.
+                Gated behind recordingsSupported so older backends (without the
+                /api/tick-recordings route) don't render a misleading empty
+                section with disabled action buttons. */}
+            {recordingsSupported && (
+                <div className="bg-surface p-6 rounded-xl border border-slate-700">
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                            <Layers className="w-5 h-5 text-cyan-400" /> Tick Recordings
+                            <span className="text-xs font-normal text-slate-500">({recordings.length})</span>
+                        </h2>
+                        <button
+                            onClick={() => setRecordingFormOpen(true)}
+                            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-black font-semibold text-sm transition"
+                        >
+                            <Plus className="w-4 h-4" /> New Recording
+                        </button>
+                    </div>
+                    <RecordingList
+                        recordings={recordings}
+                        onStop={stopRecording}
+                        onDelete={deleteRecording}
+                        onSample={(rec) => setSamplePreview({ open: true, recordingId: rec._id })}
+                        onReplay={(rec) => setReplayModal({ open: true, recordingId: rec._id })}
+                    />
+                </div>
+            )}
+
             {/* Paper trade log */}
             <div className="bg-surface p-6 rounded-xl border border-slate-700">
                 <h2 className="text-lg font-bold text-white mb-4">Paper Trade Log <span className="text-xs font-normal text-slate-500">(showing latest {trades.length} of {tradesTotal})</span></h2>
@@ -453,7 +602,7 @@ export default function TickStrategies() {
                         <table className="w-full text-sm">
                             <thead className="text-xs uppercase text-slate-500 border-b border-slate-700">
                                 <tr>
-                                    <th className="text-left py-2 pr-3">Time</th>
+                                    <th className="text-left py-2 pr-3">Date · Time</th>
                                     <th className="text-left py-2 pr-3">Strategy</th>
                                     <th className="text-left py-2 pr-3">Symbol</th>
                                     <th className="text-left py-2 pr-3">Dir</th>
@@ -491,7 +640,7 @@ export default function TickStrategies() {
                                             : 'Options-leg estimate not available';
                                     return (
                                         <tr key={t._id} className="border-b border-slate-800 hover:bg-slate-800/40">
-                                            <td className="py-2 pr-3 text-slate-400 font-mono text-xs">{new Date(t.entryTime).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</td>
+                                            <td className="py-2 pr-3 text-slate-400 font-mono text-xs whitespace-nowrap">{new Date(t.entryTime).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</td>
                                             <td className="py-2 pr-3 text-slate-300">{t.strategyName}</td>
                                             <td className="py-2 pr-3 font-mono text-slate-300 text-xs">{t.symbol}</td>
                                             <td className={`py-2 pr-3 font-bold ${t.direction === 'LONG' ? 'text-green-400' : 'text-red-400'}`}>{t.direction}</td>
@@ -708,6 +857,34 @@ export default function TickStrategies() {
                         </FormField>
                     )}
                 </Modal>
+            )}
+
+            {/* Recording form modal */}
+            {recordingFormOpen && (
+                <RecordingForm
+                    onClose={() => setRecordingFormOpen(false)}
+                    onSubmit={async (payload) => {
+                        await startRecording(payload);
+                        setRecordingFormOpen(false);
+                    }}
+                />
+            )}
+
+            {/* Sample preview modal */}
+            {samplePreview.open && (
+                <SamplePreviewModal
+                    recording={recordings.find(r => r._id === samplePreview.recordingId)}
+                    onClose={() => setSamplePreview({ open: false, recordingId: null })}
+                />
+            )}
+
+            {/* Replay modal */}
+            {replayModal.open && (
+                <ReplayModal
+                    recording={recordings.find(r => r._id === replayModal.recordingId)}
+                    types={types}
+                    onClose={() => setReplayModal({ open: false, recordingId: null })}
+                />
             )}
         </div>
     );
@@ -942,6 +1119,861 @@ function FormField({ label, children }) {
         <div>
             <label className="block text-xs uppercase tracking-wider text-slate-400 mb-1.5">{label}</label>
             {children}
+        </div>
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Tick Recordings sub-components
+// ────────────────────────────────────────────────────────────────────────
+
+// Compact, human-readable duration. "12m 34s" / "1h 02m" / "3s".
+function formatDuration(ms) {
+    if (ms == null || !Number.isFinite(ms) || ms < 0) return '—';
+    const totalSec = Math.floor(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+    if (m > 0) return `${m}m ${String(s).padStart(2, '0')}s`;
+    return `${s}s`;
+}
+
+function formatBytes(bytes) {
+    if (!bytes || bytes < 1024) return `${bytes || 0} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function RecordingStatusPill({ status }) {
+    let cls = 'bg-slate-700 text-slate-300';
+    let pulsing = false;
+    if (status === 'RECORDING') { cls = 'bg-green-500/20 text-green-300 border border-green-500/40'; pulsing = true; }
+    else if (status === 'STOPPED') { cls = 'bg-slate-700 text-slate-300 border border-slate-600'; }
+    else if (status === 'INCOMPLETE_STOPPED') { cls = 'bg-amber-500/20 text-amber-300 border border-amber-500/40'; }
+    else if (status === 'ERROR') { cls = 'bg-red-500/20 text-red-300 border border-red-500/40'; }
+    return (
+        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${cls} ${pulsing ? 'animate-pulse' : ''}`}>
+            {status}
+        </span>
+    );
+}
+
+function RecordingList({ recordings, onStop, onDelete, onSample, onReplay }) {
+    // Tick state used to refresh duration/age cells once per second without
+    // calling Date.now() during render (which the lint rule flags as impure).
+    const [nowTs, setNowTs] = useState(() => Date.now());
+    useEffect(() => {
+        const i = setInterval(() => setNowTs(Date.now()), 1000);
+        return () => clearInterval(i);
+    }, []);
+
+    if (!recordings || recordings.length === 0) {
+        return (
+            <div className="text-slate-500 text-sm italic text-center py-8">
+                No recordings yet. Click <span className="text-amber-400 font-semibold">New Recording</span> to capture a live tick stream for replay.
+            </div>
+        );
+    }
+    return (
+        <div className="space-y-3">
+            {recordings.map(rec => {
+                const isActive = rec.status === 'RECORDING';
+                const startedAt = rec.startedAt ? new Date(rec.startedAt) : null;
+                const stoppedAt = rec.stoppedAt ? new Date(rec.stoppedAt) : null;
+                const durationMs = startedAt
+                    ? (stoppedAt ? stoppedAt.getTime() : nowTs) - startedAt.getTime()
+                    : null;
+                const ageMs = startedAt ? nowTs - startedAt.getTime() : null;
+                const symbolsList = Array.isArray(rec.symbols) ? rec.symbols : [];
+                const visibleSymbols = symbolsList.slice(0, 3);
+                const extraSymbols = Math.max(0, symbolsList.length - visibleSymbols.length);
+                return (
+                    <div key={rec._id} className="bg-slate-800 rounded-lg border border-slate-600 p-4">
+                        <div className="flex items-center justify-between gap-4 flex-wrap">
+                            <div className="flex-1 min-w-[200px]">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    <h4 className="font-bold text-white">{rec.name}</h4>
+                                    <RecordingStatusPill status={rec.status} />
+                                    {rec.autoStopMinutes != null && isActive && (
+                                        <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/40">
+                                            auto-stop {rec.autoStopMinutes}m
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                                    {visibleSymbols.map(sym => (
+                                        <span key={sym} className="text-[10px] px-2 py-0.5 rounded bg-slate-700 text-slate-300 font-mono">{sym}</span>
+                                    ))}
+                                    {extraSymbols > 0 && (
+                                        <span className="text-[10px] px-2 py-0.5 rounded bg-slate-700 text-slate-400">+{extraSymbols} more</span>
+                                    )}
+                                </div>
+                                {rec.errorMessage && (
+                                    <p className="text-xs text-red-400 mt-1 truncate" title={rec.errorMessage}>⚠ {rec.errorMessage}</p>
+                                )}
+                            </div>
+                            <div className="flex items-center gap-4 text-sm">
+                                <Stat label="Ticks" value={(rec.tickCount || 0).toLocaleString()} />
+                                <Stat label="Duration" value={formatDuration(durationMs)} />
+                                <Stat label="Age" value={formatDuration(ageMs)} />
+                                <Stat label="Size" value={formatBytes(rec.sizeBytesEstimate)} />
+                                <div className="flex items-center gap-1">
+                                    {isActive && (
+                                        <button
+                                            onClick={() => onStop(rec)}
+                                            title="Stop recording"
+                                            className="p-2 rounded text-amber-400 hover:bg-amber-500/10"
+                                        >
+                                            <Square className="w-4 h-4" />
+                                        </button>
+                                    )}
+                                    <button
+                                        onClick={() => onSample(rec)}
+                                        title="Sample first 100 ticks"
+                                        className="p-2 rounded text-cyan-400 hover:bg-cyan-500/10"
+                                        disabled={!rec.tickCount}
+                                    >
+                                        <Eye className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => onReplay(rec)}
+                                        title="Replay against a strategy"
+                                        className="p-2 rounded text-violet-400 hover:bg-violet-500/10"
+                                        disabled={!rec.tickCount || isActive}
+                                    >
+                                        <Play className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => onDelete(rec)}
+                                        title="Delete recording"
+                                        className="p-2 rounded text-red-400 hover:bg-red-500/10"
+                                        disabled={isActive}
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+// RecordingForm — modal to create a new recording.
+// Symbol catalog mirrors the strategy create form (lines 573–615) — same
+// optgroups, with multi-select chip UI on top.
+function RecordingForm({ onClose, onSubmit }) {
+    const [name, setName] = useState('');
+    const [symbols, setSymbols] = useState([]);
+    const [pickerSymbol, setPickerSymbol] = useState('');
+    const [autoStopMinutes, setAutoStopMinutes] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+
+    const addSymbol = (sym) => {
+        if (!sym) return;
+        if (symbols.includes(sym)) return;
+        if (symbols.length >= 10) {
+            setError('Max 10 symbols per recording.');
+            return;
+        }
+        setSymbols([...symbols, sym]);
+        setError(null);
+    };
+    const removeSymbol = (sym) => setSymbols(symbols.filter(s => s !== sym));
+
+    const handleSubmit = async () => {
+        setError(null);
+        if (!name.trim()) { setError('Name is required.'); return; }
+        if (symbols.length === 0) { setError('Pick at least one symbol.'); return; }
+        if (autoStopMinutes !== '') {
+            const n = Number(autoStopMinutes);
+            if (!Number.isFinite(n) || n < 1 || n > 1440) {
+                setError('Auto-stop minutes must be between 1 and 1440.');
+                return;
+            }
+        }
+        setLoading(true);
+        try {
+            await onSubmit({
+                name: name.trim(),
+                symbols,
+                autoStopMinutes: autoStopMinutes === '' ? null : Number(autoStopMinutes),
+            });
+        } catch (err) {
+            setError(err.response?.data?.error || err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Same optgroups as strategy create form — picker-only dropdown that
+    // populates the chip list above when its value changes.
+    return (
+        <Modal
+            title="New Tick Recording"
+            onClose={onClose}
+            onSubmit={handleSubmit}
+            submitLabel="Start Recording"
+            loading={loading}
+            error={error}
+        >
+            <FormField label="Name">
+                <input
+                    type="text"
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    placeholder="e.g. NIFTY Spot 9:30-10:00"
+                    maxLength={100}
+                    className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                />
+            </FormField>
+
+            <FormField label={`Symbols (${symbols.length}/10)`}>
+                <div className="flex items-center gap-1.5 flex-wrap mb-2 min-h-[28px]">
+                    {symbols.length === 0 && (
+                        <span className="text-xs text-slate-500 italic">No symbols picked yet.</span>
+                    )}
+                    {symbols.map(sym => (
+                        <span key={sym} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-violet-500/20 text-violet-300 border border-violet-500/40 font-mono">
+                            {sym}
+                            <button
+                                type="button"
+                                onClick={() => removeSymbol(sym)}
+                                className="text-violet-300 hover:text-white text-sm leading-none"
+                                aria-label={`Remove ${sym}`}
+                            >×</button>
+                        </span>
+                    ))}
+                </div>
+                <select
+                    value={pickerSymbol}
+                    onChange={e => {
+                        const v = e.target.value;
+                        setPickerSymbol('');  // reset back to placeholder
+                        addSymbol(v);
+                    }}
+                    className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                >
+                    <option value="">— add a symbol —</option>
+                    <optgroup label="Indices">
+                        {Object.entries(INSTRUMENT_CONFIG)
+                            .filter(([k]) => !k.includes('-EQ') && !k.startsWith('MCX:'))
+                            .map(([key, cfg]) => (
+                                <option key={key} value={key}>{cfg.underlying} — {key}</option>
+                            ))}
+                    </optgroup>
+                    <optgroup label="── Precious Metals (MCX) ──">
+                        {Object.entries(INSTRUMENT_CONFIG)
+                            .filter(([k]) => k.startsWith('MCX:') && ['GOLD','GOLDM','GOLDPETAL','SILVER','SILVERMIC','SILVERM'].includes(INSTRUMENT_CONFIG[k].underlying))
+                            .map(([key, cfg]) => (
+                                <option key={key} value={key}>{cfg.displayName || cfg.underlying}</option>
+                            ))}
+                    </optgroup>
+                    <optgroup label="── Energy (MCX) ──">
+                        {Object.entries(INSTRUMENT_CONFIG)
+                            .filter(([k]) => k.startsWith('MCX:') && ['CRUDEOIL','NATURALGAS'].includes(INSTRUMENT_CONFIG[k].underlying))
+                            .map(([key, cfg]) => (
+                                <option key={key} value={key}>{cfg.displayName || cfg.underlying}</option>
+                            ))}
+                    </optgroup>
+                    <optgroup label="── Base Metals (MCX) ──">
+                        {Object.entries(INSTRUMENT_CONFIG)
+                            .filter(([k]) => k.startsWith('MCX:') && ['COPPER','ZINC','ALUMINIUM','LEAD','NICKEL'].includes(INSTRUMENT_CONFIG[k].underlying))
+                            .map(([key, cfg]) => (
+                                <option key={key} value={key}>{cfg.displayName || cfg.underlying}</option>
+                            ))}
+                    </optgroup>
+                    <optgroup label="Stocks">
+                        {Object.entries(INSTRUMENT_CONFIG)
+                            .filter(([k]) => k.includes('-EQ'))
+                            .map(([key, cfg]) => (
+                                <option key={key} value={key}>{cfg.underlying}</option>
+                            ))}
+                    </optgroup>
+                </select>
+                <p className="text-xs text-slate-500 mt-1.5">
+                    Pick multiple symbols to record them in parallel. For volume-aware replay, use futures (e.g. <code className="bg-slate-700 px-1">NSE:NIFTY26JUNFUT</code>) — index spot ticks report vol=0.
+                </p>
+            </FormField>
+
+            <FormField label="Auto-Stop Minutes (optional)">
+                <input
+                    type="number"
+                    min="1"
+                    max="1440"
+                    value={autoStopMinutes}
+                    onChange={e => setAutoStopMinutes(e.target.value)}
+                    placeholder="leave blank for manual stop"
+                    className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                />
+                <p className="text-xs text-slate-500 mt-1.5">
+                    Recording stops automatically after this many minutes. Range 1–1440. Leave blank to require a manual stop.
+                </p>
+            </FormField>
+        </Modal>
+    );
+}
+
+// SamplePreviewModal — fetches /sample?limit=N and renders a scrollable
+// table. Supports per-symbol filtering when the recording has >1 symbol
+// and "Load N more" up to 500 (the server cap).
+function SamplePreviewModal({ recording, onClose }) {
+    const [ticks, setTicks] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const [limit, setLimit] = useState(100);
+    const [symbolFilter, setSymbolFilter] = useState('');
+
+    useEffect(() => {
+        if (!recording) return;
+        let cancelled = false;
+        const fetchSample = async () => {
+            setLoading(true);
+            setError(null);
+            try {
+                const params = new URLSearchParams();
+                params.set('limit', String(limit));
+                if (symbolFilter) params.set('symbol', symbolFilter);
+                const r = await axios.get(`${API_URL}/tick-recordings/${recording._id}/sample?${params.toString()}`);
+                if (!cancelled) setTicks(r.data.ticks || []);
+            } catch (err) {
+                if (!cancelled) setError(err.response?.data?.error || err.message);
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        };
+        fetchSample();
+        return () => { cancelled = true; };
+    }, [recording, limit, symbolFilter]);
+
+    if (!recording) return null;
+    const symbols = Array.isArray(recording.symbols) ? recording.symbols : [];
+
+    return (
+        <Modal
+            title={`Sample — ${recording.name}`}
+            onClose={onClose}
+            onSubmit={onClose}
+            submitLabel="Close"
+            loading={false}
+            error={error}
+        >
+            <div className="flex items-center gap-3 flex-wrap mb-2">
+                <span className="text-xs text-slate-400">
+                    Showing first {ticks.length} of {(recording.tickCount || 0).toLocaleString()} ticks
+                </span>
+                {symbols.length > 1 && (
+                    <select
+                        value={symbolFilter}
+                        onChange={e => setSymbolFilter(e.target.value)}
+                        className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 text-xs"
+                    >
+                        <option value="">All symbols</option>
+                        {symbols.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                )}
+                {limit < 500 && (
+                    <button
+                        onClick={() => setLimit(Math.min(500, limit + 100))}
+                        className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200"
+                        disabled={loading}
+                    >
+                        Load 100 more
+                    </button>
+                )}
+            </div>
+            <div className="overflow-x-auto max-h-[60vh] overflow-y-auto border border-slate-700 rounded">
+                <table className="w-full text-xs">
+                    <thead className="text-[10px] uppercase text-slate-500 border-b border-slate-700 bg-slate-900 sticky top-0">
+                        <tr>
+                            <th className="text-left py-2 px-2">Seq</th>
+                            <th className="text-left py-2 px-2">Symbol</th>
+                            <th className="text-left py-2 px-2">Received</th>
+                            <th className="text-right py-2 px-2">LTP</th>
+                            <th className="text-right py-2 px-2">Vol</th>
+                            <th className="text-right py-2 px-2">Bid / Ask</th>
+                            <th className="text-right py-2 px-2">Tot Buy / Sell</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {loading && ticks.length === 0 ? (
+                            <tr><td colSpan={7} className="py-4 text-center text-slate-500 italic">Loading…</td></tr>
+                        ) : ticks.length === 0 ? (
+                            <tr><td colSpan={7} className="py-4 text-center text-slate-500 italic">No ticks.</td></tr>
+                        ) : ticks.map(t => (
+                            <tr key={`${t.recordingId}_${t.sequence}`} className="border-b border-slate-800 hover:bg-slate-800/40">
+                                <td className="py-1 px-2 font-mono text-slate-400">{t.sequence}</td>
+                                <td className="py-1 px-2 font-mono text-slate-300">{t.symbol}</td>
+                                <td className="py-1 px-2 font-mono text-slate-400">
+                                    {t.receivedAt ? new Date(t.receivedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—'}
+                                </td>
+                                <td className="py-1 px-2 text-right font-mono">{t.ltp != null ? Number(t.ltp).toFixed(2) : '—'}</td>
+                                <td className="py-1 px-2 text-right font-mono text-slate-400">{t.vol != null ? t.vol.toLocaleString() : '—'}</td>
+                                <td className="py-1 px-2 text-right font-mono text-slate-400">
+                                    {t.bid_price != null ? Number(t.bid_price).toFixed(2) : '—'}
+                                    {' / '}
+                                    {t.ask_price != null ? Number(t.ask_price).toFixed(2) : '—'}
+                                </td>
+                                <td className="py-1 px-2 text-right font-mono text-slate-400">
+                                    {t.tot_buy_qty != null ? t.tot_buy_qty.toLocaleString() : '—'}
+                                    {' / '}
+                                    {t.tot_sell_qty != null ? t.tot_sell_qty.toLocaleString() : '—'}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </Modal>
+    );
+}
+
+// ReplayModal — picks a strategyType, optionally fills params from a preset
+// or randomized optimizer trials, then POSTs /replay and renders results.
+function ReplayModal({ recording, types, onClose }) {
+    const typeKeys = Object.keys(types || {});
+    const [strategyType, setStrategyType] = useState(typeKeys[0] || '');
+    const [mode, setMode] = useState('single');  // 'single' | 'optimizer'
+    const [params, setParams] = useState({});
+    const [presetId, setPresetId] = useState('');
+    const [optimizerCount, setOptimizerCount] = useState(10);
+    const [running, setRunning] = useState(false);
+    const [error, setError] = useState(null);
+    const [result, setResult] = useState(null);
+    const [expandedRun, setExpandedRun] = useState(0);
+    // Wall-clock the run started so we can show "elapsed Xs" while it's
+    // in flight (better feedback than the static "this can take a minute"
+    // message — a long replay otherwise feels hung).
+    const [runStartedAt, setRunStartedAt] = useState(null);
+    const [elapsedSec, setElapsedSec] = useState(0);
+    // AbortController so the user can cancel a slow replay without
+    // hard-closing the modal (which would still leave the server crunching
+    // on the cursor for up to 5 minutes).
+    const [abortCtl, setAbortCtl] = useState(null);
+
+    // Tick the elapsed counter once per second while a replay is running.
+    useEffect(() => {
+        if (!running || !runStartedAt) return;
+        const i = setInterval(() => {
+            setElapsedSec(Math.floor((Date.now() - runStartedAt) / 1000));
+        }, 1000);
+        return () => clearInterval(i);
+    }, [running, runStartedAt]);
+
+    // When strategyType changes, reset params to that strategy's defaults.
+    useEffect(() => {
+        if (!strategyType || !types[strategyType]) return;
+        setParams({ ...(types[strategyType].defaults || {}) });
+        setPresetId('');
+    }, [strategyType, types]);
+
+    const applyPreset = (id) => {
+        if (!id) { setPresetId(''); return; }
+        const preset = (types[strategyType]?.presets || []).find(p => p.id === id);
+        if (!preset) return;
+        setPresetId(id);
+        setParams({ ...preset.params });
+    };
+
+    // Default-shape lookup used both for type hints in the input row and for
+    // client-side validation (reject obviously-bad input before bothering
+    // the server with a 5-min cursor).
+    const defaultsForType = types[strategyType]?.defaults || {};
+
+    const handleRun = async () => {
+        setError(null);
+        setResult(null);
+        if (!strategyType) { setError('Pick a strategy type.'); return; }
+        // Client-side type validation: if the default for a key is a number,
+        // require the user's input to parse to a finite number. This catches
+        // obvious typos before they hit the server (where the validator
+        // would also catch them, but only after a network round trip).
+        const coerced = {};
+        const typeErrors = [];
+        for (const [k, v] of Object.entries(params)) {
+            if (v === '' || v == null) continue;
+            const defVal = defaultsForType[k];
+            if (typeof defVal === 'number') {
+                const num = Number(v);
+                if (!Number.isFinite(num)) {
+                    typeErrors.push(`${k}: expected a number, got "${v}"`);
+                    continue;
+                }
+                if (num < 0) {
+                    typeErrors.push(`${k}: must be non-negative (got ${num})`);
+                    continue;
+                }
+                coerced[k] = num;
+            } else {
+                // Non-numeric default: pass through as-is (string/bool params
+                // don't get coerced — the server's validateParams is the
+                // single source of truth for those).
+                coerced[k] = v;
+            }
+        }
+        if (typeErrors.length > 0) {
+            setError('Parameter validation failed:\n• ' + typeErrors.join('\n• '));
+            return;
+        }
+        const payload = { strategyType, params: coerced };
+        if (mode === 'optimizer') {
+            const n = Number(optimizerCount);
+            if (!Number.isFinite(n) || n < 1 || n > 50) {
+                setError('Optimizer count must be 1..50.');
+                return;
+            }
+            payload.optimizerCount = n;
+        }
+        // Fresh AbortController so we can support user-initiated cancellation
+        // without leaking a stale signal from a previous run.
+        const ctl = new AbortController();
+        setAbortCtl(ctl);
+        setRunStartedAt(Date.now());
+        setElapsedSec(0);
+        setRunning(true);
+        try {
+            // Replay can take up to 5 minutes server-side; bump the axios
+            // timeout so a long replay isn't aborted client-side.
+            const r = await axios.post(
+                `${API_URL}/tick-recordings/${recording._id}/replay`,
+                payload,
+                { timeout: 5 * 60 * 1000, signal: ctl.signal }
+            );
+            setResult(r.data.result || null);
+            setExpandedRun(r.data.result?.bestRun || 0);
+        } catch (err) {
+            // axios surfaces aborts as either Cancel or ERR_CANCELED depending
+            // on version. Treat all abort flavors as a clean cancel rather
+            // than a real error so the modal closes back to its config view.
+            if (axios.isCancel?.(err) || err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError') {
+                setError('Replay cancelled.');
+            } else {
+                setError(err.response?.data?.error || err.message);
+            }
+        } finally {
+            setRunning(false);
+            setAbortCtl(null);
+        }
+    };
+
+    const handleCancel = () => {
+        if (abortCtl) abortCtl.abort();
+    };
+
+    if (!recording) return null;
+    const presets = types[strategyType]?.presets || [];
+
+    return (
+        <Modal
+            title={`Replay — ${recording.name}`}
+            onClose={onClose}
+            onSubmit={result ? onClose : handleRun}
+            submitLabel={result ? 'Close' : (running ? 'Running…' : 'Run Replay')}
+            loading={running}
+            error={error}
+        >
+            {!result ? (
+                <>
+                    <FormField label="Strategy Type">
+                        <select
+                            value={strategyType}
+                            onChange={e => setStrategyType(e.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                        >
+                            {typeKeys.length === 0 && <option value="">— no strategy types loaded —</option>}
+                            {typeKeys.map(k => (
+                                <option key={k} value={k}>{types[k]?.label || k}</option>
+                            ))}
+                        </select>
+                        {strategyType && types[strategyType]?.description && (
+                            <p className="text-xs text-slate-400 mt-2 leading-relaxed">{types[strategyType].description}</p>
+                        )}
+                    </FormField>
+
+                    <FormField label="Mode">
+                        <div className="flex gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setMode('single')}
+                                className={`flex-1 px-3 py-2 rounded text-sm font-semibold transition ${mode === 'single' ? 'bg-amber-500 text-black' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                            >
+                                <Sliders className="w-4 h-4 inline mr-1" /> Single Run
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setMode('optimizer')}
+                                className={`flex-1 px-3 py-2 rounded text-sm font-semibold transition ${mode === 'optimizer' ? 'bg-amber-500 text-black' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                            >
+                                <Layers className="w-4 h-4 inline mr-1" /> Optimizer (random params)
+                            </button>
+                        </div>
+                    </FormField>
+
+                    {mode === 'single' && presets.length > 0 && (
+                        <FormField label="Tuning Preset">
+                            <select
+                                value={presetId}
+                                onChange={e => applyPreset(e.target.value)}
+                                className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                            >
+                                <option value="">— Custom (manual params below) —</option>
+                                {presets.map(p => (
+                                    <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                            </select>
+                        </FormField>
+                    )}
+
+                    {mode === 'single' && strategyType && (
+                        <FormField label="Parameters">
+                            <div className="grid grid-cols-2 gap-3">
+                                {Object.entries(params).map(([key, val]) => {
+                                    // Pull the type from the strategy defaults
+                                    // so each input row can carry a type hint
+                                    // ("number" / "text") and an HTML5 type
+                                    // attribute that triggers numeric keypads
+                                    // on mobile + browser-level validation.
+                                    const defVal = defaultsForType[key];
+                                    const isNumeric = typeof defVal === 'number';
+                                    return (
+                                        <div key={key}>
+                                            <label className="text-[10px] uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                                                <span>{key.replace(/_/g, ' ')}</span>
+                                                <span className="text-[9px] normal-case text-slate-600 font-mono">
+                                                    {isNumeric ? 'number' : (typeof defVal === 'boolean' ? 'bool' : 'text')}
+                                                </span>
+                                            </label>
+                                            <input
+                                                type={isNumeric ? 'number' : 'text'}
+                                                step="any"
+                                                value={val}
+                                                onChange={e => setParams(p => ({ ...p, [key]: e.target.value }))}
+                                                className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 text-sm font-mono"
+                                            />
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </FormField>
+                    )}
+
+                    {mode === 'optimizer' && (
+                        <FormField label="Number of Trials (1–50)">
+                            <input
+                                type="number"
+                                min="1"
+                                max="50"
+                                value={optimizerCount}
+                                onChange={e => setOptimizerCount(e.target.value)}
+                                className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                            />
+                            <p className="text-xs text-slate-500 mt-1.5">
+                                The engine will run this many trials with randomized parameters and rank by net PnL. Larger counts take longer.
+                            </p>
+                        </FormField>
+                    )}
+
+                    {running && (
+                        <div className="text-slate-300 text-sm bg-slate-800/50 border border-slate-700 rounded p-3 flex items-center justify-between gap-3">
+                            <div>
+                                Running replay — elapsed <span className="font-mono text-amber-300">{elapsedSec}s</span>.
+                                Don't close this modal. Server timeout 5min.
+                            </div>
+                            <button
+                                type="button"
+                                onClick={handleCancel}
+                                className="text-xs px-2 py-1 rounded bg-red-700/80 hover:bg-red-600 text-white font-semibold"
+                                title="Cancel the in-flight replay"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    )}
+                </>
+            ) : (
+                <ReplayResults result={result} expandedRun={expandedRun} onExpandRun={setExpandedRun} />
+            )}
+        </Modal>
+    );
+}
+
+function ReplayResults({ result, expandedRun, onExpandRun }) {
+    const runs = result?.runs || [];
+    const isOptimizer = runs.length > 1;
+    const elapsedSec = result?.elapsedMs != null ? (result.elapsedMs / 1000).toFixed(2) : '—';
+    // Engine-side non-fatal warnings (empty recording, non-monotonic clock,
+    // etc). Rendered as a yellow banner above the run table so the operator
+    // doesn't trust replay numbers blindly when the input has quality issues.
+    const warnings = Array.isArray(result?.warnings) ? result.warnings : [];
+
+    return (
+        <div className="space-y-4">
+            <div className="text-xs text-slate-400 flex items-center gap-3 flex-wrap">
+                <span>Recording: <span className="text-slate-200 font-semibold">{result.recordingName}</span></span>
+                <span>·</span>
+                <span>Strategy: <span className="text-violet-300 font-semibold">{result.strategyType}</span></span>
+                <span>·</span>
+                <span>{(result.ticksProcessed || 0).toLocaleString()} ticks processed in {elapsedSec}s</span>
+            </div>
+
+            {warnings.length > 0 && (
+                <div className="text-xs bg-amber-950/40 border border-amber-700/60 text-amber-200 rounded p-3 space-y-1">
+                    <div className="font-bold">Replay warnings:</div>
+                    <ul className="list-disc list-inside space-y-0.5">
+                        {warnings.map((w, i) => <li key={i}>{w}</li>)}
+                    </ul>
+                </div>
+            )}
+
+            {isOptimizer && (
+                <div>
+                    <h4 className="text-sm font-bold text-white mb-2">Leaderboard ({runs.length} trials)</h4>
+                    <div className="overflow-x-auto border border-slate-700 rounded">
+                        <table className="w-full text-xs">
+                            <thead className="text-[10px] uppercase text-slate-500 border-b border-slate-700 bg-slate-900">
+                                <tr>
+                                    <th className="text-left py-2 px-2">#</th>
+                                    <th className="text-right py-2 px-2">Net PnL</th>
+                                    <th className="text-right py-2 px-2">Win %</th>
+                                    <th className="text-right py-2 px-2">Trades</th>
+                                    <th className="text-right py-2 px-2">Avg Hold</th>
+                                    <th className="text-center py-2 px-2"></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {[...runs]
+                                    .sort((a, b) => (b.stats?.netPnl || 0) - (a.stats?.netPnl || 0))
+                                    .map(run => {
+                                        const isBest = run.runIndex === result.bestRun;
+                                        const isExpanded = run.runIndex === expandedRun;
+                                        const net = run.stats?.netPnl || 0;
+                                        const winRate = run.stats?.totalTrades > 0
+                                            ? (run.stats.winningTrades / run.stats.totalTrades) * 100
+                                            : 0;
+                                        return (
+                                            <tr key={run.runIndex} className={`border-b border-slate-800 ${isBest ? 'bg-amber-500/5' : ''}`}>
+                                                <td className="py-1.5 px-2 font-mono text-slate-300">
+                                                    #{run.runIndex}{isBest && <span className="ml-1 text-amber-400">★</span>}
+                                                </td>
+                                                <td className={`py-1.5 px-2 text-right font-mono font-bold ${net >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                    {net >= 0 ? '+' : ''}{net.toFixed(2)}
+                                                </td>
+                                                <td className="py-1.5 px-2 text-right font-mono text-slate-300">{winRate.toFixed(0)}%</td>
+                                                <td className="py-1.5 px-2 text-right font-mono text-slate-300">{run.stats?.totalTrades || 0}</td>
+                                                <td className="py-1.5 px-2 text-right font-mono text-slate-400">
+                                                    {run.stats?.avgHoldMs != null ? formatDuration(run.stats.avgHoldMs) : '—'}
+                                                </td>
+                                                <td className="py-1.5 px-2 text-center">
+                                                    <button
+                                                        onClick={() => onExpandRun(isExpanded ? -1 : run.runIndex)}
+                                                        className="text-xs px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-200"
+                                                    >
+                                                        {isExpanded ? 'Hide' : 'View'}
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {(() => {
+                const run = runs.find(r => r.runIndex === expandedRun) || runs[0];
+                if (!run) return <div className="text-slate-500 italic text-sm">No runs.</div>;
+                return <ReplayRunDetail run={run} isOptimizer={isOptimizer} />;
+            })()}
+        </div>
+    );
+}
+
+function ReplayRunDetail({ run, isOptimizer }) {
+    const stats = run?.stats || {};
+    const trades = run?.trades || [];
+    const netCls = (stats.netPnl || 0) >= 0 ? 'text-green-400' : 'text-red-400';
+
+    return (
+        <div className="space-y-3">
+            {isOptimizer && (
+                <div className="text-xs text-slate-400">
+                    Run #{run.runIndex} — params:
+                    <span className="ml-2 font-mono text-slate-300 break-all">
+                        {Object.entries(run.params || {}).map(([k, v]) => `${k}=${v}`).join(', ')}
+                    </span>
+                </div>
+            )}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                <ReplayStatBox label="Total Trades" value={stats.totalTrades || 0} />
+                <ReplayStatBox
+                    label="Win Rate"
+                    value={stats.totalTrades > 0 ? `${((stats.winningTrades / stats.totalTrades) * 100).toFixed(0)}%` : '—'}
+                />
+                <ReplayStatBox
+                    label="Net PnL"
+                    value={(stats.netPnl || 0) >= 0 ? `+${(stats.netPnl || 0).toFixed(2)}` : (stats.netPnl || 0).toFixed(2)}
+                    color={netCls}
+                />
+                <ReplayStatBox
+                    label="Avg Trade"
+                    value={stats.avgTradePnl != null ? (stats.avgTradePnl >= 0 ? '+' : '') + stats.avgTradePnl.toFixed(2) : '—'}
+                />
+                <ReplayStatBox
+                    label="Max DD"
+                    value={stats.maxDrawdown != null ? stats.maxDrawdown.toFixed(2) : '—'}
+                    color="text-red-400"
+                />
+            </div>
+
+            <div className="overflow-x-auto max-h-72 overflow-y-auto border border-slate-700 rounded">
+                <table className="w-full text-xs">
+                    <thead className="text-[10px] uppercase text-slate-500 border-b border-slate-700 bg-slate-900 sticky top-0">
+                        <tr>
+                            <th className="text-left py-2 px-2">Symbol</th>
+                            <th className="text-left py-2 px-2">Dir</th>
+                            <th className="text-right py-2 px-2">Entry</th>
+                            <th className="text-right py-2 px-2">Exit</th>
+                            <th className="text-right py-2 px-2">PnL pts</th>
+                            <th className="text-right py-2 px-2">Hold</th>
+                            <th className="text-left py-2 px-2">Entry → Exit Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {trades.length === 0 ? (
+                            <tr><td colSpan={7} className="py-4 text-center text-slate-500 italic">No trades simulated.</td></tr>
+                        ) : trades.map((t, i) => (
+                            <tr key={i} className="border-b border-slate-800 hover:bg-slate-800/40">
+                                <td className="py-1 px-2 font-mono text-slate-300">{t.symbol}</td>
+                                <td className={`py-1 px-2 font-bold ${t.direction === 'LONG' ? 'text-green-400' : 'text-red-400'}`}>{t.direction}</td>
+                                <td className="py-1 px-2 text-right font-mono">{t.entryPrice != null ? Number(t.entryPrice).toFixed(2) : '—'}</td>
+                                <td className="py-1 px-2 text-right font-mono">{t.exitPrice != null ? Number(t.exitPrice).toFixed(2) : '—'}</td>
+                                <td className={`py-1 px-2 text-right font-mono font-bold ${(t.pnlPoints || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                    {(t.pnlPoints || 0) >= 0 ? '+' : ''}{(t.pnlPoints || 0).toFixed(2)}
+                                </td>
+                                <td className="py-1 px-2 text-right font-mono text-slate-400">{formatDuration(t.holdMs)}</td>
+                                <td className="py-1 px-2 text-slate-400 truncate max-w-[260px]" title={`${t.entryReason || ''} → ${t.exitReason || ''}`}>
+                                    {(t.entryReason || '—')} → {(t.exitReason || '—')}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+
+function ReplayStatBox({ label, value, color = 'text-white' }) {
+    return (
+        <div className="bg-slate-800 border border-slate-700 rounded p-2">
+            <p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p>
+            <p className={`font-bold font-mono text-lg ${color}`}>{value}</p>
         </div>
     );
 }
