@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Play, Activity, ChevronDown, ChevronUp, Bot, Copy, Check, Square } from 'lucide-react';
+import { Play, Activity, ChevronDown, ChevronUp, Bot, Copy, Check, Square, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useGlobalState } from '../context/GlobalContext';
 
@@ -90,6 +90,19 @@ export default function Backtest() {
   const { backtestParams: params, setBacktestParams: setParams, backtestResult: result, setBacktestResult: setResult } = useGlobalState();
   const location = useLocation();
   const [loading, setLoading] = useState(false);
+  // Collapse the left Configuration panel so the chart/results take the full width.
+  // Persisted so a backtest re-run keeps the same layout.
+  const [configCollapsed, setConfigCollapsed] = useState(() => {
+    try { return localStorage.getItem('backtest:configCollapsed') === '1'; }
+    catch (_) { return false; }
+  });
+  const toggleConfigCollapsed = () => {
+    setConfigCollapsed(prev => {
+      const next = !prev;
+      try { localStorage.setItem('backtest:configCollapsed', next ? '1' : '0'); } catch (_) {}
+      return next;
+    });
+  };
   const [instrumentConfig, setInstrumentConfig] = useState({});
   const [strategyDefaults, setStrategyDefaults] = useState({});
   const [savedConfigs, setSavedConfigs] = useState([]);
@@ -417,6 +430,7 @@ export default function Backtest() {
                   'PowerOfStocks5EmaStrategy': 'pos_5ema_scalp',
                   'VwapScalpStrategy': 'vwap_scalp',
                   'MomentumScalpStrategy': 'momentum_scalp',
+                  'TrendLineStrategy': 'trend_line',
                   'RlStrategy': 'rl_agent'
               };
               if (STRATEGY_MAPPING[strategyId]) {
@@ -1080,10 +1094,36 @@ export default function Backtest() {
         </button>
       </div>
       
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Controls */}
+      <div className={`grid grid-cols-1 gap-8 ${configCollapsed ? 'lg:grid-cols-[3rem_1fr]' : 'lg:grid-cols-3'}`}>
+        {/* Controls — collapsible left panel */}
+        {configCollapsed ? (
+          <div className="bg-surface rounded-xl border border-slate-700 flex flex-col items-center py-4 sticky top-4 h-fit">
+            <button
+              onClick={toggleConfigCollapsed}
+              title="Expand Configuration"
+              className="text-slate-400 hover:text-white hover:bg-slate-800 rounded p-2 transition-colors"
+            >
+              <PanelLeftOpen className="w-5 h-5" />
+            </button>
+            <div
+              className="mt-4 text-[10px] text-slate-500 font-semibold tracking-widest"
+              style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+            >
+              CONFIGURATION
+            </div>
+          </div>
+        ) : (
         <div className="bg-surface p-6 rounded-xl border border-slate-700 space-y-6 sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto">
-          <h3 className="text-xl font-bold">Configuration</h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold">Configuration</h3>
+            <button
+              onClick={toggleConfigCollapsed}
+              title="Collapse Configuration"
+              className="text-slate-400 hover:text-white hover:bg-slate-800 rounded p-1.5 transition-colors"
+            >
+              <PanelLeftClose className="w-5 h-5" />
+            </button>
+          </div>
           
           <div className="space-y-4">
              {/* Saved Config Loader (Backtest Only) */}
@@ -1177,6 +1217,7 @@ export default function Backtest() {
                 <option value="pos_5ema_scalp">Power of Stocks 5 EMA Scalp</option>
                 <option value="vwap_scalp">VWAP Rejection Scalp</option>
                 <option value="momentum_scalp">Momentum RSI-EMA Scalp</option>
+                <option value="trend_line">Trend Line Support/Resistance 📐</option>
                 <option value="universal">Universal / Discovery Mode</option>
                 <option value="rl_agent">RL Agent Strategy 🤖</option>
               </select>
@@ -2736,9 +2777,10 @@ export default function Backtest() {
         </div>
           </div>
         </div>
+        )}
 
         {/* Results */}
-        <div className="lg:col-span-2 bg-surface p-6 rounded-xl border border-slate-700 min-h-[500px]">
+        <div className={`${configCollapsed ? '' : 'lg:col-span-2'} bg-surface p-6 rounded-xl border border-slate-700 min-h-[500px]`}>
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-xl font-bold">Results</h3>
             {loading ? (

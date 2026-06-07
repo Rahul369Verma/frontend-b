@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, LineChart, Settings, Activity, Play, Square, Terminal, LogOut, Shield, Zap } from 'lucide-react';
+import { LayoutDashboard, LineChart, Settings, Activity, Play, Square, Terminal, LogOut, Shield, Zap, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Backtest from './pages/Backtest';
 import Optimizer from './pages/Optimizer';
 import SettingsPage from './pages/Settings';
 import Callback from './pages/Callback';
 import LoginPage from './pages/LoginPage';
+import StrategyDetail from './pages/StrategyDetail';
 import AiManager from './components/AiManager'; // New Component
 import DataManager from './components/DataManager'; // New Component
 import ParityAuditDashboard from './components/ParityAuditDashboard';
@@ -16,6 +17,19 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 function Sidebar() {
   const location = useLocation();
   const isActive = (path) => location.pathname === path;
+
+  // Collapsed state persisted to localStorage so it survives reload.
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem('sidebar:collapsed') === '1'; }
+    catch (_) { return false; }
+  });
+  const toggle = () => {
+    setCollapsed(prev => {
+      const next = !prev;
+      try { localStorage.setItem('sidebar:collapsed', next ? '1' : '0'); } catch (_) {}
+      return next;
+    });
+  };
 
   const navItems = [
     { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -29,35 +43,45 @@ function Sidebar() {
   ];
 
   return (
-    <div className="w-64 bg-surface border-r border-slate-700 h-screen flex flex-col">
-      <div className="p-6 border-b border-slate-700">
-        <h1 className="text-xl font-bold text-primary flex items-center gap-2">
-          <Terminal className="w-6 h-6" />
-          AlgoBot
-        </h1>
+    <div className={`${collapsed ? 'w-16' : 'w-64'} bg-surface border-r border-slate-700 h-screen flex flex-col transition-[width] duration-200`}>
+      <div className="p-4 border-b border-slate-700 flex items-center justify-between gap-2">
+        {!collapsed && (
+          <h1 className="text-xl font-bold text-primary flex items-center gap-2">
+            <Terminal className="w-6 h-6" />
+            AlgoBot
+          </h1>
+        )}
+        <button
+          onClick={toggle}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          className="text-slate-400 hover:text-white hover:bg-slate-800 rounded p-2 transition-colors ml-auto"
+        >
+          {collapsed ? <PanelLeftOpen className="w-5 h-5" /> : <PanelLeftClose className="w-5 h-5" />}
+        </button>
       </div>
-      <nav className="flex-1 p-4 space-y-2">
+      <nav className={`flex-1 p-4 space-y-2 ${collapsed ? 'overflow-x-hidden' : ''}`}>
         {navItems.map((item) => (
           <Link
             key={item.path}
             to={item.path}
-            className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+            title={collapsed ? item.label : undefined}
+            className={`flex items-center ${collapsed ? 'justify-center' : 'gap-3'} px-3 py-3 rounded-lg transition-colors ${
               isActive(item.path)
                 ? 'bg-primary/10 text-primary'
                 : 'text-slate-400 hover:bg-slate-800 hover:text-white'
             }`}
           >
-            <item.icon className="w-5 h-5" />
-            <span className="font-medium">{item.label}</span>
+            <item.icon className="w-5 h-5 flex-shrink-0" />
+            {!collapsed && <span className="font-medium">{item.label}</span>}
           </Link>
         ))}
       </nav>
       <div className="p-4 border-t border-slate-700 space-y-2">
-        <div className="flex items-center gap-3 px-4 py-2 text-sm text-slate-400">
-          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-          System Online
+        <div className={`flex items-center ${collapsed ? 'justify-center' : 'gap-3 px-4'} py-2 text-sm text-slate-400`}>
+          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse flex-shrink-0" title={collapsed ? 'System Online' : undefined} />
+          {!collapsed && <span>System Online</span>}
         </div>
-        <SessionFooter />
+        {!collapsed && <SessionFooter />}
       </div>
     </div>
   );
@@ -142,6 +166,7 @@ function App() {
               <main className="flex-1 overflow-auto">
                 <Routes>
                   <Route path="/" element={<Dashboard />} />
+                  <Route path="/strategy/:symbol" element={<StrategyDetail />} />
                   <Route path="/backtest" element={<Backtest />} />
                   <Route path="/optimizer" element={<Optimizer />} />
                   <Route path="/tick-strategies" element={<TickStrategies />} />

@@ -781,11 +781,17 @@ export default function Dashboard() {
                     })().map(([symbol, params]) => {
                         return (
                             <div key={symbol} className="bg-slate-800 rounded-lg border border-slate-600 overflow-hidden">
-                                {/* Header */}
+                                {/* Header — click symbol name to open the StrategyDetail page */}
                                 <div className="p-4 bg-slate-700/50 border-b border-slate-600 flex justify-between items-center">
                                     <div className="flex justify-between items-center w-full">
                                         <div className="flex items-center gap-2">
-                                            <h4 className="font-bold text-lg text-white/90">{symbol}</h4>
+                                            <h4
+                                                className="font-bold text-lg text-white/90 cursor-pointer hover:text-primary transition-colors"
+                                                title={`Open detail view for ${symbol}`}
+                                                onClick={() => navigate(`/strategy/${encodeURIComponent(symbol)}`)}
+                                            >
+                                                {symbol} <span className="text-xs text-slate-500 font-normal">→</span>
+                                            </h4>
                                             {/* Toggle Switch */}
                                             <label className="relative inline-flex items-center cursor-pointer ml-2" title="Toggle Strategy Active Status">
                                                 <input 

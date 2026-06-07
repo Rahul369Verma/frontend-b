@@ -111,11 +111,14 @@ export function GlobalProvider({ children }) {
     capital: 50000,
     iterations: 100,
     strategy: 'inside_bar',
+    strategies: ['inside_bar'], // multi-strategy optimizer selection
     minTrades: 5,
     minWinRate: 40,
     maxDrawdown: 100,
     minSharpeRatio: 0.4,
-    stop_on_match: false
+    stop_on_match: false,
+    oos_enabled: false,   // out-of-sample (walk-forward) validation
+    oos_fraction: 0.3     // held-out test portion (30%)
   });
   const [optimizerResult, setOptimizerResult] = useState(null);
 

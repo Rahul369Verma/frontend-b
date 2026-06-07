@@ -1269,10 +1269,72 @@ function RecordingList({ recordings, onStop, onDelete, onSample, onReplay }) {
 function RecordingForm({ onClose, onSubmit }) {
     const [name, setName] = useState('');
     const [symbols, setSymbols] = useState([]);
-    const [pickerSymbol, setPickerSymbol] = useState('');
     const [autoStopMinutes, setAutoStopMinutes] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+
+    // ── Per-symbol picker (mirrors the strategy-create modal pattern) ──
+    // The user picks an index + data source + (when FUT) expiry, then clicks
+    // "Add" to push the resolved symbol into the chip list above. This lets
+    // the recorder capture FUT contracts (which carry vol) instead of being
+    // limited to INDEX spot symbols (vol=0). The flow is identical to "New
+    // Strategy" so the operator gets a familiar UX.
+    const [pickerIndex, setPickerIndex] = useState('');
+    const [pickerDataSource, setPickerDataSource] = useState('FUT');  // default FUT — recording vol matters
+    const [pickerExpiry, setPickerExpiry] = useState('');
+    const [pickerExpiryDates, setPickerExpiryDates] = useState([]);
+    const [pickerExpiryLoading, setPickerExpiryLoading] = useState(false);
+
+    // Index keys that support a meaningful SPOT (the -INDEX or -EQ key). MCX
+    // entries are futures-only in this codebase, so the SPOT toggle is hidden
+    // for them. We treat any key without -INDEX/-EQ suffix as futures-only.
+    const pickerCfg = pickerIndex ? INSTRUMENT_CONFIG[pickerIndex] : null;
+    const pickerSupportsSpot = pickerIndex
+        && (pickerIndex.includes('-INDEX') || pickerIndex.includes('-EQ'));
+    const pickerSupportsFut  = !!pickerCfg;  // anything in the config has a futures contract
+
+    // Force FUT when SPOT isn't available (MCX, etc.)
+    useEffect(() => {
+        if (pickerIndex && !pickerSupportsSpot && pickerDataSource !== 'FUT') {
+            setPickerDataSource('FUT');
+        }
+    }, [pickerIndex, pickerSupportsSpot, pickerDataSource]);
+
+    // Fetch expiries when (index, dataSource=FUT) is selected. Cached implicitly
+    // by React effect deps — re-fetches only when the index changes.
+    useEffect(() => {
+        if (pickerDataSource !== 'FUT' || !pickerIndex || !pickerCfg) {
+            setPickerExpiryDates([]);
+            return;
+        }
+        let cancelled = false;
+        setPickerExpiryLoading(true);
+        fetchExpiriesForSymbol(pickerIndex, 4, 1)
+            .then(list => {
+                if (cancelled) return;
+                setPickerExpiryDates(list);
+                setPickerExpiry(prev => {
+                    if (prev) return prev;
+                    const next = list.find(e => !e.isPast) || list[0];
+                    return next ? next.date : '';
+                });
+            })
+            .catch(err => console.warn('Expiry fetch failed:', err.message))
+            .finally(() => { if (!cancelled) setPickerExpiryLoading(false); });
+        return () => { cancelled = true; };
+    }, [pickerIndex, pickerDataSource, pickerCfg]);
+
+    // Reset the expiry pick whenever the index changes so we don't keep a
+    // stale expiry from a different underlying.
+    useEffect(() => { setPickerExpiry(''); }, [pickerIndex]);
+
+    // Resolve the final symbol the recorder will subscribe to.
+    const resolvedPickerSymbol = (() => {
+        if (!pickerIndex || !pickerCfg) return null;
+        if (pickerDataSource === 'SPOT') return pickerIndex;
+        // FUT path — need expiry
+        return buildFuturesSymbol(pickerIndex, pickerExpiry);
+    })();
 
     const addSymbol = (sym) => {
         if (!sym) return;
@@ -1285,6 +1347,13 @@ function RecordingForm({ onClose, onSubmit }) {
         setError(null);
     };
     const removeSymbol = (sym) => setSymbols(symbols.filter(s => s !== sym));
+    const handleAddPicked = () => {
+        if (!resolvedPickerSymbol) return;
+        addSymbol(resolvedPickerSymbol);
+        // Reset the expiry so the next add starts clean. Keep the index +
+        // dataSource so the user can quickly add multiple expiries.
+        setPickerExpiry('');
+    };
 
     const handleSubmit = async () => {
         setError(null);
@@ -1350,54 +1419,107 @@ function RecordingForm({ onClose, onSubmit }) {
                         </span>
                     ))}
                 </div>
-                <select
-                    value={pickerSymbol}
-                    onChange={e => {
-                        const v = e.target.value;
-                        setPickerSymbol('');  // reset back to placeholder
-                        addSymbol(v);
-                    }}
-                    className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
-                >
-                    <option value="">— add a symbol —</option>
-                    <optgroup label="Indices">
-                        {Object.entries(INSTRUMENT_CONFIG)
-                            .filter(([k]) => !k.includes('-EQ') && !k.startsWith('MCX:'))
-                            .map(([key, cfg]) => (
-                                <option key={key} value={key}>{cfg.underlying} — {key}</option>
+                {/* Index + Data Source + (optional) Expiry → resolves to a
+                    single symbol that the [+ Add] button pushes onto the chip
+                    list above. Same UX as the New Strategy modal. */}
+                <div className="grid grid-cols-12 gap-2">
+                    <select
+                        value={pickerIndex}
+                        onChange={e => setPickerIndex(e.target.value)}
+                        className="col-span-5 bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200 text-sm"
+                    >
+                        <option value="">— pick underlying —</option>
+                        <optgroup label="Indices">
+                            {Object.entries(INSTRUMENT_CONFIG)
+                                .filter(([k]) => !k.includes('-EQ') && !k.startsWith('MCX:'))
+                                .map(([key, cfg]) => (
+                                    <option key={key} value={key}>{cfg.underlying} — {key}</option>
+                                ))}
+                        </optgroup>
+                        <optgroup label="── Precious Metals (MCX) ──">
+                            {Object.entries(INSTRUMENT_CONFIG)
+                                .filter(([k]) => k.startsWith('MCX:') && ['GOLD','GOLDM','GOLDPETAL','SILVER','SILVERMIC','SILVERM'].includes(INSTRUMENT_CONFIG[k].underlying))
+                                .map(([key, cfg]) => (
+                                    <option key={key} value={key}>{cfg.displayName || cfg.underlying}</option>
+                                ))}
+                        </optgroup>
+                        <optgroup label="── Energy (MCX) ──">
+                            {Object.entries(INSTRUMENT_CONFIG)
+                                .filter(([k]) => k.startsWith('MCX:') && ['CRUDEOIL','NATURALGAS'].includes(INSTRUMENT_CONFIG[k].underlying))
+                                .map(([key, cfg]) => (
+                                    <option key={key} value={key}>{cfg.displayName || cfg.underlying}</option>
+                                ))}
+                        </optgroup>
+                        <optgroup label="── Base Metals (MCX) ──">
+                            {Object.entries(INSTRUMENT_CONFIG)
+                                .filter(([k]) => k.startsWith('MCX:') && ['COPPER','ZINC','ALUMINIUM','LEAD','NICKEL'].includes(INSTRUMENT_CONFIG[k].underlying))
+                                .map(([key, cfg]) => (
+                                    <option key={key} value={key}>{cfg.displayName || cfg.underlying}</option>
+                                ))}
+                        </optgroup>
+                        <optgroup label="Stocks">
+                            {Object.entries(INSTRUMENT_CONFIG)
+                                .filter(([k]) => k.includes('-EQ'))
+                                .map(([key, cfg]) => (
+                                    <option key={key} value={key}>{cfg.underlying}</option>
+                                ))}
+                        </optgroup>
+                    </select>
+
+                    {/* Data Source — disabled (forced FUT) when SPOT isn't meaningful */}
+                    <select
+                        value={pickerDataSource}
+                        onChange={e => setPickerDataSource(e.target.value)}
+                        disabled={!pickerIndex || !pickerSupportsSpot}
+                        title={!pickerSupportsSpot && pickerIndex ? 'This underlying is futures-only.' : ''}
+                        className="col-span-3 bg-slate-800 border border-slate-700 rounded px-2 py-2 text-slate-200 text-sm disabled:opacity-50"
+                    >
+                        {pickerSupportsSpot && <option value="SPOT">Spot</option>}
+                        {pickerSupportsFut  && <option value="FUT">Futures</option>}
+                    </select>
+
+                    {/* Expiry (only shown for FUT) */}
+                    {pickerDataSource === 'FUT' ? (
+                        <select
+                            value={pickerExpiry}
+                            onChange={e => setPickerExpiry(e.target.value)}
+                            disabled={!pickerIndex || pickerExpiryLoading || pickerExpiryDates.length === 0}
+                            className="col-span-3 bg-slate-800 border border-slate-700 rounded px-2 py-2 text-slate-200 text-sm disabled:opacity-50"
+                        >
+                            {pickerExpiryLoading && <option value="">Loading…</option>}
+                            {!pickerExpiryLoading && pickerExpiryDates.length === 0 && (
+                                <option value="">— no expiries —</option>
+                            )}
+                            {!pickerExpiryLoading && pickerExpiryDates.map(exp => (
+                                <option key={exp.date} value={exp.date}>
+                                    {exp.label || exp.date}{exp.isPast ? ' (past)' : ''}
+                                </option>
                             ))}
-                    </optgroup>
-                    <optgroup label="── Precious Metals (MCX) ──">
-                        {Object.entries(INSTRUMENT_CONFIG)
-                            .filter(([k]) => k.startsWith('MCX:') && ['GOLD','GOLDM','GOLDPETAL','SILVER','SILVERMIC','SILVERM'].includes(INSTRUMENT_CONFIG[k].underlying))
-                            .map(([key, cfg]) => (
-                                <option key={key} value={key}>{cfg.displayName || cfg.underlying}</option>
-                            ))}
-                    </optgroup>
-                    <optgroup label="── Energy (MCX) ──">
-                        {Object.entries(INSTRUMENT_CONFIG)
-                            .filter(([k]) => k.startsWith('MCX:') && ['CRUDEOIL','NATURALGAS'].includes(INSTRUMENT_CONFIG[k].underlying))
-                            .map(([key, cfg]) => (
-                                <option key={key} value={key}>{cfg.displayName || cfg.underlying}</option>
-                            ))}
-                    </optgroup>
-                    <optgroup label="── Base Metals (MCX) ──">
-                        {Object.entries(INSTRUMENT_CONFIG)
-                            .filter(([k]) => k.startsWith('MCX:') && ['COPPER','ZINC','ALUMINIUM','LEAD','NICKEL'].includes(INSTRUMENT_CONFIG[k].underlying))
-                            .map(([key, cfg]) => (
-                                <option key={key} value={key}>{cfg.displayName || cfg.underlying}</option>
-                            ))}
-                    </optgroup>
-                    <optgroup label="Stocks">
-                        {Object.entries(INSTRUMENT_CONFIG)
-                            .filter(([k]) => k.includes('-EQ'))
-                            .map(([key, cfg]) => (
-                                <option key={key} value={key}>{cfg.underlying}</option>
-                            ))}
-                    </optgroup>
-                </select>
-                <p className="text-xs text-slate-500 mt-1.5">
-                    Pick multiple symbols to record them in parallel. For volume-aware replay, use futures (e.g. <code className="bg-slate-700 px-1">NSE:NIFTY26JUNFUT</code>) — index spot ticks report vol=0.
+                        </select>
+                    ) : (
+                        <div className="col-span-3 text-xs text-slate-500 italic flex items-center px-2">
+                            (no expiry for spot)
+                        </div>
+                    )}
+
+                    <button
+                        type="button"
+                        onClick={handleAddPicked}
+                        disabled={!resolvedPickerSymbol}
+                        className="col-span-1 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded px-2 py-2 text-sm font-semibold"
+                        title={resolvedPickerSymbol || 'Pick an underlying first'}
+                    >+ Add</button>
+                </div>
+
+                {/* Live preview of the resolved symbol below the picker row */}
+                <p className="text-xs mt-1.5">
+                    {resolvedPickerSymbol ? (
+                        <span className="text-violet-300">Will add: <code className="bg-slate-700 px-1 font-mono">{resolvedPickerSymbol}</code></span>
+                    ) : (
+                        <span className="text-slate-500">
+                            Pick an underlying, then (for futures) pick an expiry. Index spot ticks report vol=0 — use Futures for volume-aware replays.
+                        </span>
+                    )}
                 </p>
             </FormField>
 
