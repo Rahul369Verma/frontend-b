@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-    BarChart, Bar, ReferenceLine,
+    BarChart, Bar, ReferenceLine, Cell,
 } from 'recharts';
 import {
     ArrowLeft, RefreshCw, Activity, TrendingUp, TrendingDown,
@@ -11,7 +11,12 @@ import {
 } from 'lucide-react';
 
 const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
-const PAGE_SIZE = 500; // upper bound — covers months of trades in one page
+// Upper bound on trades pulled in one shot. Per-symbol closed-trade counts are
+// in the low hundreds today (busiest underlying ~180), so this covers them with
+// wide headroom. If a symbol ever exceeds this, the UI surfaces a "showing N of
+// TOTAL" banner (see `truncated` below) rather than silently computing KPIs on a
+// partial set.
+const PAGE_SIZE = 2000;
 
 // ── Date helpers (IST) ────────────────────────────────────────────────────
 // All times in the system are UTC; market analytics belong in IST (Asia/Kolkata).
@@ -60,19 +65,40 @@ const TAB_KEYS = [
 export default function StrategyDetail() {
     const { symbol: rawSymbol } = useParams();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
     const symbol = decodeURIComponent(rawSymbol || '');
+
+    // ── Deployment context (from the Results button on a deployment card) ──
+    // When the user clicks "📊 Results" on a specific deployment we carry its
+    // id / strategy / label in the query string so this page can scope to it.
+    // All optional — opening /strategy/:symbol with no query still works
+    // exactly like before (symbol-level analytics).
+    const deploymentId = searchParams.get('deploymentId') || null;
+    const qpStrategyName = searchParams.get('strategyName') || null;
+    const qpLabel = searchParams.get('label') || null;
 
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const [trades, setTrades] = useState([]);
+    // { shown, total } — set when the server reports more matching trades than
+    // we pulled, so we can warn that KPIs/charts reflect a partial set.
+    const [truncated, setTruncated] = useState(null);
     const [strategyMeta, setStrategyMeta] = useState(null); // { strategyName, tradeMode, isActive } from /api/engine/dashboard
     const [rangeKey, setRangeKey] = useState('all'); // default to All-time so historical trades show
     const [activeTab, setActiveTab] = useState('equity');
-    // When false (default): show every trade for this symbol regardless of which
-    // strategy made it (matches Trade-History behaviour). When true: filter to
-    // the strategy currently configured for this symbol — useful when the user
-    // has switched strategies and wants to see only the new strategy's results.
-    const [strictStrategy, setStrictStrategy] = useState(false);
+    // Scope of which trades to show. Three levels, narrowest last:
+    //   'symbol'     — every trade on the underlying (always has data; default)
+    //   'strategy'   — symbol + strategyName (works for historical trades too,
+    //                  as long as strategyName was recorded — many legacy
+    //                  option-symbol rows say 'Unknown')
+    //   'deployment' — exact deploymentId (ONLY trades placed after deployment
+    //                  tracking began — historical trades have no deploymentId)
+    // Default to 'symbol' so the page always shows results immediately, even
+    // when arriving from a brand-new deployment with no tagged trades yet.
+    const [scope, setScope] = useState('symbol');
+    // The strategy name we scope by — query param wins (it reflects the exact
+    // deployment the user clicked), else the symbol's current config.
+    const scopeStrategyName = qpStrategyName || strategyMeta?.strategyName || null;
 
     // ── Pull the strategy config for this symbol so we can show name + mode ─
     const fetchConfig = useCallback(async () => {
@@ -86,33 +112,38 @@ export default function StrategyDetail() {
         }
     }, [symbol]);
 
-    // ── Pull trades for this symbol (+ optional strategy filter) in the selected window ──
-    // Default behaviour mirrors Trade-History: ALL trades for the symbol, no
-    // strategy narrowing, no date floor. The user can opt into narrower views.
+    // ── Pull trades for the selected scope + window ──
+    // 'symbol' (default): ALL trades for the underlying. 'strategy': also
+    // narrow by strategyName. 'deployment': narrow by exact deploymentId.
     const fetchTrades = useCallback(async (cfg) => {
         setLoading(true);
         setError(null);
         try {
             const rangeDef = DATE_RANGES.find(r => r.key === rangeKey);
             const params = { symbol, limit: PAGE_SIZE, page: 1 };
-            // Only narrow by strategy if the user explicitly opted in via the toggle.
-            if (strictStrategy && cfg?.strategyName) params.strategyName = cfg.strategyName;
+            const stratName = qpStrategyName || cfg?.strategyName || null;
+            if (scope === 'deployment' && deploymentId) {
+                params.deploymentId = deploymentId;
+            } else if (scope === 'strategy' && stratName) {
+                params.strategyName = stratName;
+            }
             if (rangeDef?.days) {
                 const from = new Date(Date.now() - rangeDef.days * 24 * 3600 * 1000);
                 params.from = from.toISOString();
             }
             const res = await axios.get(`${API_URL}/trades`, { params });
-            // Most reliable: filter to CLOSED EXIT events only — those carry the realised PnL.
-            // OPEN entries appear when a position is still live; we surface that separately in the KPI strip.
             const all = Array.isArray(res.data?.trades) ? res.data.trades : [];
             setTrades(all);
+            const total = Number(res.data?.total);
+            setTruncated(Number.isFinite(total) && total > all.length ? { shown: all.length, total } : null);
         } catch (e) {
             setError(e.message || 'Failed to load trades');
             setTrades([]);
+            setTruncated(null);
         } finally {
             setLoading(false);
         }
-    }, [symbol, rangeKey, strictStrategy]);
+    }, [symbol, rangeKey, scope, deploymentId, qpStrategyName]);
 
     useEffect(() => {
         let cancelled = false;
@@ -132,8 +163,21 @@ export default function StrategyDetail() {
         for (const t of trades) {
             const status = String(t.status || '').toUpperCase();
             const action = String(t.action || '').toUpperCase();
-            if (status === 'OPEN' || action === 'ENTRY') openPos.push(t);
-            else closed.push(t);
+            // CRITICAL: the engine writes ONE doc per trade. On ENTRY it's
+            // {action:'ENTRY', status:'OPEN'}; on EXIT only `status` flips to
+            // 'CLOSED' — `action` STAYS 'ENTRY'. So we must classify by
+            // STATUS, not action. (The old `action === 'ENTRY' → open` check
+            // misfiled every closed trade as open, blanking all the charts.)
+            if (status === 'CLOSED') {
+                closed.push(t);
+            } else if (status === 'OPEN') {
+                openPos.push(t);
+            } else {
+                // Legacy docs without a status field: infer from exit data.
+                const hasExit = t.exitTime != null || t.exitPrice != null
+                    || action === 'EXIT' || action === 'SELL';
+                (hasExit ? closed : openPos).push(t);
+            }
         }
         // Engine writes a single doc that is updated on EXIT; the same _id can appear
         // as ENTRY then CLOSED. After the EXIT update, status flips to CLOSED — so
@@ -230,8 +274,17 @@ export default function StrategyDetail() {
                         <h1 className="text-2xl font-bold text-white flex items-center gap-3 flex-wrap">
                             <Activity className="w-6 h-6 text-primary" />
                             <span>{symbol}</span>
-                            {strategyMeta?.strategyName && (
-                                <span className="text-sm text-slate-400 font-normal">{strategyMeta.strategyName}</span>
+                            {/* Deployment label (when arriving from a Results button) takes
+                                precedence over the symbol's current-config strategy name. */}
+                            {(qpLabel || qpStrategyName || strategyMeta?.strategyName) && (
+                                <span className="text-sm text-slate-400 font-normal">
+                                    {qpLabel || qpStrategyName || strategyMeta?.strategyName}
+                                </span>
+                            )}
+                            {deploymentId && (
+                                <span className="text-[10px] px-2 py-0.5 rounded bg-violet-700/40 text-violet-200 border border-violet-700" title={`Deployment ${deploymentId}`}>
+                                    deployment {String(deploymentId).slice(-6).toUpperCase()}
+                                </span>
                             )}
                             {strategyMeta?.tradeMode === 'LIVE' ? (
                                 <span className="text-[10px] px-2 py-0.5 rounded bg-red-700/40 text-red-200 border border-red-700">LIVE</span>
@@ -248,23 +301,36 @@ export default function StrategyDetail() {
                     </div>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                    {/* Strategy scope toggle — defaults to "All on symbol" (mirrors Trade History).
-                        Flip to current-strategy-only to see just the trades made by the strategy
-                        that's currently configured for this symbol. Disabled when no strategy is set. */}
-                    <div className="flex bg-slate-800 rounded border border-slate-700 overflow-hidden text-xs" title={strategyMeta?.strategyName ? `Current: ${strategyMeta.strategyName}` : 'No strategy currently configured'}>
+                    {/* Scope toggle — narrowest scope last. 'deployment' is only
+                        offered when we arrived from a specific deployment card
+                        (deploymentId in the query). Historical trades have no
+                        deploymentId, so that filter only covers trades placed
+                        since deployment tracking began — hence 'symbol' default. */}
+                    <div className="flex bg-slate-800 rounded border border-slate-700 overflow-hidden text-xs">
                         <button
-                            onClick={() => setStrictStrategy(false)}
-                            className={`px-3 py-1.5 ${!strictStrategy ? 'bg-primary/20 text-primary' : 'text-slate-400 hover:text-white'}`}
+                            onClick={() => setScope('symbol')}
+                            className={`px-3 py-1.5 ${scope === 'symbol' ? 'bg-primary/20 text-primary' : 'text-slate-400 hover:text-white'}`}
+                            title="Every trade on this underlying"
                         >
                             All on symbol
                         </button>
                         <button
-                            onClick={() => setStrictStrategy(true)}
-                            disabled={!strategyMeta?.strategyName}
-                            className={`px-3 py-1.5 ${strictStrategy ? 'bg-primary/20 text-primary' : 'text-slate-400 hover:text-white'} disabled:opacity-40 disabled:cursor-not-allowed`}
+                            onClick={() => setScope('strategy')}
+                            disabled={!scopeStrategyName || scopeStrategyName === 'Unknown'}
+                            className={`px-3 py-1.5 ${scope === 'strategy' ? 'bg-primary/20 text-primary' : 'text-slate-400 hover:text-white'} disabled:opacity-40 disabled:cursor-not-allowed`}
+                            title={scopeStrategyName ? `Only ${scopeStrategyName} trades on this symbol` : 'No strategy name on these trades'}
                         >
-                            Current strategy
+                            This strategy
                         </button>
+                        {deploymentId && (
+                            <button
+                                onClick={() => setScope('deployment')}
+                                className={`px-3 py-1.5 ${scope === 'deployment' ? 'bg-primary/20 text-primary' : 'text-slate-400 hover:text-white'}`}
+                                title="Only trades tagged with this exact deployment (since deployment tracking began)"
+                            >
+                                This deployment
+                            </button>
+                        )}
                     </div>
                     <div className="flex bg-slate-800 rounded border border-slate-700 overflow-hidden">
                         {DATE_RANGES.map(r => (
@@ -278,7 +344,7 @@ export default function StrategyDetail() {
                         ))}
                     </div>
                     <button
-                        onClick={() => fetchConfig().then(fetchTrades)}
+                        onClick={() => fetchConfig().then((cfg) => fetchTrades(cfg))}
                         className="p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 text-slate-300"
                         title="Refresh"
                         disabled={loading}
@@ -291,6 +357,13 @@ export default function StrategyDetail() {
             {error && (
                 <div className="mb-4 p-3 bg-red-900/20 border border-red-700/50 rounded text-red-300 text-sm">
                     {error}
+                </div>
+            )}
+
+            {truncated && (
+                <div className="mb-4 p-3 bg-amber-900/20 border border-amber-700/50 rounded text-amber-300 text-xs">
+                    Showing the newest {truncated.shown.toLocaleString()} of {truncated.total.toLocaleString()} matching trades.
+                    KPIs and charts reflect this subset — narrow the date range for a complete view of an older window.
                 </div>
             )}
 
@@ -319,10 +392,20 @@ export default function StrategyDetail() {
             <div className="bg-surface rounded-xl border border-slate-700 p-6 min-h-[400px]">
                 {closed.length === 0 && !loading ? (
                     <div className="text-center text-slate-500 py-12">
-                        <div>No closed trades found for {symbol}{strictStrategy && strategyMeta?.strategyName ? ` under strategy "${strategyMeta.strategyName}"` : ''} in the selected window.</div>
-                        {strictStrategy && (
+                        <div>
+                            No closed trades found for {symbol}
+                            {scope === 'strategy' && scopeStrategyName ? ` under strategy "${scopeStrategyName}"` : ''}
+                            {scope === 'deployment' ? ' for this deployment' : ''}
+                            {' '}in the selected window.
+                        </div>
+                        {scope === 'deployment' && (
+                            <div className="text-xs text-slate-600 mt-1">
+                                Historical trades placed before deployment tracking began aren't tagged with a deployment id.
+                            </div>
+                        )}
+                        {scope !== 'symbol' && (
                             <button
-                                onClick={() => setStrictStrategy(false)}
+                                onClick={() => setScope('symbol')}
                                 className="mt-3 text-xs text-primary hover:underline"
                             >
                                 Show all trades on this symbol →
@@ -701,7 +784,7 @@ function DistributionView({ histogram, hourMap, kpis }) {
                         />
                         <Bar dataKey="count" radius={[2, 2, 0, 0]}>
                             {histogram.map((b, i) => (
-                                <Bar key={i} fill={b.isPositive ? '#34d399' : '#f87171'} />
+                                <Cell key={i} fill={b.isPositive ? '#34d399' : '#f87171'} />
                             ))}
                         </Bar>
                     </BarChart>

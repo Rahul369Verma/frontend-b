@@ -21,6 +21,20 @@ const RESOLUTION_LABELS = {
   '1': '1 Min', '3': '3 Min', '5': '5 Min', '15': '15 Min', '30': '30 Min', '60': '1 Hour', 'D': 'Daily',
 };
 
+// Humanize a millisecond duration for the ETA readout. Returns null for
+// missing/invalid input so callers can fall back to "Estimating…".
+//   <1m → "Ns" · <1h → "Mm Ss"/"Mm" · ≥1h → "Hh Mm"
+const formatDuration = (ms) => {
+  if (ms == null || !isFinite(ms) || ms < 0) return null;
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${Math.max(1, totalSec)}s`;
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  const s = totalSec % 60;
+  return s ? `${m}m ${s}s` : `${m}m`;
+};
+
 // Param keys that are universal/noise and should NOT be shown as a strategy's
 // "tuned" parameters in the results view.
 const NOISE_PARAM_KEYS = new Set([
@@ -74,14 +88,35 @@ export default function Optimizer() {
   };
   const [selectedResult, setSelectedResult] = useState(null);
   const [progress, setProgress] = useState({ current: 0, total: 0, matches: 0 });
+  // Wall-clock tick (1s) so the ETA counts down smoothly BETWEEN backend ticks.
+  const [nowTs, setNowTs] = useState(() => Date.now());
   const [stopOnMatch, setStopOnMatch] = useState(false);
   const [stopping, setStopping] = useState(false);
+  // Ranking mode: ON (default) = "deflated" anti-data-mining ranking (penalize
+  // IS→OOS degradation + the best-of-N selection bias). OFF = raw robust score.
+  // Both keys are precomputed by the backend, so this just re-sorts — no re-run.
+  const [deflateRank, setDeflateRank] = useState(() => {
+    try { return localStorage.getItem('optimizer:deflateRank') !== '0'; } catch { return true; }
+  });
+  const toggleDeflateRank = () => setDeflateRank(prev => {
+    const next = !prev;
+    try { localStorage.setItem('optimizer:deflateRank', next ? '1' : '0'); } catch { /* ignore */ }
+    return next;
+  });
   const jobIdRef = useRef(null);
   const pollTimerRef = useRef(null);   // active /status poll timer
   const runTokenRef = useRef(0);       // invalidates stale pollers when a new run/resume starts
   const lastSocketTsRef = useRef(0);   // last time a live progress event arrived (socket-detected runs)
 
   const [instrumentConfig, setInstrumentConfig] = useState({});
+
+  // Tick once a second WHILE running so the ETA counts down smoothly between
+  // backend progress events. No timer when idle (avoids a leaked interval).
+  React.useEffect(() => {
+    if (!running) return undefined;
+    const t = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [running]);
   const [expiryDates, setExpiryDates] = useState([]); // For Options/Futures Expiry Selection
   const [catalog, setCatalog] = useState([]); // [{ id, label, optimizable }]
   const [stratOpen, setStratOpen] = useState(false);
@@ -470,41 +505,94 @@ export default function Optimizer() {
     });
   };
 
-  // ── Normalize result shape (multi vs legacy single) ──────────────────
+  // Out-of-sample columns + robust ranking apply only when this run used OOS.
+  const hasOos = !!(results?.runConfig?.oos_enabled);
+  // The active ranking key. Backend precomputes BOTH on every result.
+  const rankKey = deflateRank ? 'rankScoreDeflated' : 'rankScore';
+  const activeRank = (x) => (x && Number.isFinite(x[rankKey]) ? x[rankKey] : null);
+
+  // ── Normalize + RE-RANK result shape (multi vs legacy single) ───────────
+  // The toggle just picks which precomputed key orders everything — instant,
+  // no re-run, no scoring logic duplicated in JS.
   const strategyGroups = useMemo(() => {
     if (!results) return [];
-    if (Array.isArray(results.strategies)) return results.strategies;
-    // Legacy single-strategy shape → wrap into one group. Read config.strategies
-    // (a stable reference) rather than the per-render selectedStrategies array.
-    const sid = results.strategy || config.strategy || (config.strategies && config.strategies[0]);
-    const list = results.best_parameters || [];
-    return [{
-      strategy: sid,
-      label: labelFor(sid),
-      best_parameters: list,
-      best: list[0] || null,
-      summary: list[0] ? {
-        matches: list.length,
-        score: list[0].score,
-        totalPnL: list[0].metrics?.totalPnL,
-        winRate: list[0].metrics?.winRate,
-        totalTrades: list[0].metrics?.totalTrades,
-        maxDrawdown: list[0].metrics?.maxDrawdown,
-        sharpeRatio: list[0].metrics?.sharpeRatio,
-        profitFactor: list[0].metrics?.profitFactor,
-      } : { matches: 0 },
-    }];
-  }, [results, config.strategy, config.strategies, catalog]); // eslint-disable-line react-hooks/exhaustive-deps
+    const rk = (x) => (x && Number.isFinite(x[rankKey]) ? x[rankKey] : -Infinity);
+    const fullPnl = (x) => (x?.full?.totalPnL ?? x?.metrics?.totalPnL ?? 0);
+    // -Infinity-safe comparator: overfit (−∞) always sinks below robust sets.
+    const cmp = (a, b) => {
+      const ra = rk(a), rb = rk(b);
+      if (ra !== rb) { if (ra === -Infinity) return 1; if (rb === -Infinity) return -1; return rb - ra; }
+      if (!!a?.robust !== !!b?.robust) return a?.robust ? -1 : 1;
+      return fullPnl(b) - fullPnl(a);
+    };
+    const sortSets = (arr) => [...(arr || [])].sort(cmp);
 
-  const bestStrategyId = results?.best_strategy || (strategyGroups[0]?.best ? strategyGroups[0].strategy : null);
+    let groups;
+    if (Array.isArray(results.strategies)) {
+      groups = results.strategies.map(g => {
+        const sets = sortSets(g.best_parameters);
+        return { ...g, best_parameters: sets, best: sets[0] || g.best || null };
+      });
+    } else {
+      // Legacy single-strategy shape → wrap into one group.
+      const sid = results.strategy || config.strategy || (config.strategies && config.strategies[0]);
+      const sets = sortSets(results.best_parameters || []);
+      groups = [{
+        strategy: sid,
+        label: labelFor(sid),
+        best_parameters: sets,
+        best: sets[0] || null,
+        summary: sets[0] ? {
+          matches: sets.length,
+          score: sets[0].score,
+          totalPnL: sets[0].metrics?.totalPnL,
+          winRate: sets[0].metrics?.winRate,
+          totalTrades: sets[0].metrics?.totalTrades,
+          maxDrawdown: sets[0].metrics?.maxDrawdown,
+          sharpeRatio: sets[0].metrics?.sharpeRatio,
+          profitFactor: sets[0].metrics?.profitFactor,
+        } : { matches: 0 },
+      }];
+    }
+    groups.sort((a, b) => cmp(a.best, b.best));
+    return groups;
+  }, [results, config.strategy, config.strategies, catalog, rankKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Winner = the top-ranked group under the ACTIVE key — but only if it actually
+  // held up out-of-sample (robust). Otherwise no trophy (honest "nothing robust").
+  // Re-derived client-side so it follows the toggle without a re-run.
+  const bestStrategyId = (() => {
+    const top = strategyGroups[0];
+    if (!top || !top.best) return null;
+    if (!hasOos) return top.strategy;
+    return top.best.robust ? top.strategy : null;
+  })();
   const totalMatches = strategyGroups.reduce((s, g) => s + (g.best_parameters?.length || 0), 0);
-  // Out-of-sample columns are shown only when this run used OOS validation.
-  const hasOos = !!(results?.runConfig?.oos_enabled);
 
   const overallPct = Math.round((progress.current / (progress.total || 1)) * 100);
   const stratPct = progress.strategyTotal
     ? Math.round((progress.strategyCurrent / (progress.strategyTotal || 1)) * 100)
     : null;
+
+  // ── ETA readout ──────────────────────────────────────────────────────
+  // Backend sends raw ms + a confidence flag. We subtract the time elapsed
+  // since the snapshot (nowTs - serverNow, clamped ≥0, client clock used only
+  // for the delta — never trusted absolutely) so the number ticks down live.
+  const etaDrift = progress.serverNow ? Math.max(0, nowTs - progress.serverNow) : 0;
+  const liveEtaTotal = progress.etaMsTotal != null ? Math.max(0, progress.etaMsTotal - etaDrift) : null;
+  const liveEtaStrategy = progress.etaMsStrategy != null ? Math.max(0, progress.etaMsStrategy - etaDrift) : null;
+  // OVERALL (whole-run, all strategies) ETA — the headline.
+  let overallEtaLabel = null;
+  if (progress.etaConfidence === 'ok') {
+    const d = formatDuration(liveEtaTotal);
+    overallEtaLabel = d ? `~${d} left` : null;
+  } else if (progress.etaConfidence === 'lowerBound') {
+    const d = formatDuration(liveEtaTotal);
+    overallEtaLabel = d ? `≥ ${d} left` : null;
+  }
+  if (running && !overallEtaLabel) overallEtaLabel = 'estimating…';
+  // PER-STRATEGY "time left" for the current strategy (shown on the strategy line).
+  const stratEtaLabel = (liveEtaStrategy != null) ? formatDuration(liveEtaStrategy) : null;
 
   const renderParamChips = (params) => {
     const entries = Object.entries(params || {}).filter(([k, v]) =>
@@ -873,11 +961,20 @@ export default function Optimizer() {
 
               <div className="text-center space-y-2">
                 <p className="text-xl font-bold text-white">Running Optimization...</p>
+                {overallEtaLabel && (
+                  <p className="text-sm text-amber-300 font-semibold" title="Estimated time for the WHOLE run — the current strategy's remaining time plus every strategy still queued.">
+                    ⏳ Overall ETA: {overallEtaLabel}
+                    {progress.totalStrategies > 1 && (
+                      <span className="text-amber-300/60 font-normal"> · all {progress.totalStrategies} strategies</span>
+                    )}
+                  </p>
+                )}
                 {progress.totalStrategies > 1 && progress.strategyLabel && (
                   <p className="text-slate-300">
                     Strategy {(progress.strategyIndex ?? 0) + 1} / {progress.totalStrategies}:{' '}
                     <span className="text-primary font-semibold">{progress.strategyLabel}</span>
                     {stratPct != null && <span className="text-slate-400"> ({stratPct}%)</span>}
+                    {stratEtaLabel && <span className="text-slate-500"> · this strategy ~{stratEtaLabel}</span>}
                   </p>
                 )}
                 <p className="text-slate-400">Overall {progress.current} of {progress.total}</p>
@@ -935,6 +1032,17 @@ export default function Optimizer() {
                     )}
                     {strategyGroups.length} strateg{strategyGroups.length === 1 ? 'y' : 'ies'} · {totalMatches} profitable sets
                   </span>
+                  {hasOos && (
+                    <button
+                      onClick={toggleDeflateRank}
+                      title={"Anti data-mining ranking. Penalizes the in-sample→out-of-sample performance gap (overfitting) and the best-of-N selection bias from trying thousands of param-sets (López de Prado / Bailey, 'Deflated Sharpe'). ON is recommended — it re-ranks instantly, no re-run. OFF ranks by the raw robust score."}
+                      className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors ${deflateRank
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25'
+                        : 'bg-slate-700/60 border-slate-600 text-slate-300 hover:bg-slate-700'}`}
+                    >
+                      {deflateRank ? '🛡️ Anti-overfit ranking: ON' : 'Anti-overfit ranking: OFF'}
+                    </button>
+                  )}
                   <button
                     onClick={clearResults}
                     className="text-xs bg-slate-700 hover:bg-red-600/80 text-slate-200 px-3 py-1 rounded transition-colors"
@@ -949,10 +1057,16 @@ export default function Optimizer() {
               {(() => {
                 const winner = bestStrategyId ? strategyGroups.find(g => g.strategy === bestStrategyId) : null;
                 if (!winner || !winner.best) {
+                  // Distinguish "nothing profitable at all" from "things looked good
+                  // in-sample but ALL failed the held-out window" (overfit) — the
+                  // latter is the honest, important signal when OOS is on.
+                  const overfitOnly = hasOos && totalMatches > 0;
                   return (
                     <div className="p-4 bg-yellow-500/10 border border-yellow-500/40 rounded-lg text-yellow-300 text-sm flex items-center gap-2">
-                      <AlertTriangle className="w-4 h-4" />
-                      No profitable parameter set met the criteria for any strategy. Try loosening the filters or widening the date range.
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      {overfitOnly
+                        ? 'No strategy held up out-of-sample. Every candidate that looked good on the training window failed on the held-out window — i.e. overfit. Nothing here is safe to trade as-is; widen the date range, loosen the filters, or try other strategies. (Sets are still listed below for inspection, dimmed.)'
+                        : 'No profitable parameter set met the criteria for any strategy. Try loosening the filters or widening the date range.'}
                     </div>
                   );
                 }
@@ -962,7 +1076,7 @@ export default function Optimizer() {
                     <div className="flex items-center gap-2 mb-3 flex-wrap">
                       <Trophy className="w-5 h-5 text-amber-400" />
                       <span className="text-amber-300 font-bold">Best Strategy: {winner.label}</span>
-                      <span className="text-xs text-slate-400">(score {fmtScore(winner.best.score)})</span>
+                      <span className="text-xs text-slate-400">(score {fmtScore(hasOos && winner.best.robust ? activeRank(winner.best) : winner.best.score)})</span>
                       {hasOos && winner.best.oos && (
                         winner.best.robust
                           ? <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-300">🛡️ Holds up out-of-sample</span>
@@ -987,8 +1101,24 @@ export default function Optimizer() {
                         <div><div className="text-[11px] text-emerald-400">OOS PF</div><div className="text-purple-300">{fmtPF(winner.best.oos.profitFactor)}</div></div>
                       </div>
                     )}
+                    {/* FULL-RANGE reconciliation — the single most-confusing thing
+                        about OOS results: the headline PnL above is the in-sample
+                        (train, ~70%) window, but the Backtester runs the WHOLE range.
+                        Execution is parity-clean (proven by backend/scripts/parityHarness.js),
+                        so the Backtester reproduces THESE full-range numbers 1:1. */}
+                    {hasOos && winner.best.full && (
+                      <div className="mt-3 pt-2 border-t border-amber-500/20 text-[11px] flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="text-slate-300 font-medium">📐 Full range (what the Backtester reproduces 1:1):</span>
+                        <span className="text-slate-400">PnL <span className={`font-mono ${(winner.best.full.totalPnL ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtPnL(winner.best.full.totalPnL)}</span></span>
+                        <span className="text-slate-400">Win <span className="text-slate-200">{winner.best.full.winRate}%</span></span>
+                        <span className="text-slate-400">Trades <span className="text-slate-200">{winner.best.full.totalTrades}</span></span>
+                        <span className="text-slate-400">Max DD <span className="text-red-400">{winner.best.full.maxDrawdown}%</span></span>
+                        <span className="text-slate-500 w-full">↳ The “PnL (IS)” above is the in-sample {Math.round((1 - (results.runConfig?.oos_fraction ?? 0.3)) * 100)}% window used for selection — it is intentionally NOT what a full backtest shows.</span>
+                      </div>
+                    )}
                     <button
                       className="mt-3 text-xs bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 px-3 py-1.5 rounded"
+                      title={winner.best.full ? `Replays the exact recorded params over the full range — expect ≈ ${fmtPnL(winner.best.full.totalPnL)} PnL · ${winner.best.full.winRate}% win · ${winner.best.full.totalTrades} trades` : 'Replays the exact recorded params over the full range'}
                       onClick={() => handleTestClick(winner.best, winner.strategy)}>
                       Test best on Backtester →
                     </button>
@@ -1017,7 +1147,10 @@ export default function Optimizer() {
                   </thead>
                   <tbody className="text-sm">
                     {strategyGroups.map((g, idx) => {
-                      const m = g.best?.metrics || {};
+                      // Under OOS, headline columns show the REPRODUCIBLE full-range
+                      // metrics (what "Test" shows + what ranking aligns to), not the
+                      // train-only 70% window. OOS columns still show the held-out view.
+                      const m = (hasOos && g.best?.full) ? g.best.full : (g.best?.metrics || {});
                       const isWinner = g.strategy === bestStrategyId && g.best;
                       const isOpen = expandedStrategy === g.strategy;
                       return (
@@ -1037,7 +1170,13 @@ export default function Optimizer() {
                             </td>
                             {g.best ? (
                               <>
-                                <td className="p-2 font-mono text-amber-300">{fmtScore(g.best.score)}</td>
+                                <td className="p-2 font-mono text-amber-300">
+                                  {hasOos
+                                    ? (g.best.robust
+                                        ? fmtScore(activeRank(g.best))
+                                        : <span className="text-red-400/70 text-[11px]">overfit</span>)
+                                    : fmtScore(g.best.score)}
+                                </td>
                                 <td className="p-2 text-green-400">{m.winRate}%</td>
                                 <td className="p-2 font-mono">{fmtPnL(m.totalPnL)}</td>
                                 <td className="p-2">{m.totalTrades}</td>
@@ -1090,7 +1229,8 @@ export default function Optimizer() {
                                     </thead>
                                     <tbody>
                                       {g.best_parameters.slice(0, 25).map((res, ridx) => {
-                                        const rm = res.metrics || {};
+                                        // Full-range (reproducible) metrics under OOS; train metrics otherwise.
+                                        const rm = (hasOos && res.full) ? res.full : (res.metrics || {});
                                         // Stable key from the (deduped) param set so row
                                         // selection survives re-renders/reordering.
                                         const rowKey = `${g.strategy}::${JSON.stringify(res.params)}`;
@@ -1099,7 +1239,13 @@ export default function Optimizer() {
                                             className={`border-b border-slate-800/60 hover:bg-slate-800/40 cursor-pointer ${selectedResult === res ? 'bg-slate-800/70' : ''}`}
                                             onClick={() => setSelectedResult(res)}>
                                             <td className="p-2 font-bold text-primary">#{ridx + 1}</td>
-                                            <td className="p-2 font-mono text-amber-300">{fmtScore(res.score)}</td>
+                                            <td className="p-2 font-mono text-amber-300">
+                                              {hasOos
+                                                ? (res.robust
+                                                    ? fmtScore(activeRank(res))
+                                                    : <span className="text-red-400/70 text-[11px]">overfit</span>)
+                                                : fmtScore(res.score)}
+                                            </td>
                                             <td className="p-2 text-green-400">{rm.winRate}%</td>
                                             <td className="p-2 font-mono">{fmtPnL(rm.totalPnL)}</td>
                                             <td className="p-2">{rm.totalTrades}</td>
@@ -1124,6 +1270,7 @@ export default function Optimizer() {
                                             <td className="p-2">
                                               <div className="flex gap-1">
                                                 <button className="text-xs bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-white"
+                                                  title={res.full ? `Backtester (full range) reproduces ≈ ${fmtPnL(res.full.totalPnL)} · ${res.full.winRate}% win · ${res.full.totalTrades} trades${hasOos ? ' (the columns above are in-sample/OOS, not full-range)' : ''}` : 'Replays the exact recorded params'}
                                                   onClick={(e) => { e.stopPropagation(); handleTestClick(res, g.strategy); }}>
                                                   Test
                                                 </button>

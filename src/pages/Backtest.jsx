@@ -398,9 +398,42 @@ export default function Backtest() {
          .then(res => setSavedConfigs(res.data))
          .catch(err => console.error("Failed to fetch saved strategies", err));
 
-      axios.get(`${API_URL}/config/symbols`) // Live Bot Strategies
-         .then(res => setLiveConfigs(res.data))
-         .catch(err => console.error("Failed to fetch live configs", err));
+      // Live Bot Strategies — read from the multi-deployment collection so
+      // EVERY deployed strategy shows up (the legacy /config/symbols can only
+      // hold one strategy per symbol). Each deployment is normalized to the
+      // loader shape: { _key, name, symbol, strategyName, params }.
+      // Falls back to the legacy endpoint when /api/deployments is
+      // unavailable (older backend image) or returns nothing.
+      axios.get(`${API_URL}/deployments`)
+         .then(res => {
+             const deps = Array.isArray(res.data) ? res.data : [];
+             if (deps.length > 0) {
+                 setLiveConfigs(deps.map(d => ({
+                     _key: d._id,
+                     name: d.name,
+                     symbol: d.symbol,
+                     strategyName: d.strategyName,
+                     params: d.params || {},
+                     isActive: d.isActive,
+                     tradeMode: d.tradeMode,
+                 })));
+                 return;
+             }
+             throw new Error('no deployments');
+         })
+         .catch(() => {
+             axios.get(`${API_URL}/config/symbols`) // legacy fallback
+                .then(res => setLiveConfigs((res.data || []).map(c => ({
+                    _key: c.symbol,
+                    name: c.symbol === 'DEFAULT' ? 'Global Default Params' : `${c.strategyName || 'Strategy'} (${c.symbol})`,
+                    symbol: c.symbol,
+                    strategyName: c.strategyName,
+                    params: c.params || {},
+                    isActive: c.isActive,
+                    tradeMode: c.tradeMode,
+                }))))
+                .catch(err => console.error("Failed to fetch live configs", err));
+         });
   }, []);
 
   // Handle incoming params from Dashboard/Optimizer
@@ -431,7 +464,8 @@ export default function Backtest() {
                   'VwapScalpStrategy': 'vwap_scalp',
                   'MomentumScalpStrategy': 'momentum_scalp',
                   'TrendLineStrategy': 'trend_line',
-                  'RlStrategy': 'rl_agent'
+                  'RlStrategy': 'rl_agent',
+                  'ApexConfluenceStrategy': 'apex_confluence'
               };
               if (STRATEGY_MAPPING[strategyId]) {
                   strategyId = STRATEGY_MAPPING[strategyId];
@@ -760,14 +794,35 @@ export default function Backtest() {
     const cleanParams = preparePayload(mergedRaw);
 
     try {
-        await axios.post(`${API_URL}/config/symbols`, {
-            symbol: params.symbol,
-            strategy: params.strategy,
-            params: cleanParams,
-            isActive: true, 
-            tradeMode: 'LIVE' 
-        });
-        alert(`🚀 Deployed to Live Bot for ${params.symbol}!`);
+        // Deploy as a multi-strategy DEPLOYMENT (one row per symbol+strategy+
+        // resolution — this is what the Dashboard's Multi-Strategy Deployments
+        // panel shows). On 409 the same (symbol, strategy, resolution) tuple
+        // already exists → the legacy upsert path updates it in place (and
+        // dual-writes the deployment mirror). On 404 the backend image is
+        // pre-deployments → legacy path still works alone.
+        const resolution = String(cleanParams.resolution || '5');
+        try {
+            await axios.post(`${API_URL}/deployments`, {
+                name: `${params.symbol} · ${params.strategy} · ${resolution}m`,
+                symbol: params.symbol,
+                strategyName: params.strategy,
+                params: cleanParams,
+                isActive: true,
+                tradeMode: 'LIVE',
+            });
+        } catch (depErr) {
+            const code = depErr.response?.status;
+            if (code !== 409 && code !== 404) throw depErr;
+            // Duplicate tuple or old backend — upsert via the legacy route.
+            await axios.post(`${API_URL}/config/symbols`, {
+                symbol: params.symbol,
+                strategy: params.strategy,
+                params: cleanParams,
+                isActive: true,
+                tradeMode: 'LIVE'
+            });
+        }
+        alert(`🚀 Deployed to Live Bot for ${params.symbol}! Check the Multi-Strategy Deployments panel on the Dashboard.`);
     } catch (err) {
         alert("❌ Deploy Failed: " + (err.response?.data?.error || err.message));
     }
@@ -1158,11 +1213,14 @@ export default function Backtest() {
              {/* Live Bot Config Loader */}
              {liveConfigs.length > 0 && (
                  <div className="bg-slate-800 p-3 rounded border border-slate-600">
-                     <label className="block text-xs font-bold text-green-400 mb-2">📂 Load Saved Strategy (Live Bot)</label>
-                     <select 
+                     <label className="block text-xs font-bold text-green-400 mb-2">📂 Load Deployed Strategy (Live Bot)</label>
+                     <select
                          className="w-full bg-slate-900 border border-slate-500 rounded p-2 text-white text-sm"
                          onChange={(e) => {
-                             const cfg = liveConfigs.find(c => c.symbol === e.target.value);
+                             // Keyed by _key (deployment _id, or symbol for legacy
+                             // fallback rows) — symbol alone collides now that
+                             // multiple strategies can be deployed per symbol.
+                             const cfg = liveConfigs.find(c => (c._key || c.symbol) === e.target.value);
                              if (cfg) {
                                   setParams(prev => {
                                       let computedLotSize = prev.lot_size;
@@ -1179,17 +1237,19 @@ export default function Backtest() {
                                           symbol: cfg.symbol,
                                           strategy: cfg.strategyName || 'mta_ema_crossover',
                                           ...cfg.params,
-                                          lot_size: computedLotSize 
+                                          lot_size: computedLotSize
                                       };
                                   });
                               }
                          }}
                          defaultValue=""
                      >
-                         <option value="" disabled>-- Select a Live Bot Strategy --</option>
+                         <option value="" disabled>-- Select a Deployed Strategy --</option>
                          {liveConfigs.map(cfg => (
-                             <option key={cfg.symbol} value={cfg.symbol}>
-                                 {cfg.symbol === 'DEFAULT' ? 'Global Default Params' : `${cfg.strategyName || 'Strategy'} (${cfg.symbol})`}
+                             <option key={cfg._key || cfg.symbol} value={cfg._key || cfg.symbol}>
+                                 {cfg.name || `${cfg.strategyName || 'Strategy'} (${cfg.symbol})`}
+                                 {cfg.isActive === false ? ' · inactive' : ''}
+                                 {cfg.tradeMode === 'LIVE' ? ' · LIVE' : ''}
                              </option>
                          ))}
                      </select>
@@ -1218,6 +1278,7 @@ export default function Backtest() {
                 <option value="vwap_scalp">VWAP Rejection Scalp</option>
                 <option value="momentum_scalp">Momentum RSI-EMA Scalp</option>
                 <option value="trend_line">Trend Line Support/Resistance 📐</option>
+                <option value="apex_confluence">Apex Confluence (Pullback + Fade) 🎯</option>
                 <option value="universal">Universal / Discovery Mode</option>
                 <option value="rl_agent">RL Agent Strategy 🤖</option>
               </select>
