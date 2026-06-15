@@ -1807,21 +1807,48 @@ export default function Dashboard() {
                                           }
                                       }
                                       const r = await axios.get(`${API_URL}/live-ai-logs/${logId}/prompt`);
-                                      // Open in a new window for readability instead of alert()
+                                      // Open in a new window for readability instead of alert().
+                                      // Show BOTH sides: the prompt sent AND the AI's raw
+                                      // response + failure code — so third-party parse/API
+                                      // errors are debuggable from one screen.
+                                      const esc = (s) => String(s == null ? '' : s)
+                                          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
                                       const w = window.open('', '_blank');
                                       if (w) {
+                                          const d = r.data || {};
+                                          const failed = !!(d.failure_type || d.failure_detail);
+                                          const verdict = d.decision
+                                              ? `${d.decision}${d.confidence != null ? ` @ ${Math.round(d.confidence)}%` : ''}`
+                                              : '(no decision)';
+                                          const failBlock = failed
+                                              ? '<h2 style="color:#f87171">⚠ Failure</h2>' +
+                                                '<p>type: <b>' + esc(d.failure_type || '—') + '</b>' +
+                                                ' · detail: <b>' + esc(d.failure_detail || '—') + '</b></p>' +
+                                                (d.failure_message ? '<p>' + esc(d.failure_message) + '</p>' : '') +
+                                                (d.last_poll_error ? '<p>last poll error: ' + esc(d.last_poll_error) + '</p>' : '')
+                                              : '';
+                                          const rawBlock =
+                                              '<h2 style="color:#34d399">AI Raw Response</h2>' +
+                                              (d.reasoning ? '<p style="color:#94a3b8">reasoning: ' + esc(d.reasoning) + '</p>' : '') +
+                                              '<pre style="background:#1e293b;padding:12px;border-radius:6px;overflow:auto">' +
+                                              (d.raw_response ? esc(d.raw_response) : '(no raw response captured — pure API/timeout error, or a log written before raw-capture shipped)') +
+                                              '</pre>';
                                           w.document.write(
-                                              '<html><head><title>AI Prompt</title>' +
-                                              '<style>body{background:#0f172a;color:#e2e8f0;font-family:monospace;padding:24px;white-space:pre-wrap;word-wrap:break-word;font-size:13px;line-height:1.5}h2{color:#a78bfa;margin-top:0}</style>' +
-                                              '</head><body><h2>AI Prompt (Model: ' + (r.data.model || 'unknown') + ')</h2>' +
-                                              (r.data.thinking_enabled ? '<p style="color:#fbbf24">🧠 Extended thinking was enabled</p>' : '') +
+                                              '<html><head><title>AI Exchange</title>' +
+                                              '<style>body{background:#0f172a;color:#e2e8f0;font-family:monospace;padding:24px;white-space:pre-wrap;word-wrap:break-word;font-size:13px;line-height:1.5}h2{color:#a78bfa;margin-top:24px}pre{white-space:pre-wrap;word-wrap:break-word}</style>' +
+                                              '</head><body>' +
+                                              '<h2 style="margin-top:0">AI Exchange — ' + esc(d.model || 'unknown') + ' · verdict: ' + esc(verdict) + '</h2>' +
+                                              (d.thinking_enabled ? '<p style="color:#fbbf24">🧠 Extended thinking was enabled</p>' : '') +
+                                              failBlock +
+                                              rawBlock +
+                                              '<h2>Prompt Sent</h2>' +
                                               '<hr style="border:1px solid #334155"/>' +
-                                              (r.data?.prompt || '(empty)').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') +
+                                              esc(d.prompt || '(empty)') +
                                               '</body></html>'
                                           );
                                           w.document.close();
                                       } else {
-                                          alert(r.data?.prompt || 'No prompt available');
+                                          alert(r.data?.raw_response || r.data?.prompt || 'No data available');
                                       }
                                   } catch (e) {
                                       alert('Failed to rebuild prompt: ' + (e.response?.data?.error || e.message));
@@ -1829,7 +1856,7 @@ export default function Dashboard() {
                               }}
                               className="mt-3 px-3 py-1.5 rounded bg-violet-700 hover:bg-violet-600 text-white text-xs"
                           >
-                              📋 View AI prompt that was sent
+                              📋 View AI prompt + raw response
                           </button>
                       )}
                   </div>
