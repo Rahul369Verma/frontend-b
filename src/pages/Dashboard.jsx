@@ -473,19 +473,27 @@ export default function Dashboard() {
     );
   };
   const handleClosePosition = async (pos) => {
-      const key = pos.spotSymbol || pos.symbol;
+      // Identify THIS position uniquely. spotSymbol is NOT unique — two
+      // deployments can hold positions on the same underlying — so prefer
+      // deploymentId, falling back to the (unique) option contract symbol.
+      // We also send deploymentId to the server so it closes the exact
+      // position the user clicked instead of the newest on that underlying.
+      const key = pos.deploymentId || pos.symbol;
       const pnlStr = pos.pnl != null
           ? ` (PnL ${pos.pnl >= 0 ? '+' : ''}₹${Math.round(pos.pnl).toLocaleString()})`
           : '';
       if (!window.confirm(`Close ${pos.symbol}${pnlStr}?\n\nThis fires a market exit via the broker.`)) return;
       setClosingSymbols(s => ({ ...s, [key]: true }));
       try {
-          const res = await axios.post(`${API_URL}/engine/close-position`, { spotSymbol: pos.spotSymbol });
+          const res = await axios.post(`${API_URL}/engine/close-position`, {
+              deploymentId: pos.deploymentId || null,
+              spotSymbol: pos.spotSymbol,
+          });
           if (res.data?.success) {
               console.log(`✅ Closed ${pos.symbol}`, res.data);
               // Optimistically drop from local state — the next dashboard_update
               // will reflect the authoritative server state in <2s anyway.
-              setPositions(prev => prev.filter(p => (p.spotSymbol || p.symbol) !== key));
+              setPositions(prev => prev.filter(p => (p.deploymentId || p.symbol) !== key));
           } else {
               alert(`❌ Close failed: ${res.data?.message || 'Unknown error'}`);
           }
@@ -1275,7 +1283,10 @@ export default function Dashboard() {
                                   no-op). Both paths confirm with the user before
                                   hitting the server. */}
                               {(() => {
-                                  const lockKey = isOrphan ? `orphan:${pos.trade_id}` : (pos.spotSymbol || pos.symbol);
+                                  // Must match the key used in handleClosePosition (deploymentId
+                                  // first, then the unique option symbol) — spotSymbol is not
+                                  // unique across two deployments on the same underlying.
+                                  const lockKey = isOrphan ? `orphan:${pos.trade_id}` : (pos.deploymentId || pos.symbol);
                                   const isClosing = !!closingSymbols[lockKey];
                                   if (isOrphan) {
                                       return (

@@ -38,10 +38,17 @@ const fmtPct = (n) => (n == null || !Number.isFinite(Number(n))) ? '—' : `${Nu
 const fmtNum = (n, d = 2) => (n == null || !Number.isFinite(Number(n))) ? '—' : Number(n).toFixed(d);
 
 // Net PnL — prefers post-charges field when present, else gross.
+// IMPORTANT: skip null/undefined explicitly. `Number(null) === 0` is finite,
+// so a naive `Number(c); isFinite(v) → return` loop would return 0 on the
+// first iteration whenever `net_pnl: null` is present (which is what the live
+// engine writes today). That would mask the real `pnl` field and zero out
+// every recent trade — see the KPI strip / Equity Curve regression where only
+// trades MISSING the net_pnl field (older docs) rendered correctly.
 const tradePnl = (t) => {
     if (t == null) return 0;
     const candidates = [t.net_pnl, t.pnl, t.gross_pnl];
     for (const c of candidates) {
+        if (c == null) continue;       // null / undefined → fall through
         const v = Number(c);
         if (Number.isFinite(v)) return v;
     }
