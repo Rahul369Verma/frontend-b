@@ -465,7 +465,12 @@ export default function Backtest() {
                   'MomentumScalpStrategy': 'momentum_scalp',
                   'TrendLineStrategy': 'trend_line',
                   'RlStrategy': 'rl_agent',
-                  'ApexConfluenceStrategy': 'apex_confluence'
+                  'ApexConfluenceStrategy': 'apex_confluence',
+                  'SmcOrderBlockStrategy': 'smc_ob',
+                  'LiquiditySweepStrategy': 'liquidity_sweep',
+                  'WyckoffSpringStrategy': 'wyckoff_spring',
+                  'FibonacciPullbackStrategy': 'fib_golden_pocket',
+                  'QuantumReversionStrategy': 'quantum_qho'
               };
               if (STRATEGY_MAPPING[strategyId]) {
                   strategyId = STRATEGY_MAPPING[strategyId];
@@ -978,8 +983,12 @@ export default function Backtest() {
     const runAccurateResim = async (decisions, resultId) => {
       try {
         allAiDecisionsRef.current = decisions;
-        const followAiSl = params?.ai_follow_sl !== false;
-        const followAiTp = params?.ai_follow_tp !== false;
+        // Parity with the live engine (liveEngine.js _followAiSl/_followAiTp):
+        // an UNDEFINED flag means OFF, not on. Only an explicit `true` follows AI
+        // levels. (Previously `!== false` treated undefined as ON, which made the
+        // backtest follow AI SL/TP while live did not — same params, opposite behavior.)
+        const followAiSl = params?.ai_follow_sl === true;
+        const followAiTp = params?.ai_follow_tp === true;
         const followStrategyExits = params?.ai_follow_strategy_exits === true;
         const useFairEntryInitial = params?.use_ai_fair_entry === true;
         const initialMode = useFairEntryInitial
@@ -1279,6 +1288,11 @@ export default function Backtest() {
                 <option value="momentum_scalp">Momentum RSI-EMA Scalp</option>
                 <option value="trend_line">Trend Line Support/Resistance 📐</option>
                 <option value="apex_confluence">Apex Confluence (Pullback + Fade) 🎯</option>
+                <option value="smc_ob">Smart Money Concepts (BOS/CHoCH + OB) 🏦</option>
+                <option value="liquidity_sweep">Liquidity Sweep / Stop-Hunt Reversal 💧</option>
+                <option value="wyckoff_spring">Wyckoff Spring / Upthrust Reversal 🪤</option>
+                <option value="fib_golden_pocket">Fibonacci Golden Pocket Pullback 📐</option>
+                <option value="quantum_qho">Quantum QHO Mean-Reversion ⚛️</option>
                 <option value="universal">Universal / Discovery Mode</option>
                 <option value="rl_agent">RL Agent Strategy 🤖</option>
               </select>
@@ -2455,17 +2469,17 @@ export default function Backtest() {
                                     <input
                                         type="checkbox"
                                         className="w-3.5 h-3.5 accent-violet-500"
-                                        checked={params.ai_follow_sl !== false}
+                                        checked={params.ai_follow_sl === true}
                                         onChange={e => setParams({
                                             ...params,
                                             ai_follow_sl: e.target.checked,
                                             // Keep legacy combined flag in sync for any consumer that still reads it
-                                            ai_follow_sl_tp: e.target.checked && (params.ai_follow_tp !== false),
+                                            ai_follow_sl_tp: e.target.checked && (params.ai_follow_tp === true),
                                         })}
                                     />
                                     <span className="text-[11px] text-slate-300 font-medium">Follow AI SL</span>
                                     <span className="text-[10px] text-slate-500">
-                                        {params.ai_follow_sl !== false
+                                        {params.ai_follow_sl === true
                                             ? 'Use AI-suggested stop-loss (wide safety net)'
                                             : 'Use strategy stop-loss'}
                                     </span>
@@ -2474,16 +2488,16 @@ export default function Backtest() {
                                     <input
                                         type="checkbox"
                                         className="w-3.5 h-3.5 accent-violet-500"
-                                        checked={params.ai_follow_tp !== false}
+                                        checked={params.ai_follow_tp === true}
                                         onChange={e => setParams({
                                             ...params,
                                             ai_follow_tp: e.target.checked,
-                                            ai_follow_sl_tp: e.target.checked && (params.ai_follow_sl !== false),
+                                            ai_follow_sl_tp: e.target.checked && (params.ai_follow_sl === true),
                                         })}
                                     />
                                     <span className="text-[11px] text-slate-300 font-medium">Follow AI TP</span>
                                     <span className="text-[10px] text-slate-500">
-                                        {params.ai_follow_tp !== false
+                                        {params.ai_follow_tp === true
                                             ? 'Use AI-suggested take-profit (realistic target)'
                                             : 'Use strategy take-profit'}
                                     </span>

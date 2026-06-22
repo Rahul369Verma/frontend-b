@@ -3,7 +3,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-    BarChart, Bar, ReferenceLine, Cell,
+    BarChart, Bar, ReferenceLine, Cell, LabelList,
 } from 'recharts';
 import {
     ArrowLeft, RefreshCw, Activity, TrendingUp, TrendingDown,
@@ -713,8 +713,18 @@ function buildHistogram(pnls) {
     if (!pnls.length) return [];
     // Bins symmetric around zero, width chosen from the range.
     const max = Math.max(...pnls.map(Math.abs));
-    if (max === 0) return [{ bin: '0', count: pnls.length, isPositive: false }];
-    const nBins = 13; // odd → middle bin straddles zero
+    if (max === 0) {
+        return [{ bin: '₹0', count: pnls.length, isPositive: false, range: 'all trades = ₹0', lo: 0, hi: 0 }];
+    }
+    // Adaptive bin count — 13 bins on a 5-trade dataset spreads things too
+    // thin and makes two close-magnitude losses (which legitimately share
+    // a bin) look like "only one loss". Always odd so 0 sits in a center bin.
+    let nBins;
+    if      (pnls.length <= 5)  nBins = 5;
+    else if (pnls.length <= 12) nBins = 7;
+    else if (pnls.length <= 25) nBins = 9;
+    else if (pnls.length <= 50) nBins = 11;
+    else                        nBins = 13;
     const half = Math.floor(nBins / 2);
     const binWidth = max / half;
     const buckets = new Array(nBins).fill(0);
@@ -725,12 +735,17 @@ function buildHistogram(pnls) {
         buckets[i]++;
     }
     return buckets.map((count, i) => {
-        const center = (i - half + 0.5) * binWidth;
+        const lo     = (i - half) * binWidth;
+        const hi     = (i - half + 1) * binWidth;
+        const center = (lo + hi) / 2;
         return {
-            bin: fmtINR(center),
+            // X-axis label is the bin RANGE (not the center) so users don't
+            // misread "-₹1,276" as "the loss was exactly -₹1,276".
+            bin: `${fmtINR(lo)}…${fmtINR(hi)}`,
             count,
             isPositive: center > 0,
-            center,
+            center, lo, hi,
+            range: `${fmtINR(lo)} → ${fmtINR(hi)}`,
         };
     });
 }
@@ -780,22 +795,49 @@ function DistributionView({ histogram, hourMap, kpis }) {
             {/* PnL Distribution */}
             <div>
                 <h3 className="text-base font-semibold text-slate-200 mb-3">Trade PnL Distribution</h3>
-                <ResponsiveContainer width="100%" height={260}>
-                    <BarChart data={histogram} margin={{ top: 10, right: 20, bottom: 30, left: 10 }}>
+                <ResponsiveContainer width="100%" height={280}>
+                    <BarChart data={histogram} margin={{ top: 24, right: 20, bottom: 30, left: 10 }}>
                         <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
-                        <XAxis dataKey="bin" stroke="#94a3b8" tick={{ fontSize: 10 }} angle={-30} textAnchor="end" />
-                        <YAxis stroke="#94a3b8" tick={{ fontSize: 11 }} />
+                        {/* Each tick is now a RANGE (e.g. "-₹1,392…-₹1,160"), not a single
+                            point — so users don't read the center as "the exact loss". */}
+                        <XAxis
+                            dataKey="bin"
+                            stroke="#94a3b8"
+                            tick={{ fontSize: 10 }}
+                            angle={-30}
+                            textAnchor="end"
+                            interval={0}
+                        />
+                        <YAxis stroke="#94a3b8" tick={{ fontSize: 11 }} allowDecimals={false} />
                         <Tooltip
+                            cursor={{ fill: 'rgba(148, 163, 184, 0.08)' }}
                             contentStyle={{ background: '#0f172a', border: '1px solid #334155', fontSize: 12 }}
-                            formatter={(v) => [`${v} trades`, '']}
+                            formatter={(v, _name, ctx) => [
+                                `${v} trade${v === 1 ? '' : 's'}`,
+                                ctx?.payload?.range || 'range',
+                            ]}
+                            labelFormatter={() => ''}
                         />
                         <Bar dataKey="count" radius={[2, 2, 0, 0]}>
+                            {/* Show the count above every non-empty bar so the
+                                "two losses in one bin" case is immediately legible
+                                (instead of a single bar that looks like one trade). */}
+                            <LabelList
+                                dataKey="count"
+                                position="top"
+                                fill="#cbd5e1"
+                                fontSize={11}
+                                formatter={(v) => (v > 0 ? v : '')}
+                            />
                             {histogram.map((b, i) => (
                                 <Cell key={i} fill={b.isPositive ? '#34d399' : '#f87171'} />
                             ))}
                         </Bar>
                     </BarChart>
                 </ResponsiveContainer>
+                <div className="text-[10px] text-slate-500 mt-1">
+                    Each bar = a PnL <span className="text-slate-400">range</span>, not a single trade. A bar of height N means N trades fell into that range — hover for the exact bracket.
+                </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 text-xs">
                     <Kpi label="Avg Win"  value={fmtINR(kpis.avgWin)}  valueCls="text-emerald-400" />
                     <Kpi label="Avg Loss" value={fmtINR(-kpis.avgLoss)} valueCls="text-red-400" />

@@ -105,7 +105,7 @@ export function GlobalProvider({ children }) {
   const [optimizerParams, setOptimizerParams] = useState({
     symbol: defaultSymbol,
     lot_size: defaultLotSize,
-    resolution: '1',
+    resolution: '5',   // default base TF — 5m, not 1m: 1-minute manufactures noise-trading (dozens of signals/day), driving over-trading. 5m gives fewer, more reliable setups.
     start_date: '2025-06-01',
     end_date: '2026-02-21',
     capital: 50000,

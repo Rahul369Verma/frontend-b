@@ -1111,7 +1111,7 @@ export default function Optimizer() {
                         <span className="text-slate-300 font-medium">📐 Full range (what the Backtester reproduces 1:1):</span>
                         <span className="text-slate-400">PnL <span className={`font-mono ${(winner.best.full.totalPnL ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtPnL(winner.best.full.totalPnL)}</span></span>
                         <span className="text-slate-400">Win <span className="text-slate-200">{winner.best.full.winRate}%</span></span>
-                        <span className="text-slate-400">Trades <span className="text-slate-200">{winner.best.full.totalTrades}</span></span>
+                        <span className="text-slate-400">Trades <span className="text-slate-200">{winner.best.full.totalTrades}{winner.best.full.tradingDays ? ` (${(winner.best.full.totalTrades / winner.best.full.tradingDays).toFixed(1)}/day)` : ''}</span></span>
                         <span className="text-slate-400">Max DD <span className="text-red-400">{winner.best.full.maxDrawdown}%</span></span>
                         <span className="text-slate-500 w-full">↳ The “PnL (IS)” above is the in-sample {Math.round((1 - (results.runConfig?.oos_fraction ?? 0.3)) * 100)}% window used for selection — it is intentionally NOT what a full backtest shows.</span>
                       </div>
@@ -1179,7 +1179,7 @@ export default function Optimizer() {
                                 </td>
                                 <td className="p-2 text-green-400">{m.winRate}%</td>
                                 <td className="p-2 font-mono">{fmtPnL(m.totalPnL)}</td>
-                                <td className="p-2">{m.totalTrades}</td>
+                                <td className="p-2">{m.totalTrades}{m.tradingDays ? <span className="text-slate-500" title="trades per trading day"> ({(m.totalTrades / m.tradingDays).toFixed(1)}/d)</span> : null}</td>
                                 <td className="p-2 text-red-400">{m.maxDrawdown}%</td>
                                 <td className="p-2 text-blue-400">{m.sharpeRatio}</td>
                                 <td className="p-2 text-purple-300">{fmtPF(m.profitFactor)}</td>
@@ -1248,7 +1248,7 @@ export default function Optimizer() {
                                             </td>
                                             <td className="p-2 text-green-400">{rm.winRate}%</td>
                                             <td className="p-2 font-mono">{fmtPnL(rm.totalPnL)}</td>
-                                            <td className="p-2">{rm.totalTrades}</td>
+                                            <td className="p-2">{rm.totalTrades}{rm.tradingDays ? <span className="text-slate-500" title="trades per trading day"> ({(rm.totalTrades / rm.tradingDays).toFixed(1)}/d)</span> : null}</td>
                                             <td className="p-2 text-red-400">{rm.maxDrawdown}%</td>
                                             <td className="p-2 text-blue-400">{rm.sharpeRatio}</td>
                                             <td className="p-2 text-purple-300">{fmtPF(rm.profitFactor)}</td>

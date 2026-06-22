@@ -50,6 +50,11 @@ const KNOWN_STRATEGIES_FALLBACK = [
     { id: 'trend_line', label: 'Trend Line Support/Resistance' },
     { id: 'rl_agent', label: 'RL Agent' },
     { id: 'apex_confluence', label: 'Apex Confluence (Pullback + Fade)' },
+    { id: 'smc_ob', label: 'Smart Money Concepts (BOS/CHoCH + Order Block)' },
+    { id: 'liquidity_sweep', label: 'Liquidity Sweep / Stop-Hunt Reversal' },
+    { id: 'wyckoff_spring', label: 'Wyckoff Spring / Upthrust Reversal' },
+    { id: 'fib_golden_pocket', label: 'Fibonacci Golden Pocket Pullback' },
+    { id: 'quantum_qho', label: 'Quantum QHO Mean-Reversion' },
 ];
 
 const KNOWN_SYMBOLS = [
