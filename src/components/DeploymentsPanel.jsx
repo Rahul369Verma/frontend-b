@@ -55,6 +55,7 @@ const KNOWN_STRATEGIES_FALLBACK = [
     { id: 'wyckoff_spring', label: 'Wyckoff Spring / Upthrust Reversal' },
     { id: 'fib_golden_pocket', label: 'Fibonacci Golden Pocket Pullback' },
     { id: 'quantum_qho', label: 'Quantum QHO Mean-Reversion' },
+    { id: 'volume_surge', label: 'Volume Surge (Climax Fade)' },
 ];
 
 const KNOWN_SYMBOLS = [

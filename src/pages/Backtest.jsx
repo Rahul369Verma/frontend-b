@@ -178,26 +178,37 @@ export default function Backtest() {
 
     // aiResimMap is already a derived view (resimVariants[aiSlTpView]).
     const activeResimMap = aiResimMap;
+
+    // Confidence-threshold parity with the live engine: live BLOCKS entry when
+    // ai_confidence < ai_confidence_threshold (liveEngine.js ~5319). Both values
+    // are on a 0..1 scale here (ai_confidence is stored as d.confidence/100). A
+    // sub-threshold CONFIRM is therefore "not taken" in the AI scenario — 0 P&L
+    // and excluded from confirmed-trade stats — exactly as live would skip it.
+    // Without this, backtest counts the 55-59% confirms that live never trades.
+    const _aiThreshold = params?.ai_confidence_threshold ?? 0.60;
+    const takenByAi = (t) => t.ai_decision === 'CONFIRM' && (t.ai_confidence ?? 0) >= _aiThreshold;
+
     const simTrades = trades.map((trade, idx) => {
       const serverSim = activeResimMap?.get(idx);
       if (serverSim) {
-        // REJECT trades are not taken in the AI scenario → equity curve uses 0.
-        // We still keep ai_sim_exit so the table can show the "what-if" exit spot/reason.
-        const isReject = trade.ai_decision === 'REJECT';
+        // Not-taken trades (REJECT, or a CONFIRM below the confidence threshold)
+        // are not entered in the AI scenario → equity curve uses 0. We still keep
+        // ai_sim_exit so the table can show the "what-if" exit spot/reason.
+        const notTaken = !takenByAi(trade);
         return {
           ...trade,
           ai_sim_exit: serverSim.ai_exit,
-          ai_sim_pnl: isReject ? 0 : serverSim.ai_pnl,
+          ai_sim_pnl: notTaken ? 0 : serverSim.ai_pnl,
           fair_skipped: serverSim.fair_skipped || false,
           fair_entry_spot: serverSim.fair_entry_spot ?? null,
           fair_entry_premium: serverSim.fair_entry_premium ?? null,
         };
       }
-      // REJECT → trade not taken in AI scenario (contributes 0 to equity curve)
-      if (trade.ai_decision === 'REJECT') {
+      // Not taken (REJECT or sub-threshold CONFIRM) → contributes 0 to equity curve
+      if (!takenByAi(trade)) {
         return { ...trade, ai_sim_exit: null, ai_sim_pnl: 0 };
       }
-      // CONFIRM but no resim data yet → keep original P&L as placeholder
+      // Taken CONFIRM but no resim data yet → keep original P&L as placeholder
       return { ...trade, ai_sim_exit: null, ai_sim_pnl: trade.pnl };
     });
 
@@ -214,7 +225,7 @@ export default function Backtest() {
     });
 
     const totalAiPnl = simTrades.reduce((s, t) => s + t.ai_sim_pnl, 0);
-    const confirmedTrades = simTrades.filter(t => t.ai_decision === 'CONFIRM');
+    const confirmedTrades = simTrades.filter(takenByAi);
     const wins = confirmedTrades.filter(t => t.ai_sim_pnl > 0).length;
 
     // Max drawdown on AI equity curve
@@ -249,7 +260,7 @@ export default function Backtest() {
       maxDrawdown: +maxDD.toFixed(1),
       sharpe,
     };
-  }, [result, showAiSim, aiResimMap, aiSlTpView]);
+  }, [result, showAiSim, aiResimMap, aiSlTpView, params.ai_confidence_threshold]);
 
   // Map a view mode to the resim flags the server expects.
   const _modeToFlags = (mode) => ({
@@ -470,7 +481,8 @@ export default function Backtest() {
                   'LiquiditySweepStrategy': 'liquidity_sweep',
                   'WyckoffSpringStrategy': 'wyckoff_spring',
                   'FibonacciPullbackStrategy': 'fib_golden_pocket',
-                  'QuantumReversionStrategy': 'quantum_qho'
+                  'QuantumReversionStrategy': 'quantum_qho',
+                  'VolumeSurgeStrategy': 'volume_surge'
               };
               if (STRATEGY_MAPPING[strategyId]) {
                   strategyId = STRATEGY_MAPPING[strategyId];
@@ -1293,6 +1305,7 @@ export default function Backtest() {
                 <option value="wyckoff_spring">Wyckoff Spring / Upthrust Reversal 🪤</option>
                 <option value="fib_golden_pocket">Fibonacci Golden Pocket Pullback 📐</option>
                 <option value="quantum_qho">Quantum QHO Mean-Reversion ⚛️</option>
+                <option value="volume_surge">Volume Surge (Climax Fade) 📊</option>
                 <option value="universal">Universal / Discovery Mode</option>
                 <option value="rl_agent">RL Agent Strategy 🤖</option>
               </select>
