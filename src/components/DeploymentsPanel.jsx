@@ -25,6 +25,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import axios from 'axios';
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000') + '/api';
@@ -112,6 +113,17 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
     const [expanded, setExpanded] = useState({});         // { [deploymentId]: bool } params grid
     const [modeFilter, setModeFilter] = useState('all');  // all | live | paper | inactive
     const [search, setSearch] = useState('');
+    // Whole-panel accordion. Persisted so the user's fold choice survives reload.
+    // Defaults OPEN — this is the primary management surface.
+    const [panelOpen, setPanelOpen] = useState(() => {
+        try { const v = localStorage.getItem('dash:deploymentsOpen'); return v === null ? true : v === '1'; }
+        catch (_) { return true; }
+    });
+    const togglePanel = () => setPanelOpen(prev => {
+        const next = !prev;
+        try { localStorage.setItem('dash:deploymentsOpen', next ? '1' : '0'); } catch (_) {}
+        return next;
+    });
 
     // Fetch the live strategy registry + the user's saved backtest configs
     // once on mount. The saved configs power "Start from Saved Config" in the
@@ -225,16 +237,25 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
 
     return (
         <div className="bg-surface rounded-xl border border-slate-700 p-6">
-            {/* ── Header ──────────────────────────────────────────────────── */}
+            {/* ── Header (click the title to fold the whole panel) ─────────── */}
             <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                <h3 className="text-xl font-bold flex items-center gap-2">
+                <button
+                    type="button"
+                    onClick={togglePanel}
+                    aria-expanded={panelOpen}
+                    title={panelOpen ? 'Collapse panel' : 'Expand panel'}
+                    className="text-xl font-bold flex items-center gap-2 text-left hover:text-primary transition-colors"
+                >
+                    {panelOpen
+                        ? <ChevronDown className="w-4 h-4 text-slate-400" />
+                        : <ChevronRight className="w-4 h-4 text-slate-400" />}
                     🧩 Multi-Strategy Deployments
                     <span className="text-xs font-normal text-slate-500">
                         ({counts.all}) · {Object.keys(bySymbol).length || 0} symbol{Object.keys(bySymbol).length === 1 ? '' : 's'}
                     </span>
-                </h3>
+                </button>
                 <div className="flex items-center gap-2">
-                    {counts.all > 0 && (
+                    {panelOpen && counts.all > 0 && (
                         <button
                             onClick={() => {
                                 const next = {};
@@ -262,6 +283,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                 </div>
             </div>
 
+            {panelOpen && (<>
             {/* ── Filter chips + search (parity with legacy) ───────────────── */}
             {counts.all > 0 && (
                 <div className="flex items-center gap-2 flex-wrap mb-4">
@@ -365,6 +387,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                     );
                 })}
             </div>
+            </>)}
 
             {showCreate && (
                 <CreateDeployment

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import DeploymentsPanel from '../components/DeploymentsPanel';
-import { Play, Square, Activity, DollarSign, TrendingUp, AlertTriangle, Shield, ShoppingCart, List, Database } from 'lucide-react';
+import CollapsibleCard from '../components/CollapsibleCard';
+import { Play, Square, Activity, DollarSign, TrendingUp, AlertTriangle, Shield, ShoppingCart, List, Database, ChevronDown, ChevronRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { io } from 'socket.io-client';
@@ -40,6 +41,16 @@ export default function Dashboard() {
   const [tradesTotal, setTradesTotal] = useState(0);
   const [tradesSearch, setTradesSearch] = useState("");
   const [tradesLimit, setTradesLimit] = useState(10);
+  // Trade History fold state (persisted). Default OPEN.
+  const [tradesExpanded, setTradesExpanded] = useState(() => {
+    try { const v = localStorage.getItem('dash:tradesOpen'); return v === null ? true : v === '1'; }
+    catch (_) { return true; }
+  });
+  const toggleTrades = () => setTradesExpanded(prev => {
+    const next = !prev;
+    try { localStorage.setItem('dash:tradesOpen', next ? '1' : '0'); } catch (_) {}
+    return next;
+  });
 
   // ── Live Activity Feed state ─────────────────────────────────────────────
   // Unified timeline from /api/live-activity (trades + AI rejects/errors + engine errors).
@@ -645,59 +656,63 @@ export default function Dashboard() {
           </div>
       )}
 
-      {/* Global & Symbol Configuration */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Global Defaults */}
-          <div className="bg-surface p-6 rounded-xl border border-slate-700 space-y-4">
-               <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-                    <Shield className="w-5 h-5 text-primary" /> Global Defaults
-                </h3>
-                <div className="space-y-3">
-                    <div className="flex justify-between p-3 bg-slate-800 rounded">
-                        <span className="text-slate-400">Trading Window</span>
+      {/* Global & Symbol Configuration — stacked full-width, each foldable.
+          DeploymentsPanel is THE single place to see and manage every deployed
+          strategy (multiple strategies per symbol, each with its own resolution)
+          and now owns the full width; Global Defaults folds away above it. */}
+      <div className="space-y-6">
+          {/* Global Defaults — collapsible, DEFAULT COLLAPSED. When folded, the
+              header still surfaces a one-line summary + a loud KILL-SWITCH badge. */}
+          <CollapsibleCard
+              title="Global Defaults"
+              icon={Shield}
+              storageKey="dash:globalDefaults"
+              defaultOpen={false}
+              summary={`${globalConfig?.trade_start_time || "09:15"}–${globalConfig?.trade_end_time || "15:30"} · max loss ₹${(globalConfig?.max_daily_loss || 10000).toLocaleString('en-IN')} · ${globalConfig?.max_trades_per_day || 5}/day`}
+              right={globalConfig?.kill_switch
+                  ? <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 font-bold border border-red-500/40">⛔ KILL SWITCH</span>
+                  : null}
+          >
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div className="flex flex-col gap-1 p-3 bg-slate-800 rounded">
+                        <span className="text-xs text-slate-400">Trading Window</span>
                         <span className="font-bold text-white">{globalConfig?.trade_start_time || "09:15"} - {globalConfig?.trade_end_time || "15:30"}</span>
                     </div>
-                     <div className="flex justify-between p-3 bg-slate-800 rounded">
-                        <span className="text-slate-400">Max Daily Loss</span>
-                        <span className="font-bold text-red-400">₹{globalConfig?.max_daily_loss || 10000}</span>
+                    <div className="flex flex-col gap-1 p-3 bg-slate-800 rounded">
+                        <span className="text-xs text-slate-400">Max Daily Loss</span>
+                        <span className="font-bold text-red-400">₹{(globalConfig?.max_daily_loss || 10000).toLocaleString('en-IN')}</span>
                     </div>
-                     <div className="flex justify-between p-3 bg-slate-800 rounded">
-                        <span className="text-slate-400">Max Trades/Day</span>
+                    <div className="flex flex-col gap-1 p-3 bg-slate-800 rounded">
+                        <span className="text-xs text-slate-400">Max Trades/Day</span>
                         <span className="font-bold text-white">{globalConfig?.max_trades_per_day || 5}</span>
                     </div>
-                     <div className="flex justify-between p-3 bg-slate-800 rounded">
-                        <span className="text-slate-400">Kill Switch</span>
+                    <div className="flex flex-col gap-1 p-3 bg-slate-800 rounded">
+                        <span className="text-xs text-slate-400">Kill Switch</span>
                         <span className={`font-bold ${globalConfig?.kill_switch ? 'text-red-500' : 'text-green-500'}`}>
                             {globalConfig?.kill_switch ? 'ENGAGED' : 'OFF'}
                         </span>
                     </div>
                 </div>
-          </div>
+          </CollapsibleCard>
 
-          {/* ── Strategies (unified) ─────────────────────────────────────
-              DeploymentsPanel is now THE single place to see and manage every
-              deployed strategy — multiple strategies per symbol, each with its
-              own resolution. The old "Active Strategy Configuration" view sits
-              below it COLLAPSED, kept only because it still hosts tools not yet
-              ported to the deployments panel: the per-param editor grid,
-              🧪 Test/Sim buttons, and web-session health badges. */}
-          <div className="lg:col-span-2 space-y-4">
-              <DeploymentsPanel
-                  onTest={handleTestClick}
-                  onSim={openSimulator}
-                  onManualTrade={openTradeModal}
-                  sessionHealth={sessionHealth}
-                  globalConfig={globalConfig}
-              />
-
-          </div>
+          {/* DeploymentsPanel — full width; self-contained accordion (its own header folds it). */}
+          <DeploymentsPanel
+              onTest={handleTestClick}
+              onSim={openSimulator}
+              onManualTrade={openTradeModal}
+              sessionHealth={sessionHealth}
+              globalConfig={globalConfig}
+          />
       </div>
 
-      {/* Live Market Data Section */}
-      <div className="bg-surface p-6 rounded-xl border border-slate-700">
-        <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
-          <TrendingUp className="w-5 h-5 text-primary" /> Live Market Data (BANKNIFTY)
-        </h3>
+      {/* Live Market Data Section — collapsible */}
+      <CollapsibleCard
+          title="Live Market Data (BANKNIFTY)"
+          icon={TrendingUp}
+          storageKey="dash:marketData"
+          defaultOpen={true}
+          summary={marketData?.ltp ? `₹${marketData.ltp.toFixed(2)} · ${marketData?.trend || 'NEUTRAL'}` : null}
+      >
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <div className="p-4 bg-slate-800 rounded-lg">
                 <p className="text-slate-400 text-sm">Spot Price</p>
@@ -741,7 +756,7 @@ export default function Dashboard() {
                 </p>
             </div>
         </div>
-      </div>
+      </CollapsibleCard>
 
       {/* ── Compact Stats Strip ─────────────────────────────────────────
           Replaces the three separate StatCards. One row, dense, scannable.
@@ -1436,9 +1451,18 @@ export default function Dashboard() {
       {/* MongoDB Trade History */}
       <div className="bg-surface rounded-xl border border-slate-700 p-6">
           <div className="flex justify-between items-center mb-4">
-              <h3 className="text-xl font-bold flex items-center gap-2">
+              <button
+                  type="button"
+                  onClick={toggleTrades}
+                  aria-expanded={tradesExpanded}
+                  title={tradesExpanded ? 'Collapse trade history' : 'Expand trade history'}
+                  className="text-xl font-bold flex items-center gap-2 text-left hover:text-primary transition-colors"
+              >
+                {tradesExpanded ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
                 <Database className="w-5 h-5 text-primary" /> Trade History
-              </h3>
+                {tradesTotal > 0 && <span className="text-xs font-normal text-slate-500">({tradesTotal})</span>}
+              </button>
+              {tradesExpanded && (
               <div className="flex items-center gap-4">
                   <div className="flex items-center gap-2">
                       <span className="text-xs text-slate-500 font-medium whitespace-nowrap">Show:</span>
@@ -1467,7 +1491,9 @@ export default function Dashboard() {
                       className="bg-slate-900 border border-slate-700 rounded px-3 py-1 text-sm text-white font-mono focus:border-primary outline-none"
                   />
               </div>
+              )}
           </div>
+          {tradesExpanded && (<>
           {mongoTrades.length > 0 ? (
             <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-sm">
@@ -1569,6 +1595,7 @@ export default function Dashboard() {
                   </button>
               </div>
           )}
+          </>)}
        </div>
 
       {/* ════════════════════════════════════════════════════════════════════ */}

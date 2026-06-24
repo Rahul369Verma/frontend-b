@@ -19,9 +19,13 @@ function Sidebar() {
   const isActive = (path) => location.pathname === path;
 
   // Collapsed state persisted to localStorage so it survives reload.
+  // Defaults to COLLAPSED on first visit (no stored preference) to maximise
+  // content width; once the user toggles, their choice is remembered.
   const [collapsed, setCollapsed] = useState(() => {
-    try { return localStorage.getItem('sidebar:collapsed') === '1'; }
-    catch (_) { return false; }
+    try {
+      const v = localStorage.getItem('sidebar:collapsed');
+      return v === null ? true : v === '1';
+    } catch (_) { return true; }
   });
   const toggle = () => {
     setCollapsed(prev => {
