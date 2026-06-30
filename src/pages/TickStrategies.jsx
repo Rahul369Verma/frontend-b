@@ -516,11 +516,31 @@ export default function TickStrategies() {
                 );
             })()}
 
-            {/* Totals strip */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Totals strip — includes today's aggregate net P&L vs the loss limit
+                (the number the auto-halt fires on; per-strategy cards only show
+                their own slice, so this is the figure that explains a halt). */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <StatBox label="Strategies" value={totals.strategyCount ?? strategies.length} icon={Activity} color="violet" />
                 <StatBox label="Active" value={totals.activeCount ?? 0} icon={Play} color="green" />
                 <StatBox label="Open Paper Positions" value={totals.openPositions ?? 0} icon={Clock} color="amber" />
+                {(() => {
+                    const e = snapshot?.engine || {};
+                    const net = e.dailyNetPnl ?? 0;
+                    const limit = e.dailyLossLimit ?? 0;
+                    const entries = e.dailyEntries ?? 0;
+                    const maxEntries = e.maxEntriesPerSession ?? 0;
+                    const pos = net >= 0;
+                    return (
+                        <StatBox
+                            label="Today's Net P&L (all strategies)"
+                            value={`${pos ? '+' : '−'}₹${Math.abs(Math.round(net)).toLocaleString('en-IN')}`}
+                            icon={pos ? TrendingUp : TrendingDown}
+                            color={pos ? 'green' : 'rose'}
+                            valueClass={pos ? 'text-emerald-400' : 'text-rose-400'}
+                            subtext={`${limit > 0 ? `auto-halt at −₹${limit.toLocaleString('en-IN')} · ` : ''}${entries}${maxEntries > 0 ? `/${maxEntries}` : ''} entries today`}
+                        />
+                    );
+                })()}
             </div>
 
             {/* Strategies list */}
@@ -894,12 +914,13 @@ export default function TickStrategies() {
 // Sub-components
 // ────────────────────────────────────────────────────────────────────────
 
-function StatBox({ label, value, icon: Icon, color }) {
+function StatBox({ label, value, icon: Icon, color, subtext, valueClass = 'text-white' }) {
     return (
         <div className="bg-surface p-5 rounded-xl border border-slate-700 flex items-center justify-between">
             <div>
                 <p className="text-slate-400 text-xs uppercase tracking-wider">{label}</p>
-                <h3 className="text-3xl font-bold text-white mt-1">{value}</h3>
+                <h3 className={`text-3xl font-bold mt-1 ${valueClass}`}>{value}</h3>
+                {subtext && <p className="text-[11px] text-slate-500 mt-1">{subtext}</p>}
             </div>
             <div className={`p-3 rounded-lg bg-${color}-500/10 text-${color}-400`}>
                 <Icon className="w-6 h-6" />

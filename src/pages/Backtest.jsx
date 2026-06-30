@@ -131,8 +131,9 @@ export default function Backtest() {
   const [askAiModal, setAskAiModal] = useState({
       open: false,
       step: 'config',           // 'config' | 'running' | 'review'
+      mode: 'params',           // 'params' = pre-backtest param tuning | 'review' = post-backtest strategy critique (sends results)
       model: '',                // selected model id
-      result: null,             // { suggested_params, reasoning, confidence }
+      result: null,             // { suggested_params, analysis, reasoning, confidence }
       applyMap: {},             // { paramKey: true/false } — toggle per-row in diff view
       error: null,
       elapsedMs: 0,
@@ -563,6 +564,45 @@ export default function Backtest() {
   };
 
   /**
+   * Compact results summary for the "Improve This Strategy" review request.
+   * Sends aggregate metrics + an exit-reason breakdown + the 5 best & 5 worst
+   * trades — NOT every trade (web models 403/truncate on huge prompts).
+   * Returns null when no backtest results are on screen.
+   */
+  const buildStrategyReviewSummary = () => {
+      if (!result?.metrics) return null;
+      const trades = Array.isArray(result.trades) ? result.trades : [];
+      const pnlOf = t => Number(t.net_pnl ?? t.pnl ?? 0);
+      // Exit-reason breakdown (normalize the "(Intra)" suffix into one bucket)
+      const exit_breakdown = {};
+      trades.forEach(t => {
+          const r = String(t.reason || 'Unknown').replace(/\s*\(Intra\)\s*/i, '').trim() || 'Unknown';
+          exit_breakdown[r] = (exit_breakdown[r] || 0) + 1;
+      });
+      const sorted = [...trades].sort((a, b) => pnlOf(b) - pnlOf(a));
+      const slim = t => ({
+          entryTime: t.entryTime,
+          type: t.type,
+          pnl: Number(pnlOf(t).toFixed(2)),
+          reason: t.reason,
+      });
+      return {
+          metrics: {
+              totalPnL: result.metrics.totalPnL,
+              avgPnL: result.metrics.avgPnL,
+              winRate: result.metrics.winRate,
+              totalTrades: result.metrics.totalTrades,
+              maxDrawdown: result.metrics.maxDrawdown,
+              sharpeRatio: result.metrics.sharpeRatio,
+              finalBalance: result.finalBalance,
+          },
+          exit_breakdown,
+          best_trades: sorted.slice(0, 5).map(slim),
+          worst_trades: sorted.slice(-5).reverse().map(slim),
+      };
+  };
+
+  /**
    * Resolve which AI model to use for the optimization call.
    * Preference: user's explicit pick from the modal → currently-active AI Risk
    * Filter model (claude-web/gemini-web/api). Falls back to gemini-2.0-flash.
@@ -581,13 +621,19 @@ export default function Backtest() {
    * dict that carries phase='param_optimization'. Updates `askAiModal` through
    * the three states: config → running → review.
    */
-  const submitAskAi = async (chosenModel) => {
+  const submitAskAi = async (chosenModel, mode = 'params') => {
       const modelId = resolveAskAiModel(chosenModel);
       const isWebModel = modelId.startsWith('claude-web/') || modelId.startsWith('gemini-web/');
       const currentTunable = buildAskAiPayload();
+      const isReview = mode === 'review';
+      const reviewSummary = isReview ? buildStrategyReviewSummary() : null;
 
       if (Object.keys(currentTunable).length === 0) {
           setAskAiModal(m => ({ ...m, error: 'No tunable parameters found for this strategy.' }));
+          return;
+      }
+      if (isReview && !reviewSummary) {
+          setAskAiModal(m => ({ ...m, error: 'Run a backtest first — there are no results to review yet.' }));
           return;
       }
       setAskAiModal(m => ({
@@ -595,15 +641,17 @@ export default function Backtest() {
       }));
       const startedAt = Date.now();
 
-      // Build the "signal" payload — phase tells Python which prompt to build
+      // Build the "signal" payload — phase tells Python which prompt to build.
+      // 'strategy_review' additionally carries the on-screen backtest results.
       const signalPayload = {
           candleIndex: 0,
-          phase: 'param_optimization',
+          phase: isReview ? 'strategy_review' : 'param_optimization',
           strategy: params.strategy,
           symbol: params.symbol,
           start_date: params.start_date,
           end_date: params.end_date,
           current_params: currentTunable,
+          ...(isReview && reviewSummary ? { results_summary: reviewSummary } : {}),
           // Empty arrays so the Python builder doesn't crash on missing keys
           candles: [],
       };
@@ -649,20 +697,45 @@ export default function Backtest() {
           if (!finalResult) throw new Error('AI timeout — no response within 5 min');
 
           const suggested = finalResult.suggested_params;
-          if (!suggested || typeof suggested !== 'object' || Object.keys(suggested).length === 0) {
-              throw new Error('AI returned no parameter suggestions. Try a different model.');
+          const analysis = finalResult.analysis || null;
+          const hasSuggested = suggested && typeof suggested === 'object' && Object.keys(suggested).length > 0;
+          const hasAnalysis = analysis && (typeof analysis === 'object' ? Object.keys(analysis).length > 0 : String(analysis).trim().length > 0);
+          // A review can be valuable even with zero param changes (pure critique),
+          // so accept the result if EITHER a critique or param suggestions came back.
+          if (!hasSuggested && !hasAnalysis) {
+              // The call may have failed UPSTREAM (auth/API/parse) rather than the model
+              // genuinely returning nothing. The safety-default REJECT carries the real
+              // cause in failure_detail/reasoning — surface it instead of the misleading
+              // "try a different model" (which sends users chasing the wrong fix on a
+              // cookie/auth failure).
+              const fd = finalResult.failure_detail;
+              const why = finalResult.reasoning || '';
+              if (fd === 'api_error' || /40[13]|account_session_invalid|Invalid authorization|conversation create failed/i.test(why)) {
+                  throw new Error(
+                      'AI call failed — likely an invalid/expired web-session cookie. ' +
+                      'Refresh it in Settings → AI Web Cookies, then retry. ' +
+                      (why ? `\n\nDetail: ${why}` : '')
+                  );
+              }
+              if (fd) {
+                  throw new Error(`AI returned nothing usable (${fd}).${why ? ` ${why}` : ''}`);
+              }
+              throw new Error(isReview
+                  ? 'AI returned no analysis. Try a different model.'
+                  : 'AI returned no parameter suggestions. Try a different model.');
           }
 
           // Pre-populate applyMap: default = all keys ON (so "Apply All" works
           // and the user can de-select rows they don't trust)
           const applyMap = {};
-          Object.keys(suggested).forEach(k => { applyMap[k] = true; });
+          if (hasSuggested) Object.keys(suggested).forEach(k => { applyMap[k] = true; });
 
           setAskAiModal(m => ({
               ...m,
               step: 'review',
               result: {
-                  suggested_params: suggested,
+                  suggested_params: hasSuggested ? suggested : {},
+                  analysis,
                   reasoning: finalResult.reasoning || '',
                   confidence: finalResult.confidence || 0,
               },
@@ -2835,7 +2908,7 @@ export default function Backtest() {
                 the AI and gets back optimized values. Two-column "Ask AI" gets
                 its own row at the top so it doesn't compete with Save/Deploy. */}
             <button
-                onClick={() => setAskAiModal(m => ({ ...m, open: true, step: 'config', error: null, result: null }))}
+                onClick={() => setAskAiModal(m => ({ ...m, open: true, step: 'config', mode: 'params', error: null, result: null }))}
                 className="col-span-2 bg-violet-700/30 hover:bg-violet-700/50 text-xs py-2 rounded text-violet-100 border border-violet-700 shadow-sm font-bold flex items-center justify-center gap-2"
                 title="Have the AI suggest optimal parameter values for this strategy + symbol"
             >
@@ -2934,7 +3007,18 @@ export default function Backtest() {
                   </p>
                 </div>
               </div>
-              
+
+              {/* Ask AI to critique + improve the strategy USING these results */}
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setAskAiModal(m => ({ ...m, open: true, step: 'config', mode: 'review', error: null, result: null }))}
+                  className="bg-violet-700/30 hover:bg-violet-700/50 text-xs py-2 px-3 rounded text-violet-100 border border-violet-700 font-bold flex items-center gap-2"
+                  title="Send these results + the current params to the AI for a strategy critique and concrete improvement ideas"
+                >
+                  🤖 Ask AI to Improve This Strategy
+                </button>
+              </div>
+
               {/* AI Confirmation Status Banner */}
               {aiPolling && (
                 <div className="bg-violet-900/30 border border-violet-500/40 rounded-lg px-4 py-3 flex items-center gap-3 text-sm">
@@ -3437,7 +3521,9 @@ export default function Backtest() {
 
       {/* ─── Ask AI for Parameter Suggestions Modal ──────────────────── */}
       {askAiModal.open && (() => {
-          const onClose = () => setAskAiModal({ open: false, step: 'config', model: '', result: null, applyMap: {}, error: null, elapsedMs: 0 });
+          const onClose = () => setAskAiModal({ open: false, step: 'config', mode: 'params', model: '', result: null, applyMap: {}, error: null, elapsedMs: 0 });
+          const isReviewMode = askAiModal.mode === 'review';
+          const reviewSummary = isReviewMode ? buildStrategyReviewSummary() : null;
           const tunableCount = Object.keys(buildAskAiPayload()).length;
           const resolvedModel = resolveAskAiModel(askAiModal.model);
           const isWebSession = resolvedModel.startsWith('claude-web/') || resolvedModel.startsWith('gemini-web/');
@@ -3451,7 +3537,7 @@ export default function Backtest() {
                       <div className="p-4 border-b border-violet-700/30 bg-violet-950/20 flex justify-between items-center">
                           <div>
                               <h3 className="text-lg font-bold text-violet-200 flex items-center gap-2">
-                                  🤖 Ask AI for Parameter Suggestions
+                                  {isReviewMode ? '🤖 Ask AI to Improve This Strategy' : '🤖 Ask AI for Parameter Suggestions'}
                               </h3>
                               <p className="text-[11px] text-slate-400 mt-0.5">
                                   Strategy: <code className="bg-slate-800 px-1 rounded">{params.strategy}</code>
@@ -3512,13 +3598,21 @@ export default function Backtest() {
                                   </div>
                               )}
 
+                              {isReviewMode && (
+                                  <div className="bg-violet-950/20 border border-violet-700/30 rounded p-3 text-[11px] text-slate-300">
+                                      📊 Sending your <b>backtest results</b> (metrics, exit-reason breakdown,
+                                      5 best &amp; 5 worst trades) + the current params, and asking for a
+                                      strengths/weaknesses critique and concrete improvements — not just param values.
+                                  </div>
+                              )}
+
                               {/* Brief summary of what we're sending */}
                               <details className="text-[11px]">
                                   <summary className="cursor-pointer text-slate-400 hover:text-slate-200">
-                                      Preview: parameters being sent to AI ({tunableCount} keys)
+                                      Preview: {isReviewMode ? 'payload' : 'parameters'} being sent to AI ({tunableCount} param keys{isReviewMode ? ' + results' : ''})
                                   </summary>
                                   <pre className="mt-2 bg-slate-900 p-3 rounded text-slate-300 overflow-x-auto max-h-60 text-[10px]">
-{JSON.stringify(buildAskAiPayload(), null, 2)}
+{JSON.stringify(isReviewMode ? { current_params: buildAskAiPayload(), results_summary: reviewSummary } : buildAskAiPayload(), null, 2)}
                                   </pre>
                               </details>
 
@@ -3533,7 +3627,7 @@ export default function Backtest() {
                                       Cancel
                                   </button>
                                   <button
-                                      onClick={() => submitAskAi(askAiModal.model || resolvedModel)}
+                                      onClick={() => submitAskAi(askAiModal.model || resolvedModel, askAiModal.mode)}
                                       disabled={tunableCount === 0}
                                       className={`px-4 py-2 rounded text-sm font-bold ${
                                           tunableCount === 0
@@ -3541,7 +3635,7 @@ export default function Backtest() {
                                               : 'bg-violet-600 hover:bg-violet-500 text-white'
                                       }`}
                                   >
-                                      🚀 Get AI Suggestions
+                                      {isReviewMode ? '🚀 Analyze & Suggest' : '🚀 Get AI Suggestions'}
                                   </button>
                               </div>
                           </div>
@@ -3567,6 +3661,8 @@ export default function Backtest() {
                           const keys = Object.keys(suggested);
                           const conf = askAiModal.result.confidence || 0;
                           const reasoning = askAiModal.result.reasoning || '';
+                          const analysis = askAiModal.result.analysis || null;
+                          const asArr = v => Array.isArray(v) ? v.filter(Boolean) : (v ? [v] : []);
                           const allOn = keys.every(k => askAiModal.applyMap[k]);
                           const toggleAll = () => {
                               const next = {};
@@ -3598,7 +3694,43 @@ export default function Backtest() {
                                       </div>
                                   )}
 
-                                  {/* Diff table */}
+                                  {/* Strategy critique (review mode) */}
+                                  {analysis && (
+                                      typeof analysis === 'string' ? (
+                                          <div className="text-[12px] text-slate-200 bg-slate-900 border border-violet-800/40 rounded p-3 whitespace-pre-wrap">
+                                              {analysis}
+                                          </div>
+                                      ) : (
+                                          <div className="space-y-2 bg-slate-900 border border-violet-800/40 rounded p-3 text-[12px]">
+                                              {analysis.verdict && <p className="text-violet-200 font-semibold">⚖️ {analysis.verdict}</p>}
+                                              {asArr(analysis.strengths).length > 0 && (
+                                                  <div>
+                                                      <p className="text-emerald-400 font-bold text-[10px] uppercase tracking-wider mb-1">Strengths</p>
+                                                      <ul className="list-disc list-inside text-slate-300 space-y-0.5">{asArr(analysis.strengths).map((s, i) => <li key={i}>{s}</li>)}</ul>
+                                                  </div>
+                                              )}
+                                              {asArr(analysis.weaknesses).length > 0 && (
+                                                  <div>
+                                                      <p className="text-rose-400 font-bold text-[10px] uppercase tracking-wider mb-1">Weaknesses</p>
+                                                      <ul className="list-disc list-inside text-slate-300 space-y-0.5">{asArr(analysis.weaknesses).map((s, i) => <li key={i}>{s}</li>)}</ul>
+                                                  </div>
+                                              )}
+                                              {asArr(analysis.recommended_changes).length > 0 && (
+                                                  <div>
+                                                      <p className="text-amber-400 font-bold text-[10px] uppercase tracking-wider mb-1">What to change</p>
+                                                      <ul className="list-disc list-inside text-slate-300 space-y-0.5">{asArr(analysis.recommended_changes).map((s, i) => <li key={i}>{s}</li>)}</ul>
+                                                  </div>
+                                              )}
+                                          </div>
+                                      )
+                                  )}
+
+                                  {/* Diff table — only when the AI returned param changes */}
+                                  {keys.length === 0 ? (
+                                      <div className="text-[11px] text-slate-400 bg-slate-900 border border-slate-800 rounded p-3">
+                                          No parameter-value changes suggested{analysis ? ' — see the critique above.' : '.'}
+                                      </div>
+                                  ) : (
                                   <div className="border border-slate-800 rounded overflow-hidden">
                                       <table className="w-full text-xs">
                                           <thead className="bg-slate-900/80 text-slate-500 uppercase tracking-wider text-[10px]">
@@ -3637,6 +3769,7 @@ export default function Backtest() {
                                           </tbody>
                                       </table>
                                   </div>
+                                  )}
 
                                   <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
                                       <button
@@ -3648,12 +3781,14 @@ export default function Backtest() {
                                       <button onClick={onClose} className="px-4 py-2 rounded text-sm bg-slate-700 hover:bg-slate-600 text-slate-200">
                                           Cancel
                                       </button>
+                                      {keys.length > 0 && (
                                       <button
                                           onClick={applyAskAiSuggestions}
                                           className="px-4 py-2 rounded text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white"
                                       >
                                           ✓ Apply Selected
                                       </button>
+                                      )}
                                   </div>
                               </div>
                           );
