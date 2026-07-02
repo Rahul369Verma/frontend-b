@@ -24,6 +24,7 @@ const FALLBACK_GEMINI_MODELS = [
     { id: 'claude-sonnet-4-6',              label: 'Claude Sonnet 4.6 ⭐',       quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
     { id: 'claude-opus-4-7',               label: 'Claude Opus 4.7 🎯',          quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
     { id: 'claude-opus-4-8',               label: 'Claude Opus 4.8 🎯',          quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
+    { id: 'claude-fable-5',                label: 'Claude Fable 5 🏛️',           quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
 ];
 
 // Group resolver — maps model ID prefix → user-friendly group label.
@@ -2191,6 +2192,7 @@ export default function Backtest() {
                                                     <option value="claude-web/claude-sonnet-4-6">Claude Sonnet 4.6 (balanced)</option>
                                                     <option value="claude-web/claude-opus-4-7">Claude Opus 4.7 (strong reasoning)</option>
                                                     <option value="claude-web/claude-opus-4-8">Claude Opus 4.8 (newest, best)</option>
+                                                    <option value="claude-web/claude-fable-5">Claude Fable 5 (most capable, slowest)</option>
                                                 </select>
                                             </div>
                                         </div>
@@ -3561,7 +3563,8 @@ export default function Backtest() {
                                       className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
                                   >
                                       <optgroup label="🌐 Web Sessions (no API cost)">
-                                          <option value="claude-web/claude-opus-4-8">Claude Opus 4.8 (web) — newest, best (NEW)</option>
+                                          <option value="claude-web/claude-fable-5">Claude Fable 5 (web) — most capable (NEW)</option>
+                                          <option value="claude-web/claude-opus-4-8">Claude Opus 4.8 (web) — newest, best</option>
                                           <option value="claude-web/claude-opus-4-7">Claude Opus 4.7 (web) — strong reasoning</option>
                                           <option value="claude-web/claude-sonnet-4-6">Claude Sonnet 4.6 (web) — balanced</option>
                                           <option value="claude-web/claude-haiku-4-5">Claude Haiku 4.5 (web) — fastest</option>

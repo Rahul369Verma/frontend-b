@@ -983,7 +983,11 @@ export default function Dashboard() {
                       const isOrphan = !!pos.orphan;
                       return (
                           <div
-                              key={pos.trade_id || `${pos.spotSymbol || ''}-${pos.symbol}` || i}
+                              // Key MUST be unique per contract. trade_id alone collided when a
+                              // backend bug briefly linked two positions to one trade doc — dup
+                              // React keys made both cards swap live fields on every poll (the
+                              // "flickering PnL"). symbol+deployment is unique even then.
+                              key={`${pos.deploymentId || pos.trade_id || i}|${pos.symbol}`}
                               className={`rounded-lg border p-3 transition-colors ${
                                   isOrphan
                                       ? 'border-amber-700/60 bg-amber-950/15'
