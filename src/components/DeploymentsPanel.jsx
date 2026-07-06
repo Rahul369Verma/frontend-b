@@ -57,6 +57,7 @@ const KNOWN_STRATEGIES_FALLBACK = [
     { id: 'fib_golden_pocket', label: 'Fibonacci Golden Pocket Pullback' },
     { id: 'quantum_qho', label: 'Quantum QHO Mean-Reversion' },
     { id: 'volume_surge', label: 'Volume Surge (Climax Fade)' },
+    { id: 'council_ensemble', label: 'Council Ensemble (Multi-Strategy Vote)' },
 ];
 
 const KNOWN_SYMBOLS = [
@@ -86,6 +87,18 @@ function _normalizeStrategies(list) {
 function strategyLabel(strategies, id) {
     const hit = (strategies || []).find(s => s.id === id);
     return hit?.label || id || '—';
+}
+
+// Compact human date for the deployed/updated timestamps, e.g. "13 Jun 2026, 23:31".
+// Returns null for missing/invalid values so callers can skip rendering.
+function fmtDate(v) {
+    if (!v) return null;
+    const dt = new Date(v);
+    if (isNaN(dt.getTime())) return null;
+    return dt.toLocaleString('en-IN', {
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+    });
 }
 
 export default function DeploymentsPanel({ onTest, onSim, onManualTrade, sessionHealth, globalConfig }) {
@@ -708,6 +721,19 @@ function DeploymentCard({
                         );
                     });
                 })()}
+                {/* Deployed = createdAt, Updated = updatedAt (bumped on every save/toggle). */}
+                {fmtDate(d.createdAt) && (
+                    <div className="flex items-center gap-1" title={`Deployed on ${new Date(d.createdAt).toString()}`}>
+                        <span className="text-slate-500 uppercase text-[9px] tracking-wider">Deployed</span>
+                        <span className="font-mono text-slate-300">{fmtDate(d.createdAt)}</span>
+                    </div>
+                )}
+                {fmtDate(d.updatedAt) && (
+                    <div className="flex items-center gap-1" title={`Last updated ${new Date(d.updatedAt).toString()}`}>
+                        <span className="text-slate-500 uppercase text-[9px] tracking-wider">Updated</span>
+                        <span className="font-mono text-slate-300">{fmtDate(d.updatedAt)}</span>
+                    </div>
+                )}
                 <button
                     onClick={onToggleExpand}
                     className="ml-auto text-[10px] px-2 py-0.5 rounded bg-slate-700/60 hover:bg-slate-700 text-slate-300"

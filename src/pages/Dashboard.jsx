@@ -58,9 +58,10 @@ export default function Dashboard() {
   const [activityEvents, setActivityEvents] = useState([]);
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityFilters, setActivityFilters] = useState({
-    types: ['TRADE_ENTRY', 'TRADE_EXIT', 'AI_CONFIRM', 'AI_REJECT', 'AI_ERROR', 'ENGINE_ERROR'],
+    types: ['TRADE_ENTRY', 'TRADE_EXIT', 'AI_CONFIRM', 'AI_REJECT', 'AI_ERROR', 'ENTRY_SKIPPED', 'ENGINE_ERROR'],
     symbol: '',
     strategy: '',
+    tradeId: '',
     limit: 100,
   });
   const [activityExpanded, setActivityExpanded] = useState(true);
@@ -327,6 +328,7 @@ export default function Dashboard() {
         };
         if (activityFilters.symbol)   params.symbol = activityFilters.symbol;
         if (activityFilters.strategy) params.strategy = activityFilters.strategy;
+        if (activityFilters.tradeId)  params.trade_id = activityFilters.tradeId.trim();
         const res = await axios.get(`${API_URL}/live-activity`, { params });
         if (!cancelled) setActivityEvents(res.data?.events || []);
       } catch (err) {
@@ -338,7 +340,7 @@ export default function Dashboard() {
     fetchActivity();
     const iv = setInterval(fetchActivity, 8000);
     return () => { cancelled = true; clearInterval(iv); };
-  }, [activityExpanded, activityFilters.types, activityFilters.symbol, activityFilters.strategy, activityFilters.limit]);
+  }, [activityExpanded, activityFilters.types, activityFilters.symbol, activityFilters.strategy, activityFilters.tradeId, activityFilters.limit]);
 
   // Handlers for Option Chain Toggle
   const toggleOptionChain = () => {
@@ -1508,6 +1510,7 @@ export default function Dashboard() {
                             <th className="p-3">Exit Time</th>
                             <th className="p-3">Status</th>
                             <th className="p-3">Symbol</th>
+                            <th className="p-3">Strategy</th>
                             <th className="p-3">Action</th>
                             <th className="p-3">Qty</th>
                             <th className="p-3">Price (En/Ex)</th>
@@ -1549,6 +1552,9 @@ export default function Dashboard() {
                                 </td>
                                 
                                 <td className="p-3 font-medium text-white">{trade.tradingsymbol || trade.symbol}</td>
+                                <td className="p-3 text-slate-300 text-xs truncate max-w-[140px]" title={trade.strategyName || trade.strategy || ''}>
+                                    {trade.strategyName || trade.strategy || <span className="text-slate-600">—</span>}
+                                </td>
                                 <td className={`p-3 font-bold ${trade.action === 'BUY' || trade.action === 'ENTRY' ? 'text-green-500' : 'text-red-500'}`}>{trade.action}</td>
                                 <td className="p-3 text-slate-300">{trade.quantity}</td>
                                 
@@ -1636,6 +1642,25 @@ export default function Dashboard() {
                           onChange={e => setActivityFilters(f => ({ ...f, strategy: e.target.value }))}
                           className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 w-40"
                       />
+                      {/* Trade-ID filter — full ID (copy from a badge) or short suffix.
+                          Correlates ENTRY/EXIT + AI confirm/reject/skip for one trade. */}
+                      <div className="relative">
+                          <input
+                              type="text"
+                              placeholder="Filter trade ID"
+                              value={activityFilters.tradeId}
+                              onChange={e => setActivityFilters(f => ({ ...f, tradeId: e.target.value }))}
+                              className="bg-slate-800 border border-slate-700 rounded px-2 py-1 pr-6 text-slate-200 w-40 font-mono"
+                          />
+                          {activityFilters.tradeId && (
+                              <button
+                                  type="button"
+                                  onClick={() => setActivityFilters(f => ({ ...f, tradeId: '' }))}
+                                  title="Clear trade-ID filter"
+                                  className="absolute right-1 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white text-sm leading-none"
+                              >×</button>
+                          )}
+                      </div>
                       <select
                           value={activityFilters.limit}
                           onChange={e => setActivityFilters(f => ({ ...f, limit: parseInt(e.target.value, 10) }))}
@@ -1660,6 +1685,7 @@ export default function Dashboard() {
                           { key: 'AI_CONFIRM',   label: '✅ AI Confirm', color: 'bg-teal-700/40 text-teal-200 border-teal-700' },
                           { key: 'AI_REJECT',    label: '🛑 AI Reject', color: 'bg-rose-700/40 text-rose-200 border-rose-700' },
                           { key: 'AI_ERROR',     label: '⚠️ AI Error',  color: 'bg-amber-700/40 text-amber-200 border-amber-700' },
+                          { key: 'ENTRY_SKIPPED',label: '⏭️ Skipped',   color: 'bg-orange-700/40 text-orange-200 border-orange-700' },
                           { key: 'ENGINE_ERROR', label: '🔥 Engine Err', color: 'bg-red-700/40 text-red-200 border-red-700' },
                       ].map(chip => {
                           const active = activityFilters.types.includes(chip.key);
@@ -1758,6 +1784,15 @@ export default function Dashboard() {
                                               {ev.ai_reasoning || '(no reasoning)'}
                                           </span>
                                       );
+                                  } else if (ev.type === 'ENTRY_SKIPPED') {
+                                      typeBadge = <span className="px-1.5 py-0.5 rounded bg-orange-700/40 text-orange-200">⏭️ SKIPPED</span>;
+                                      rowTone = 'hover:bg-orange-950/20';
+                                      pnlOrConf = <span className="text-orange-300/80 text-[11px]">no entry</span>;
+                                      detail = (
+                                          <span className="text-orange-300/80 text-xs italic">
+                                              {ev.ai_reasoning || '(no reason)'}
+                                          </span>
+                                      );
                                   } else if (ev.type === 'AI_ERROR') {
                                       typeBadge = <span className="px-1.5 py-0.5 rounded bg-amber-700/40 text-amber-200">⚠️ AI ERR</span>;
                                       rowTone = 'hover:bg-amber-950/20';
@@ -1783,7 +1818,15 @@ export default function Dashboard() {
                                           <td className="p-2 text-[11px]">{typeBadge}</td>
                                           <td className="p-2 text-[11px]">
                                               {ev.trade_id ? (
-                                                  <TradeIdBadge id={String(ev.trade_id)} label="" />
+                                                  <span className="inline-flex items-center gap-1">
+                                                      <TradeIdBadge id={String(ev.trade_id)} label="" />
+                                                      <button
+                                                          type="button"
+                                                          onClick={() => setActivityFilters(f => ({ ...f, tradeId: String(ev.trade_id) }))}
+                                                          title="Filter feed by this trade ID"
+                                                          className="text-slate-500 hover:text-teal-300 text-[11px] leading-none"
+                                                      >🔎</button>
+                                                  </span>
                                               ) : (
                                                   <span className="text-slate-600">—</span>
                                               )}

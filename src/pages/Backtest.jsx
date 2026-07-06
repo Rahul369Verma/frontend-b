@@ -484,7 +484,8 @@ export default function Backtest() {
                   'WyckoffSpringStrategy': 'wyckoff_spring',
                   'FibonacciPullbackStrategy': 'fib_golden_pocket',
                   'QuantumReversionStrategy': 'quantum_qho',
-                  'VolumeSurgeStrategy': 'volume_surge'
+                  'VolumeSurgeStrategy': 'volume_surge',
+                  'CouncilEnsembleStrategy': 'council_ensemble'
               };
               if (STRATEGY_MAPPING[strategyId]) {
                   strategyId = STRATEGY_MAPPING[strategyId];
@@ -1380,6 +1381,7 @@ export default function Backtest() {
                 <option value="fib_golden_pocket">Fibonacci Golden Pocket Pullback 📐</option>
                 <option value="quantum_qho">Quantum QHO Mean-Reversion ⚛️</option>
                 <option value="volume_surge">Volume Surge (Climax Fade) 📊</option>
+                <option value="council_ensemble">Council Ensemble (Multi-Strategy Vote) 🏛️</option>
                 <option value="universal">Universal / Discovery Mode</option>
                 <option value="rl_agent">RL Agent Strategy 🤖</option>
               </select>
@@ -2876,6 +2878,10 @@ export default function Backtest() {
                         if (params.strategy === 'rl_agent' && ['model_file', 'max_hold_candles', 'adverse_atr_mult', 'adverse_exit_enabled', 'use_dynamic_sl', 'use_ensemble', 'ensemble_models', 'enable_daily_profit_lock', 'daily_profit_lock_pct', 'enable_daily_loss_filter', 'max_daily_losses'].includes(key)) return null;
 
                         if (params.strategy === 'breakout_range' && ['breakout_mode'].includes(key)) return null;
+
+                        // Council Ensemble: member_params is a nested JSON object — not editable
+                        // in a flat text field; per-member overrides belong to the optimizer/API.
+                        if (params.strategy === 'council_ensemble' && ['member_params'].includes(key)) return null;
 
                         
                         const label = key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
