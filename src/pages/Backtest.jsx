@@ -6,6 +6,39 @@ import { useGlobalState } from '../context/GlobalContext';
 
 const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
 
+// ── Enum params → dropdown options ───────────────────────────────────────
+// Keyed by strategyId → { paramKey: [option, ...] }. Any param listed here
+// renders as a <select> in the ⚡ Strategy Parameters grid instead of a
+// free-text box. Option sets are the SAME finite sets each strategy's
+// getRandomParams() samples from (single source of truth). Put the baked
+// default first for readability. First option label gets a "(default)" hint.
+const STRATEGY_PARAM_OPTIONS = {
+    trend_line:          { signal_mode: ['BOUNCE', 'BREAKOUT', 'BOTH'], sl_mode: ['STRUCTURE', 'ATR'], tp_mode: ['OPPOSITE_LINE', 'ATR'] },
+    smc_ob:              { tp_mode: ['rr', 'swing'] },
+    wyckoff_spring:      { tp_mode: ['mid', 'rr'] },
+    fib_golden_pocket:   { tp_mode: ['rr', 'swing'] },
+    quantum_qho:         { sl_mode: ['atr', 'swing'] },
+    volume_surge:        { mode: ['climax', 'auto', 'thrust'], exit_mode: ['none', 'ema_slow', 'ema_fast'] },
+    council_ensemble:    { sl_mode: ['widest', 'latest', 'tightest'], tp_mode: ['voter', 'rr'] },
+    rsi2_reversion:      { tp_mode: ['mean', 'rr'], exit_mode: ['mean', 'none'] },
+    gap_edge:            { mode: ['auto', 'fade', 'follow'], fade_trend_filter: ['none', 'color', 'two_day'] },
+    intraday_momentum:   { entry_window: ['afternoon', 'morning'], signal_mode: ['continuation', 'reverse'], exit_mode: ['flip', 'none'] },
+    momentum_divergence: { div_type: ['regular', 'hidden'], tp_mode: ['pivot', 'rr'], exit_mode: ['opposite_div', 'none'] },
+    open_drive_trend:    { htf_mode: ['off', 'veto', 'align60'], exit_mode: ['range_reentry', 'none'] },
+    ichimoku_kumo:       { speed_preset: ['half', 'classic', 'custom'], signal_mode: ['trend', 'fade'], sl_mode: ['kijun', 'cloud'], exit_mode: ['kijun', 'none'] },
+    rl_agent:            { signal_type: ['BUY', 'SELL'] },
+};
+
+// Council Ensemble `members` is a comma-separated list of member strategy ids —
+// rendered as a multi-checkbox (not a single dropdown). These are the only
+// strategies CouncilEnsembleStrategy can host (its MEMBER_CLASSES registry).
+const COUNCIL_MEMBER_OPTIONS = [
+    'wyckoff_spring', 'smc_ob', 'liquidity_sweep', 'volume_surge',
+    'apex_confluence', 'quantum_qho', 'fib_golden_pocket',
+    'rsi2_reversion', 'gap_edge', 'intraday_momentum',
+    'momentum_divergence', 'open_drive_trend', 'ichimoku_kumo',
+];
+
 // LOT_SIZES moved to Backend API
 
 import { useLocation } from 'react-router-dom';
@@ -106,6 +139,8 @@ export default function Backtest() {
   };
   const [instrumentConfig, setInstrumentConfig] = useState({});
   const [strategyDefaults, setStrategyDefaults] = useState({});
+  const [strategyPresets, setStrategyPresets] = useState({});     // { stratId: [{id,label,desc,evidence,params}] }
+  const [appliedPreset, setAppliedPreset] = useState('');         // "stratId:presetId" of the last applied preset
   const [savedConfigs, setSavedConfigs] = useState([]);
   const [liveConfigs, setLiveConfigs] = useState([]);
   const [aiModels, setAiModels] = useState([]); // List of available models
@@ -406,6 +441,11 @@ export default function Backtest() {
       axios.get(`${API_URL}/config/strategies/defaults`)
         .then(res => setStrategyDefaults(res.data))
         .catch(err => console.error("Failed to fetch strategy defaults", err));
+
+      // Curated "best params" packs per strategy (⭐ Load Best Params dropdown).
+      axios.get(`${API_URL}/config/strategies/presets`)
+        .then(res => setStrategyPresets(res.data || {}))
+        .catch(err => console.error("Failed to fetch strategy presets", err));
         
       axios.get(`${API_URL}/config/strategies/saved`) // Use Saved Strategies (Backtest Only)
          .then(res => setSavedConfigs(res.data))
@@ -485,7 +525,13 @@ export default function Backtest() {
                   'FibonacciPullbackStrategy': 'fib_golden_pocket',
                   'QuantumReversionStrategy': 'quantum_qho',
                   'VolumeSurgeStrategy': 'volume_surge',
-                  'CouncilEnsembleStrategy': 'council_ensemble'
+                  'CouncilEnsembleStrategy': 'council_ensemble',
+                  'Rsi2ReversionStrategy': 'rsi2_reversion',
+                  'GapEdgeStrategy': 'gap_edge',
+                  'IntradayMomentumStrategy': 'intraday_momentum',
+                  'MomentumDivergenceStrategy': 'momentum_divergence',
+                  'OpenDriveTrendStrategy': 'open_drive_trend',
+                  'IchimokuKumoStrategy': 'ichimoku_kumo'
               };
               if (STRATEGY_MAPPING[strategyId]) {
                   strategyId = STRATEGY_MAPPING[strategyId];
@@ -1382,12 +1428,90 @@ export default function Backtest() {
                 <option value="quantum_qho">Quantum QHO Mean-Reversion ⚛️</option>
                 <option value="volume_surge">Volume Surge (Climax Fade) 📊</option>
                 <option value="council_ensemble">Council Ensemble (Multi-Strategy Vote) 🏛️</option>
+                <option value="rsi2_reversion">RSI-2 Deep Pullback Reversion (Connors) 🎣</option>
+                <option value="gap_edge">Opening Gap Edge (Fade / Follow) 🌅</option>
+                <option value="intraday_momentum">Intraday Momentum (Session Persistence) ⏱️</option>
+                <option value="momentum_divergence">RSI Divergence Reversal 🔀</option>
+                <option value="open_drive_trend">Open Drive Trend-Day Rider 🚂</option>
+                <option value="ichimoku_kumo">Ichimoku Kumo (Kijun Fade) ☁️</option>
                 <option value="universal">Universal / Discovery Mode</option>
                 <option value="rl_agent">RL Agent Strategy 🤖</option>
               </select>
             </div>
 
-
+            {/* ⭐ Load Best Params — curated preset packs for the selected strategy.
+                Each preset merges a PARTIAL params object over the current form
+                (defaults stay for everything the preset doesn't set).
+                ALWAYS rendered: if the presets map is empty (mount-only fetch ran
+                before the backend restart / stale HMR tab), show a disabled state
+                with a manual ↻ reload instead of hiding silently. */}
+            {(() => {
+                const list = strategyPresets[params.strategy] || [];
+                const loaded = Object.keys(strategyPresets).length > 0;
+                const appliedId = appliedPreset.startsWith(`${params.strategy}:`) ? appliedPreset.split(':')[1] : '';
+                const applied = list.find(pr => pr.id === appliedId);
+                const reloadPresets = () => {
+                    axios.get(`${API_URL}/config/strategies/presets`)
+                        .then(res => setStrategyPresets(res.data || {}))
+                        .catch(err => { console.error("Failed to fetch strategy presets", err); alert('Presets fetch failed — is the backend restarted with the /config/strategies/presets endpoint?'); });
+                };
+                return (
+                    <div>
+                        <div className="flex items-center justify-between mb-1">
+                            <label className="block text-sm font-medium text-slate-400">⭐ Load Best Params</label>
+                            <button type="button" onClick={reloadPresets} title="Reload presets from backend"
+                                className="text-[11px] px-1.5 py-0.5 rounded border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500">↻</button>
+                        </div>
+                        <select
+                            className="w-full bg-slate-900 border border-amber-700/50 rounded p-2 text-white disabled:opacity-60"
+                            value={appliedId}
+                            disabled={list.length === 0}
+                            onChange={e => {
+                                const pr = list.find(x => x.id === e.target.value);
+                                if (!pr) { setAppliedPreset(''); return; }
+                                // Deterministic apply: strategy DEFAULTS first, then the
+                                // preset's deltas. Makes empty-delta "baked default" presets
+                                // a true reset, and every preset reproducible no matter what
+                                // was in the form before. System params (symbol, dates,
+                                // capital, dataSource...) aren't in strategyDefaults, so
+                                // they're untouched.
+                                const base = strategyDefaults[params.strategy] || {};
+                                setParams(prev => ({ ...prev, ...base, ...pr.params }));
+                                setAppliedPreset(`${params.strategy}:${pr.id}`);
+                            }}
+                        >
+                            <option value="">{list.length === 0
+                                ? (loaded ? '— no presets for this strategy —' : '— presets not loaded: click ↻ (or hard-refresh) —')
+                                : '— pick a preset pack —'}</option>
+                            {list.map(pr => (
+                                <option key={pr.id} value={pr.id}>
+                                    {pr.evidence === 'validated' ? '✓ ' : '≈ '}{pr.label}
+                                </option>
+                            ))}
+                        </select>
+                        {applied && (
+                            <div className={`text-[11px] mt-1 leading-relaxed ${applied.evidence === 'validated' ? 'text-emerald-400/90' : 'text-slate-400'}`}>
+                                <span className="font-bold">{applied.evidence === 'validated' ? '✓ Validated on archives: ' : '≈ Principled (backtest before deploying): '}</span>
+                                {applied.desc}
+                                <div className="mt-1 flex flex-wrap gap-1">
+                                    <span className="text-slate-500 font-bold">Applied:</span>
+                                    {Object.entries(applied.params).length === 0 && (
+                                        <span className="text-slate-500">restored strategy defaults (no overrides)</span>
+                                    )}
+                                    {Object.entries(applied.params).map(([k, v]) => (
+                                        <span key={k} className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-amber-200/90 font-mono text-[10px]">
+                                            {k}={String(v)}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        {!applied && list.length > 0 && (
+                            <div className="text-[10px] text-slate-500 mt-1">✓ = measured on the 5m archives (charges on) · ≈ = principled variant, backtest first</div>
+                        )}
+                    </div>
+                );
+            })()}
 
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1">Resolution (Timeframe)</label>
@@ -2883,16 +3007,54 @@ export default function Backtest() {
                         // in a flat text field; per-member overrides belong to the optimizer/API.
                         if (params.strategy === 'council_ensemble' && ['member_params'].includes(key)) return null;
 
-                        
+                        // sl_type / strike_selection have dedicated dropdowns in the
+                        // Exit & SL/TP section above — don't double-render them here.
+                        if (['sl_type', 'strike_selection'].includes(key)) return null;
+
                         const label = key.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
                         const isBool = typeof val === 'boolean';
-                        
+                        const enumOpts = STRATEGY_PARAM_OPTIONS[params.strategy]?.[key];
+
+                        // Council Ensemble members: multi-checkbox over the fixed member registry.
+                        if (params.strategy === 'council_ensemble' && key === 'members') {
+                            const selected = String(params.members ?? val).split(',').map(s => s.trim()).filter(Boolean);
+                            const toggle = (id) => {
+                                const next = selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id];
+                                setParams({ ...params, members: next.join(',') });
+                            };
+                            return (
+                                <div key={key} className="col-span-2">
+                                    <label className="block text-xs text-slate-400 mb-1">{label} <span className="text-slate-600">({selected.length} voting)</span></label>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {COUNCIL_MEMBER_OPTIONS.map(id => {
+                                            const on = selected.includes(id);
+                                            return (
+                                                <button key={id} type="button" onClick={() => toggle(id)}
+                                                    className={`text-[11px] px-2 py-1 rounded border ${on ? 'bg-purple-700/40 border-purple-500 text-purple-100' : 'bg-slate-900 border-slate-700 text-slate-500'}`}>
+                                                    {on ? '✓ ' : ''}{id}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                    <div className="text-[10px] text-slate-500 mt-1">Members that vote each bar; a trade needs ≥ Min Votes members agreeing on direction.</div>
+                                </div>
+                            );
+                        }
+
                         return (
                             <div key={key} className={isBool ? "col-span-2 flex items-center justify-between" : ""}>
                                 <label className={isBool ? "text-sm text-slate-400" : "block text-xs text-slate-400 mb-1"}>{label}</label>
                                 {isBool ? (
-                                    <input type="checkbox" checked={params[key] ?? val} 
+                                    <input type="checkbox" checked={params[key] ?? val}
                                         onChange={e => setParams({...params, [key]: e.target.checked})} />
+                                ) : enumOpts ? (
+                                    <select className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                        value={params[key] ?? val}
+                                        onChange={e => setParams({...params, [key]: e.target.value})}>
+                                        {enumOpts.map((opt, i) => (
+                                            <option key={opt} value={opt}>{opt}{i === 0 ? ' (default)' : ''}</option>
+                                        ))}
+                                    </select>
                                 ) : (
                                     <input type={typeof val === 'string' ? "text" : "number"} step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
                                         value={params[key] ?? val}

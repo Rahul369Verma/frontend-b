@@ -58,6 +58,12 @@ const KNOWN_STRATEGIES_FALLBACK = [
     { id: 'quantum_qho', label: 'Quantum QHO Mean-Reversion' },
     { id: 'volume_surge', label: 'Volume Surge (Climax Fade)' },
     { id: 'council_ensemble', label: 'Council Ensemble (Multi-Strategy Vote)' },
+    { id: 'rsi2_reversion', label: 'RSI-2 Deep Pullback Reversion (Connors)' },
+    { id: 'gap_edge', label: 'Opening Gap Edge (Fade / Follow)' },
+    { id: 'intraday_momentum', label: 'Intraday Momentum (Session Persistence)' },
+    { id: 'momentum_divergence', label: 'RSI Divergence Reversal' },
+    { id: 'open_drive_trend', label: 'Open Drive Trend-Day Rider' },
+    { id: 'ichimoku_kumo', label: 'Ichimoku Kumo (Kijun Fade)' },
 ];
 
 const KNOWN_SYMBOLS = [
