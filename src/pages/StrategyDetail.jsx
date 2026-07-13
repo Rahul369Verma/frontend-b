@@ -100,9 +100,47 @@ export default function StrategyDetail() {
     //                  option-symbol rows say 'Unknown')
     //   'deployment' — exact deploymentId (ONLY trades placed after deployment
     //                  tracking began — historical trades have no deploymentId)
-    // Default to 'symbol' so the page always shows results immediately, even
-    // when arriving from a brand-new deployment with no tagged trades yet.
-    const [scope, setScope] = useState('symbol');
+    // Arriving WITH a deploymentId defaults to 'deployment' — the whole point
+    // of clicking a specific deployment (e.g. breakout_range @5m vs @1m on the
+    // same underlying) is seeing THAT deployment's PnL, not everything on the
+    // symbol mixed together. Without an id, default to 'symbol' as before.
+    const [scope, setScope] = useState(deploymentId ? 'deployment' : 'symbol');
+
+    // ── All deployments (for the switcher dropdown + details card) ─────────
+    // One fetch of /api/deployments powers: (a) a dropdown to jump between any
+    // deployed strategy's results without going back to the dashboard, and
+    // (b) the details card for the currently-scoped deployment.
+    const [allDeployments, setAllDeployments] = useState([]);
+    useEffect(() => {
+        let cancelled = false;
+        axios.get(`${API_URL}/deployments`)
+            .then(res => {
+                if (cancelled) return;
+                const rows = Array.isArray(res.data) ? res.data : (res.data?.deployments || []);
+                setAllDeployments(rows);
+            })
+            .catch(() => { /* dropdown simply doesn't render — page still works */ });
+        return () => { cancelled = true; };
+    }, []);
+    const currentDeployment = useMemo(
+        () => allDeployments.find(d => String(d._id) === String(deploymentId)) || null,
+        [allDeployments, deploymentId]
+    );
+    // Switch to another deployment: same navigation contract as the
+    // DeploymentsPanel Results button, so the page re-scopes cleanly (the
+    // target may live on a DIFFERENT underlying — the route symbol comes
+    // from the selected deployment, not the current page).
+    const switchDeployment = useCallback((id) => {
+        const d = allDeployments.find(x => String(x._id) === String(id));
+        if (!d) return;
+        const qs = new URLSearchParams({
+            deploymentId: String(d._id),
+            strategyName: d.strategyName || '',
+            label: d.name || '',
+        }).toString();
+        setScope('deployment');
+        navigate(`/strategy/${encodeURIComponent(d.symbol)}?${qs}`);
+    }, [allDeployments, navigate]);
     // The strategy name we scope by — query param wins (it reflects the exact
     // deployment the user clicked), else the symbol's current config.
     const scopeStrategyName = qpStrategyName || strategyMeta?.strategyName || null;
@@ -308,6 +346,26 @@ export default function StrategyDetail() {
                     </div>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
+                    {/* Deployment switcher — every deployment in the DB, so the
+                        SAME strategy at different resolutions (5m vs 1m) can be
+                        compared per-deployment without going back to the
+                        dashboard. Value = the deployment's unique DB id. */}
+                    {allDeployments.length > 0 && (
+                        <select
+                            value={deploymentId || ''}
+                            onChange={(e) => e.target.value && switchDeployment(e.target.value)}
+                            className="bg-slate-800 border border-slate-700 rounded text-xs text-slate-200 px-2 py-1.5 max-w-[340px]"
+                            title="Jump to another deployment's results"
+                        >
+                            <option value="">— select deployment —</option>
+                            {allDeployments.map(d => (
+                                <option key={d._id} value={d._id}>
+                                    {(d.name || `${d.symbol} · ${d.strategyName}`)}
+                                    {` · ${d.params?.resolution || '?'}m · ${d.tradeMode || 'PAPER'}${d.isActive ? '' : ' · off'}`}
+                                </option>
+                            ))}
+                        </select>
+                    )}
                     {/* Scope toggle — narrowest scope last. 'deployment' is only
                         offered when we arrived from a specific deployment card
                         (deploymentId in the query). Historical trades have no
@@ -364,6 +422,25 @@ export default function StrategyDetail() {
             {error && (
                 <div className="mb-4 p-3 bg-red-900/20 border border-red-700/50 rounded text-red-300 text-sm">
                     {error}
+                </div>
+            )}
+
+            {/* Deployment details — WHICH deployment these results belong to.
+                Shown whenever the page is scoped to a deployment, so 5m vs 1m
+                runs of the same strategy are unambiguous at a glance. */}
+            {scope === 'deployment' && currentDeployment && (
+                <div className="mb-4 p-3 bg-violet-900/15 border border-violet-700/40 rounded flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-slate-300">
+                    <span className="text-violet-300 font-semibold">{currentDeployment.name || currentDeployment.strategyName}</span>
+                    <span>id <span className="font-mono text-slate-400" title={String(currentDeployment._id)}>{String(currentDeployment._id).slice(-8)}</span></span>
+                    <span>strategy <span className="text-slate-100">{currentDeployment.strategyName}</span></span>
+                    <span>resolution <span className="text-slate-100">{currentDeployment.params?.resolution || '?'}m</span></span>
+                    <span>mode <span className={currentDeployment.tradeMode === 'LIVE' ? 'text-red-300' : 'text-blue-300'}>{currentDeployment.tradeMode || 'PAPER'}</span></span>
+                    <span>{currentDeployment.isActive ? <span className="text-emerald-300">active</span> : <span className="text-slate-500">inactive</span>}</span>
+                    {currentDeployment.params?.lots != null && <span>lots <span className="text-slate-100">{currentDeployment.params.lots}</span></span>}
+                    {currentDeployment.params?.sl_points != null && <span>SL <span className="text-slate-100">{currentDeployment.params.sl_points}</span></span>}
+                    {currentDeployment.params?.tp_points != null && <span>TP <span className="text-slate-100">{currentDeployment.params.tp_points}</span></span>}
+                    {currentDeployment.createdAt && <span>deployed <span className="text-slate-400">{new Date(currentDeployment.createdAt).toLocaleDateString('en-IN')}</span></span>}
+                    {currentDeployment.updatedAt && <span>updated <span className="text-slate-400">{new Date(currentDeployment.updatedAt).toLocaleDateString('en-IN')}</span></span>}
                 </div>
             )}
 

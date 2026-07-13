@@ -165,6 +165,10 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
         return () => { cancelled = true; };
     }, []);
 
+    // Per-deployment realized PnL over trailing windows (7d + 30d) — ONE
+    // aggregation for all cards (badges next to each Results button).
+    // { [deploymentId]: { d7: {pnl,trades,wins}, d30: {...} } }
+    const [pnlSummary, setPnlSummary] = useState({});
     const fetchAll = React.useCallback(async () => {
         setLoading(true); setError(null);
         try {
@@ -175,6 +179,11 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
         } finally {
             setLoading(false);
         }
+        // Best-effort — a summary failure must not block the panel.
+        try {
+            const s = await axios.get(`${API_URL}/deployments/pnl-summary`, { params: { windows: '7,30' } });
+            setPnlSummary(s.data?.summary || {});
+        } catch (_) { /* badges simply show — */ }
     }, []);
 
     useEffect(() => { fetchAll(); }, [fetchAll]);
@@ -399,6 +408,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                                         onSim={onSim}
                                         onManualTrade={onManualTrade}
                                         onResults={() => openResults(d)}
+                                        pnlWindows={pnlSummary[String(d._id)] || null}
                                     />
                                 ))}
                             </div>
@@ -422,11 +432,30 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
 }
 
 // ── One deployment card — full parity with the legacy strategy card ────────
+// Compact realized-PnL badge for one trailing window ("7d" / "30d").
+// stats = { pnl, trades, wins } or null (no closed tagged trades in window).
+function PnlBadge({ label, stats }) {
+    const has = stats && stats.trades > 0;
+    const cls = !has ? 'text-slate-500 border-slate-700 bg-slate-800/40'
+        : stats.pnl > 0 ? 'text-emerald-300 border-emerald-700/50 bg-emerald-900/20'
+        : stats.pnl < 0 ? 'text-red-300 border-red-700/50 bg-red-900/20'
+        : 'text-slate-300 border-slate-600 bg-slate-800/40';
+    const title = has
+        ? `Last ${label} (this deployment): ${stats.trades} closed trade${stats.trades === 1 ? '' : 's'}, ${stats.wins} win${stats.wins === 1 ? '' : 's'}`
+        : `No closed trades tagged to this deployment in the last ${label}`;
+    return (
+        <span className={`px-2 py-1 rounded text-xs font-semibold border ${cls}`} title={title}>
+            {label} {!has ? '—'
+                : `${stats.pnl > 0 ? '+' : stats.pnl < 0 ? '−' : ''}₹${Math.abs(stats.pnl).toLocaleString('en-IN', { maximumFractionDigits: 0 })} · ${stats.trades}t`}
+        </span>
+    );
+}
+
 function DeploymentCard({
     d, strategies, sessionHealth, globalConfig,
     isBusy, isExpanded, isEditing,
     onToggleActive, onToggleMode, onDelete, onToggleExpand, onToggleEdit, onEdited,
-    onTest, onSim, onManualTrade, onResults,
+    onTest, onSim, onManualTrade, onResults, pnlWindows,
 }) {
     const params = d.params || {};
     const isActive = d.isActive !== false;
@@ -501,6 +530,10 @@ function DeploymentCard({
 
                 {/* Action buttons — identical affordances to the legacy card */}
                 <div className="flex gap-2 items-center flex-wrap">
+                    {/* Trailing realized PnL for THIS deployment (tagged trades
+                        only) — 7-day and 30-day windows. */}
+                    <PnlBadge label="7d" stats={pnlWindows?.d7 || null} />
+                    <PnlBadge label="30d" stats={pnlWindows?.d30 || null} />
                     {onResults && (
                         <button
                             onClick={onResults}
