@@ -111,6 +111,7 @@ export default function MultiLeg() {
     const [autoEntryStyle, setAutoEntryStyle] = useState('both'); // both | signal-only
     // Saved strategies + live deployments (Deploy tab)
     const [savedList, setSavedList] = useState([]);
+    const [savedDetail, setSavedDetail] = useState(null); // _id of the expanded saved-strategy row
     const [saveName, setSaveName] = useState('');
     const [saveMsg, setSaveMsg] = useState(null);
     const [deployLots, setDeployLots] = useState(1);
@@ -121,6 +122,8 @@ export default function MultiLeg() {
     const [resTrades, setResTrades] = useState([]);
     const [resLoading, setResLoading] = useState(false);
     const [resFilter, setResFilter] = useState({ mode: 'all', deploymentId: 'all', template: 'all', symbol: 'all' });
+    const [ivCalib, setIvCalib] = useState(null);      // chain-IV calibration result
+    const [ivCalibBusy, setIvCalibBusy] = useState(false);
 
     const tpl = useMemo(() => templates.find(t => t.key === tplKey) || null, [templates, tplKey]);
     const effBudget = useMemo(() => ({ ...budgetForLevel(budgetLevel), ...budgetCustom }), [budgetLevel, budgetCustom]);
@@ -393,6 +396,18 @@ export default function MultiLeg() {
         const t = setInterval(refreshResults, 15000);
         return () => clearInterval(t);
     }, [mode, refreshResults]);
+
+    // Calibrate the backtest IV proxy to the LIVE chain ATM IV (level parity).
+    const calibrateIv = useCallback(() => {
+        setIvCalibBusy(true); setIvCalib(null);
+        axios.get(`${API_URL}/multileg/calibrate`, { params: { symbol } })
+            .then(r => {
+                setIvCalib(r.data);
+                if (r.data?.iv_mult) setParams(p => ({ ...p, iv_mult: r.data.iv_mult }));
+            })
+            .catch(e => setIvCalib({ error: e.response?.data?.error || e.message }))
+            .finally(() => setIvCalibBusy(false));
+    }, [symbol]);
 
     // filtered trades + computed KPIs / equity / breakdowns (live-engine parity)
     const resFiltered = useMemo(() => {
@@ -691,9 +706,33 @@ export default function MultiLeg() {
                 </label>
             </div>
 
+            {/* IV LEVEL calibration — the biggest backtest↔live parity lever. */}
+            <div className="mt-3 p-2 rounded border border-slate-800 bg-slate-900/40">
+                <div className="flex items-center gap-2 flex-wrap">
+                    <label className="text-[11px] text-slate-500" title="Backtest prices legs from realizedVol × iv_mult. 1.15 is a guess; calibrate it to the live chain so backtest premium LEVEL (and %-of-credit SL/TP) matches what the deployed engine sees.">iv_mult
+                        <input type="number" step="0.01" value={params.iv_mult ?? 1.15} onChange={e => setParams(p => ({ ...p, iv_mult: Number(e.target.value) }))}
+                            className="w-20 ml-1 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                    </label>
+                    <button onClick={calibrateIv} disabled={ivCalibBusy}
+                        className="px-2 py-1 rounded border border-cyan-700/50 bg-cyan-900/20 text-cyan-300 text-[11px] hover:bg-cyan-900/40 disabled:opacity-50 flex items-center gap-1">
+                        <RefreshCw className={`w-3 h-3 ${ivCalibBusy ? 'animate-spin' : ''}`} /> Calibrate IV to live chain ({shortSym(symbol)})
+                    </button>
+                    {params.iv_mult != null && params.iv_mult !== 1.15 && (
+                        <button onClick={() => { setParams(p => { const { iv_mult, ...rest } = p; return rest; }); setIvCalib(null); }}
+                            className="text-[10px] text-slate-500 hover:text-red-300" title="Revert to the default 1.15">✕ reset</button>
+                    )}
+                </div>
+                {ivCalib && (ivCalib.error
+                    ? <div className="text-[10px] text-red-400 mt-1">Calibration failed: {ivCalib.error} (needs live market hours + a valid option chain)</div>
+                    : <div className="text-[10px] text-slate-400 mt-1 font-mono">
+                        chain ATM IV <span className="text-cyan-300">{ivCalib.observedIvPct}%</span> vs realized {ivCalib.realizedVolPct}% → iv_mult <span className="text-cyan-300">{ivCalib.iv_mult}</span> (was 1.15) · ATM {ivCalib.atmStrike} {ivCalib.expiry} · CE ₹{ivCalib.atmCe} PE ₹{ivCalib.atmPe}
+                    </div>)}
+                <div className="text-[10px] text-slate-600 mt-1">Aligns backtest premium LEVEL to the market. Skew / term-structure / microstructure still differ — paper-validate before LIVE.</div>
+            </div>
+
             <div className="text-xs text-slate-400 mt-4 mb-1 font-semibold">Parameters (every one editable + sweepable)</div>
             <div className="grid grid-cols-2 gap-2 text-xs">
-                {Object.entries(params).filter(([k]) => !['lots', 'size_mode', 'risk_per_trade', 'max_lots', 'max_loss_per_day', 'entry_slippage_cap_pct', 'min_ivp', 'max_ivp', 'ivp_lookback', 'delta_alert', 'spread_floor', 'spread_step_pct'].includes(k)).map(([k, v]) => (
+                {Object.entries(params).filter(([k]) => !['lots', 'size_mode', 'risk_per_trade', 'max_lots', 'max_loss_per_day', 'entry_slippage_cap_pct', 'min_ivp', 'max_ivp', 'ivp_lookback', 'delta_alert', 'spread_floor', 'spread_step_pct', 'iv_mult'].includes(k)).map(([k, v]) => (
                     <label key={k} className="text-slate-500">{k}
                         <input value={v ?? ''} onChange={e => {
                             const raw = e.target.value;
@@ -1282,20 +1321,29 @@ export default function MultiLeg() {
                                 <table className="w-full text-[11px] text-slate-300">
                                     <thead><tr className="text-slate-500 text-left">
                                         <th>Name</th><th>Structure</th><th>Symbol</th><th>Entry</th>
-                                        <th className="text-right">BT net ₹</th><th className="text-right">BT win%</th><th className="text-right">BT n</th>
+                                        <th className="text-right">BT net ₹</th><th className="text-right">BT win%</th><th className="text-right">BT PF</th><th className="text-right">BT n</th>
                                         <th className="text-right">Actions</th>
                                     </tr></thead>
                                     <tbody>
-                                        {savedList.map(s => (
-                                            <tr key={s._id} className="border-t border-slate-800 hover:bg-slate-800/40">
+                                        {savedList.map(s => {
+                                            const m = s.backtest?.metrics || {};
+                                            const isOpen = savedDetail === s._id;
+                                            return (
+                                            <React.Fragment key={s._id}>
+                                            <tr className="border-t border-slate-800 hover:bg-slate-800/40">
                                                 <td className="font-semibold text-slate-200">{s.name}</td>
                                                 <td>{templates.find(t => t.key === s.template)?.name || s.template}</td>
                                                 <td>{shortSym(s.symbol)}</td>
-                                                <td className="text-slate-400">{s.entry_mode === 'signal' ? `signal: ${s.signal_strategy}` : 'time'}</td>
-                                                <td className={`text-right font-semibold ${(s.backtest?.metrics?.netPnl ?? 0) > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(s.backtest?.metrics?.netPnl)}</td>
-                                                <td className="text-right">{s.backtest?.metrics?.winRate ?? '—'}</td>
-                                                <td className="text-right">{s.backtest?.metrics?.n ?? '—'}</td>
+                                                <td className="text-slate-400">{s.entry_mode === 'signal' ? `signal: ${s.signal_strategy}${(s.params||{}).use_signal_exit ? ' +exit' : ''}` : 'time'}</td>
+                                                <td className={`text-right font-semibold ${(m.netPnl ?? 0) > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(m.netPnl)}</td>
+                                                <td className="text-right">{m.winRate != null ? `${m.winRate}%` : '—'}</td>
+                                                <td className="text-right">{m.profitFactor != null ? (m.profitFactor === null ? '∞' : fmt(m.profitFactor, 2)) : '—'}</td>
+                                                <td className="text-right">{m.n ?? '—'}</td>
                                                 <td className="text-right whitespace-nowrap">
+                                                    <button onClick={() => setSavedDetail(isOpen ? null : s._id)}
+                                                        className={`px-2 py-0.5 mr-1 rounded border ${isOpen ? 'border-amber-600 bg-amber-900/25 text-amber-300' : 'border-slate-600 bg-slate-800 text-slate-300'} hover:bg-slate-700`} title="Show backtest results + params saved with this strategy">
+                                                        {isOpen ? '▲ Hide' : '▾ Details'}
+                                                    </button>
                                                     <button onClick={() => loadSaved(s)}
                                                         className="px-2 py-0.5 mr-1 rounded border border-sky-700/50 bg-sky-900/20 text-sky-300 hover:bg-sky-900/40" title="Load into Backtest for inspection">
                                                         Load
@@ -1314,7 +1362,44 @@ export default function MultiLeg() {
                                                     </button>
                                                 </td>
                                             </tr>
-                                        ))}
+                                            {isOpen && (
+                                                <tr className="bg-slate-900/60">
+                                                    <td colSpan={9} className="p-3">
+                                                        {s.backtest?.metrics ? (
+                                                            <div className="space-y-2">
+                                                                <div className="text-[11px] text-slate-400">
+                                                                    Backtest window <span className="text-slate-300">{s.backtest.from} → {s.backtest.to}</span> · {s.backtest.resolution || '5'}m
+                                                                    {m.exitReasons && <span> · exits: {Object.entries(m.exitReasons).map(([k, v]) => `${k}×${v}`).join(', ')}</span>}
+                                                                </div>
+                                                                <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+                                                                    <Tile label="Net PnL" value={`₹${fmt(m.netPnl)}`} good={m.netPnl > 0} bad={m.netPnl < 0} />
+                                                                    <Tile label="Trades" value={m.n ?? '—'} />
+                                                                    <Tile label="Win Rate" value={m.winRate != null ? `${m.winRate}%` : '—'} good={m.winRate >= 50} />
+                                                                    <Tile label="Profit Factor" value={m.profitFactor == null ? '∞' : fmt(m.profitFactor, 2)} good={m.profitFactor == null || m.profitFactor >= 1.3} bad={m.profitFactor != null && m.profitFactor < 1} />
+                                                                    <Tile label="Max Drawdown" value={`₹${fmt(m.maxDrawdown)}`} bad={m.maxDrawdown < 0} />
+                                                                    <Tile label="ROI on margin" value={m.roiOnMarginPct != null ? `${fmt(m.roiOnMarginPct, 1)}%` : '—'} good={m.roiOnMarginPct > 0} />
+                                                                    <Tile label="Avg Win" value={`₹${fmt(m.avgWin)}`} good />
+                                                                    <Tile label="Avg Loss" value={`₹${fmt(m.avgLoss)}`} bad />
+                                                                    <Tile label="Avg margin (capital)" value={`₹${fmt(m.avgMargin)}`} />
+                                                                    <Tile label="Gross win" value={`₹${fmt(m.grossWin)}`} good />
+                                                                    <Tile label="Gross loss" value={`₹${fmt(m.grossLoss)}`} bad />
+                                                                    <Tile label="Wins" value={`${m.wins ?? '—'}`} />
+                                                                </div>
+                                                                <div>
+                                                                    <div className="text-[10px] text-slate-500 mb-0.5">Structure params</div>
+                                                                    <div className="text-[10px] font-mono text-slate-400 break-all">{JSON.stringify(s.params || {})}</div>
+                                                                    {s.signal_params && <><div className="text-[10px] text-violet-400 mt-1 mb-0.5">Tuned signal params</div><div className="text-[10px] font-mono text-slate-400 break-all">{JSON.stringify(s.signal_params)}</div></>}
+                                                                </div>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="text-[11px] text-slate-500">No backtest snapshot saved with this strategy. Load it → run a backtest → re-save to attach results.</div>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            )}
+                                            </React.Fragment>
+                                            );
+                                        })}
                                     </tbody>
                                 </table>
                             </div>
@@ -1428,6 +1513,21 @@ export default function MultiLeg() {
                                 {mlDeps.deployments.map(d => {
                                     const st = d.position?.state || 'IDLE';
                                     const open = ['OPEN', 'ENTERING', 'EXITING'].includes(st);
+                                    const pos = d.position || {};
+                                    const P = d.params || {};
+                                    // expiry + DTE from the structure's legs
+                                    const expiry = pos.legs?.map(l => l.expiry).filter(Boolean).sort()[0] || null;
+                                    const dte = expiry ? Math.round((new Date(expiry + 'T15:30:00+05:30') - Date.now()) / 86400e3) : null;
+                                    // what the engine is managing this structure TO (its exit config)
+                                    const exitBits = [];
+                                    if (P.tp_pct_credit) exitBits.push(`TP ${P.tp_pct_credit}% credit`);
+                                    if (P.tp_pct_max_profit) exitBits.push(`TP ${P.tp_pct_max_profit}% maxP`);
+                                    if (P.sl_x_credit) exitBits.push(`SL ${P.sl_x_credit}×`);
+                                    if (P.sl_pct_debit) exitBits.push(`SL ${P.sl_pct_debit}%`);
+                                    if (P.leg_sl_x) exitBits.push(`legSL ${P.leg_sl_x}×`);
+                                    if (P.dte_exit != null) exitBits.push(`DTE≤${P.dte_exit}`);
+                                    if (P.use_signal_exit) exitBits.push('early-exit');
+                                    if (P.square_off) exitBits.push(`sq-off ${P.square_off}`);
                                     return (
                                         <div key={d._id} className={`rounded-lg border p-3 ${d.trade_mode === 'LIVE' ? 'border-red-800/60 bg-red-950/10' : 'border-slate-700 bg-slate-900/40'}`}>
                                             <div className="flex items-center justify-between mb-1">
@@ -1460,9 +1560,30 @@ export default function MultiLeg() {
                                                     {d.position.ivpAtEntry != null && <span className="text-slate-500">IVP@in {fmt(d.position.ivpAtEntry, 0)}</span>}
                                                 </div>
                                             )}
+                                            {/* Entry timing + position detail (the trade's story) */}
+                                            {open && pos.entryAt && (
+                                                <div className="text-[10px] font-mono text-slate-400 mb-2 space-y-0.5 border-t border-slate-800 pt-1.5">
+                                                    <div>⏱ <span className="text-slate-300">Entered {fmtClock(pos.entryAt)}</span> · held {fmtDur(pos.entryAt)}{pos.entryDir ? ` · dir ${pos.entryDir}` : ''}</div>
+                                                    <div>
+                                                        spot@in {fmt(pos.entrySpot)}
+                                                        {pos.origCredit != null && <> · net {pos.origCredit >= 0 ? 'credit' : 'debit'} <span className="text-slate-300">₹{fmt(Math.abs(pos.origCredit), 1)}/u</span></>}
+                                                        {Number.isFinite(pos.maxProfit) && pos.maxProfit != null && <> · maxP ₹{fmt(pos.maxProfit, 1)}/u</>}
+                                                        {pos.marginEst > 0 && <> · margin ₹{fmt(pos.marginEst)}</>}
+                                                    </div>
+                                                    {expiry && <div>expiry {expiry}{dte != null ? ` · ${dte} DTE` : ''} · {pos.lots || d.lots} lot(s){pos.vegaEst != null ? ` · vega@in ₹${fmt(pos.vegaEst, 0)}` : ''}</div>}
+                                                    {exitBits.length > 0 && <div className="text-slate-500">manages to: {exitBits.join(' · ')}</div>}
+                                                </div>
+                                            )}
                                             {st === 'OPEN' && d.position?.legs?.length > 0 && (
                                                 <div className="text-[10px] font-mono text-slate-500 mb-2">
-                                                    {d.position.legs.map((l, i) => <div key={i}>{l.action} {l.symbol?.split(':')[1]} @ ₹{l.entryPrice}</div>)}
+                                                    {d.position.legs.map((l, i) => <div key={i}>{l.action} {l.symbol?.split(':')[1]} @ ₹{l.entryPrice}{l.exitPrice ? ` → ₹${l.exitPrice}` : ''}</div>)}
+                                                </div>
+                                            )}
+                                            {/* IDLE deployments: show what it's waiting for + config summary */}
+                                            {!open && d.status === 'ACTIVE' && (
+                                                <div className="text-[10px] font-mono text-slate-500 mb-2 border-t border-slate-800 pt-1.5">
+                                                    flat — waiting for {d.entry_mode === 'signal' ? `a ${d.signal_strategy} signal` : `the ${P.entry_time || '09:20'} entry`}
+                                                    {d.daily?.entered ? ' · already entered today' : ''}{exitBits.length ? ` · exits: ${exitBits.slice(0, 3).join(' · ')}` : ''}
                                                 </div>
                                             )}
                                             {d.lastError && <div className="text-[10px] text-red-400 mb-2">⚠ {d.lastError}</div>}
@@ -1647,6 +1768,22 @@ export default function MultiLeg() {
             )}
         </div>
     );
+}
+
+function fmtClock(iso) {
+    if (!iso) return '—';
+    try { return new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }); }
+    catch { return '—'; }
+}
+function fmtDur(iso) {
+    if (!iso) return '';
+    const ms = Date.now() - new Date(iso).getTime();
+    if (isNaN(ms) || ms < 0) return '';
+    const m = Math.floor(ms / 60000);
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ${m % 60}m`;
+    return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
 function Tile({ label, value, good, bad, small }) {
