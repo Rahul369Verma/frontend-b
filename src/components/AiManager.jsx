@@ -137,7 +137,7 @@ function JobCard({ job, onStop, expanded, onToggleExpand }) {
                     </div>
                     <div className="text-xs text-slate-500 mt-0.5">
                         {job.timesteps?.toLocaleString()} steps
-                        {job.startedAt && ` · Started ${new Date(job.startedAt).toLocaleTimeString()}`}
+                        {job.startedAt && ` · Started ${new Date(job.startedAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false })}`}
                     </div>
                 </div>
 
@@ -1179,7 +1179,7 @@ const AiManager = () => {
                                         <option value="">-- None (Train from scratch) --</option>
                                         {availableRlModels.flatMap((model, idx) => {
                                             const finalFile = model.model_file || `${model.symbol}_ppo_final.zip`;
-                                            const date = model.trained_at || model.timestamp ? new Date(model.timestamp || model.trained_at).toLocaleDateString() : 'Unknown';
+                                            const date = model.trained_at || model.timestamp ? new Date(model.timestamp || model.trained_at).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" }) : 'Unknown';
                                             const label = model.model_name || model.symbol;
                                             const opts = [
                                                 <option key={`${idx}_f`} value={finalFile}>{label} — Final ({date})</option>
@@ -1242,7 +1242,7 @@ const AiManager = () => {
                                                                     )}
                                                                 </div>
                                                                 <div className="text-slate-500 mt-1 flex gap-2">
-                                                                    <span>{new Date(model.timestamp || model.trained_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                                                                    <span>{new Date(model.timestamp || model.trained_at).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
                                                                     <span>•</span>
                                                                     <span>{model.timesteps?.toLocaleString() || 0} steps</span>
                                                                 </div>
@@ -1448,7 +1448,7 @@ const AiManager = () => {
                                     </div>
                                     <div className="flex gap-3 mt-1 text-xs text-slate-500">
                                         <span>Step {ckpt.step.toLocaleString()} / {ckpt.total_timesteps.toLocaleString()}</span>
-                                        <span>{new Date(ckpt.timestamp).toLocaleString()}</span>
+                                        <span>{new Date(ckpt.timestamp).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</span>
                                     </div>
                                 </div>
                                 <button

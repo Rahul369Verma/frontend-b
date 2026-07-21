@@ -112,6 +112,7 @@ export default function MultiLeg() {
     // Saved strategies + live deployments (Deploy tab)
     const [savedList, setSavedList] = useState([]);
     const [savedDetail, setSavedDetail] = useState(null); // _id of the expanded saved-strategy row
+    const [depDetail, setDepDetail] = useState(null);     // _id of the expanded deployment (full order detail)
     const [saveName, setSaveName] = useState('');
     const [saveMsg, setSaveMsg] = useState(null);
     const [deployLots, setDeployLots] = useState(1);
@@ -433,7 +434,7 @@ export default function MultiLeg() {
             best = Math.max(best, p); worst = Math.min(worst, p);
             holdSum += Number(t.holdDays) || ((new Date(t.exitAt) - new Date(t.entryAt)) / 86400e3) || 0;
             cum += p; peak = Math.max(peak, cum); maxDD = Math.min(maxDD, cum - peak);
-            equity.push({ idx: i + 1, date: new Date(t.exitAt).toISOString().slice(5, 16).replace('T', ' '), cum: +cum.toFixed(0), pnl: +p.toFixed(0) });
+            equity.push({ idx: i + 1, date: istDateTime(t.exitAt), cum: +cum.toFixed(0), pnl: +p.toFixed(0) });
             const agg = (m, k) => { m[k] = m[k] || { net: 0, n: 0, wins: 0 }; m[k].net += p; m[k].n++; if (p > 0) m[k].wins++; };
             agg(byReason, t.exitReason || '—'); agg(byTemplate, t.template || '—'); agg(bySymbol, t.symbol || '—');
         }
@@ -912,8 +913,8 @@ export default function MultiLeg() {
                                         <tbody>
                                             {result.trades.slice().reverse().map((t, i) => (
                                                 <tr key={i} className="border-t border-slate-800">
-                                                    <td>{t.entryTime.slice(5, 16).replace('T', ' ')}</td>
-                                                    <td>{t.exitTime.slice(5, 16).replace('T', ' ')}</td>
+                                                    <td title="IST">{istDateTime(t.entryTime)}</td>
+                                                    <td title="IST">{istDateTime(t.exitTime)}</td>
                                                     <td>{t.holdDays}d</td>
                                                     <td className="text-slate-400">{t.reason}</td>
                                                     <td className="text-right text-slate-400">{fmt(t.spotEntry)}→{fmt(t.spotExit)}</td>
@@ -1213,7 +1214,7 @@ export default function MultiLeg() {
                                 {autoJobs.map(j => (
                                     <div key={j.jobId} className="flex items-center gap-2 border-b border-slate-800/60 pb-1">
                                         <span className={`px-1.5 py-0.5 rounded border text-[10px] ${j.status === 'running' ? 'border-amber-600 text-amber-300' : j.status === 'done' ? 'border-emerald-700 text-emerald-300' : 'border-red-800 text-red-400'}`}>{j.status}</span>
-                                        <span className="text-slate-500">{String(j.startedAt).slice(5, 16).replace('T', ' ')}</span>
+                                        <span className="text-slate-500" title="IST">{istDateTime(j.startedAt)}</span>
                                         <span className="text-slate-400 flex-1 truncate">
                                             {(j.request?.symbols || []).map(shortSym).join('+')} · {j.request?.strategies ?? '?'} strategies · {j.request?.entry_style || 'both'}
                                             {j.status === 'running' && j.progress?.note ? ` — ${j.progress.note}` : ''}
@@ -1430,9 +1431,9 @@ export default function MultiLeg() {
                                     <div className={`text-xl font-mono font-bold ${combined < 0 ? 'text-rose-300' : 'text-emerald-300'}`}>₹{fmt(combined)}</div>
                                     <div className="text-[10px] text-slate-500">Realized ₹{fmt(realized)} · Open {open >= 0 ? '+' : ''}₹{fmt(open)}</div>
                                 </Card>
-                                <Card label="Trades Today">
+                                <Card label="Structures closed today">
                                     <div className="text-xl font-mono font-bold text-slate-200">{mlStatus.tradesToday || 0}</div>
-                                    <div className="text-[10px] text-slate-500">{mlStatus.entriesUsed || 0}/{mlStatus.active || 0} deployments entered · 1 entry/day each</div>
+                                    <div className="text-[10px] text-slate-500" title="Deployments that have used their one-per-day entry slot (including a structure carried in from a prior day).">{mlStatus.entriesUsed || 0}/{mlStatus.active || 0} used today’s entry slot</div>
                                 </Card>
                                 <Card label="Daily Loss Used" tone={lossPct >= 80 ? 'border-rose-800/50 bg-rose-950/10' : undefined}>
                                     {cap > 0 ? (
@@ -1480,7 +1481,7 @@ export default function MultiLeg() {
                                             <div className="flex items-center gap-0.5 flex-shrink-0">
                                                 {hist.map((h, i) => (
                                                     <span key={i} className={`w-1.5 h-3 rounded-sm ${colorFor(h.action)}`}
-                                                        title={`${new Date(h.ts).toLocaleTimeString('en-IN', { hour12: false })}\n${h.action}${h.type ? ' ' + h.type : ''}: ${h.reason || ''}`} />
+                                                        title={`${istTimeSec(h.ts)} IST\n${h.action}${h.type ? ' ' + h.type : ''}: ${h.reason || ''}`} />
                                                 ))}
                                             </div>
                                         </div>
@@ -1526,8 +1527,30 @@ export default function MultiLeg() {
                                     if (P.sl_pct_debit) exitBits.push(`SL ${P.sl_pct_debit}%`);
                                     if (P.leg_sl_x) exitBits.push(`legSL ${P.leg_sl_x}×`);
                                     if (P.dte_exit != null) exitBits.push(`DTE≤${P.dte_exit}`);
+                                    if (P.tp_x_debit) exitBits.push(`TP ${P.tp_x_debit}× debit`);
                                     if (P.use_signal_exit) exitBits.push('early-exit');
                                     if (P.square_off) exitBits.push(`sq-off ${P.square_off}`);
+                                    // per-unit → ₹ multiplier = lotSize×lots. Prefer the engine's own
+                                    // ratio (lastMtmRupees/lastMtm), which is correct even after a broker
+                                    // lot-correction/partial-fill; fall back to leg.qty/ratio.
+                                    const unitToRupee = (pos.lastMtm && pos.lastMtmRupees) ? (pos.lastMtmRupees / pos.lastMtm)
+                                        : (pos.legs?.length ? Number(pos.legs[0].qty) / (pos.legs[0].ratio || 1) : null);
+                                    // computed exit PRICE LEVELS (₹ MTM thresholds the engine acts on —
+                                    // mirrors exits.js _monitor tpHit/slHit exactly, incl. tp_x_debit)
+                                    const isCredit = pos.origCredit > 0;
+                                    let tpUnit = null, slUnit = null;
+                                    if (pos.origCredit != null) {
+                                        if (isCredit) {
+                                            if (P.tp_pct_credit) tpUnit = pos.origCredit * P.tp_pct_credit / 100;
+                                            if (P.sl_x_credit) slUnit = -pos.origCredit * (P.sl_x_credit - 1);
+                                        } else {
+                                            if (P.tp_pct_max_profit && Number.isFinite(pos.maxProfit) && pos.maxProfit > 0) tpUnit = pos.maxProfit * P.tp_pct_max_profit / 100;
+                                            else if (P.tp_x_debit) tpUnit = Math.abs(pos.origCredit) * P.tp_x_debit;
+                                            if (P.sl_pct_debit) slUnit = -Math.abs(pos.origCredit) * P.sl_pct_debit / 100;
+                                        }
+                                    }
+                                    const rup = (u) => (u != null && unitToRupee) ? `₹${fmt(u * unitToRupee)}` : (u != null ? `₹${fmt(u, 1)}/u` : '—');
+                                    const detailOpen = depDetail === d._id;
                                     return (
                                         <div key={d._id} className={`rounded-lg border p-3 ${d.trade_mode === 'LIVE' ? 'border-red-800/60 bg-red-950/10' : 'border-slate-700 bg-slate-900/40'}`}>
                                             <div className="flex items-center justify-between mb-1">
@@ -1536,6 +1559,9 @@ export default function MultiLeg() {
                                                     <span className={`text-[10px] px-1.5 py-0.5 rounded border ${d.trade_mode === 'LIVE' ? 'border-red-700 text-red-300' : 'border-sky-700 text-sky-300'}`}>{d.trade_mode}</span>
                                                     <span className={`text-[10px] px-1.5 py-0.5 rounded border ${d.status === 'ACTIVE' ? 'border-emerald-700 text-emerald-300' : 'border-slate-600 text-slate-400'}`}>{d.status}</span>
                                                     <span className={`text-[10px] px-1.5 py-0.5 rounded border ${open ? 'border-amber-600 text-amber-300' : 'border-slate-700 text-slate-500'}`}>{st}</span>
+                                                    <button onClick={() => setDepDetail(detailOpen ? null : d._id)}
+                                                        className={`text-[10px] px-1.5 py-0.5 rounded border ${detailOpen ? 'border-amber-600 text-amber-300' : 'border-slate-600 text-slate-400'} hover:text-white`}
+                                                        title="Full order detail — legs, prices, SL/TP levels, exit deadlines">{detailOpen ? '▲' : '▾'} details</button>
                                                 </div>
                                             </div>
                                             <div className="text-[11px] text-slate-400 mb-1">
@@ -1566,7 +1592,7 @@ export default function MultiLeg() {
                                                     <div>⏱ <span className="text-slate-300">Entered {fmtClock(pos.entryAt)}</span> · held {fmtDur(pos.entryAt)}{pos.entryDir ? ` · dir ${pos.entryDir}` : ''}</div>
                                                     <div>
                                                         spot@in {fmt(pos.entrySpot)}
-                                                        {pos.origCredit != null && <> · net {pos.origCredit >= 0 ? 'credit' : 'debit'} <span className="text-slate-300">₹{fmt(Math.abs(pos.origCredit), 1)}/u</span></>}
+                                                        {pos.origCredit != null && <> · net {pos.origCredit > 0 ? 'credit' : 'debit'} <span className="text-slate-300">₹{fmt(Math.abs(pos.origCredit), 1)}/u</span></>}
                                                         {Number.isFinite(pos.maxProfit) && pos.maxProfit != null && <> · maxP ₹{fmt(pos.maxProfit, 1)}/u</>}
                                                         {pos.marginEst > 0 && <> · margin ₹{fmt(pos.marginEst)}</>}
                                                     </div>
@@ -1584,6 +1610,63 @@ export default function MultiLeg() {
                                                 <div className="text-[10px] font-mono text-slate-500 mb-2 border-t border-slate-800 pt-1.5">
                                                     flat — waiting for {d.entry_mode === 'signal' ? `a ${d.signal_strategy} signal` : `the ${P.entry_time || '09:20'} entry`}
                                                     {d.daily?.entered ? ' · already entered today' : ''}{exitBits.length ? ` · exits: ${exitBits.slice(0, 3).join(' · ')}` : ''}
+                                                </div>
+                                            )}
+                                            {/* ── Full order detail (professional view) ── */}
+                                            {detailOpen && (
+                                                <div className="text-[10px] mb-2 border-t border-slate-800 pt-2 space-y-2">
+                                                    <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 font-mono text-slate-400">
+                                                        <div>Deployment <span className="text-slate-300">{d.name}</span></div>
+                                                        <div>Created <span className="text-slate-300">{istDateTime(d.createdAt)}</span></div>
+                                                        <div>Mode <span className={d.trade_mode === 'LIVE' ? 'text-red-300' : 'text-sky-300'}>{d.trade_mode}</span> · {d.status}</div>
+                                                        <div>Entry <span className="text-slate-300">{d.entry_mode === 'signal' ? `${d.signal_strategy}${P.use_signal_exit ? ' +exit' : ''}` : `time ${P.entry_time || '09:20'}`}</span></div>
+                                                        {open && <><div>Entered <span className="text-slate-300">{istDateTime(pos.entryAt)}</span> · held {fmtDur(pos.entryAt)}</div>
+                                                        <div>Entry spot <span className="text-slate-300">{fmt(pos.entrySpot)}</span>{pos.entryDir ? ` · dir ${pos.entryDir}` : ''}</div></>}
+                                                    </div>
+                                                    {open && pos.legs?.length > 0 && (
+                                                        <div className="overflow-x-auto">
+                                                            <table className="w-full font-mono text-slate-300">
+                                                                <thead><tr className="text-slate-500 text-left"><th>Leg</th><th>Strike</th><th className="text-right">Qty</th><th className="text-right">Entry ₹</th><th className="text-right">Now/Exit</th><th>Status</th>{d.trade_mode === 'LIVE' && <th>OrderId</th>}</tr></thead>
+                                                                <tbody>
+                                                                    {pos.legs.map((l, i) => (
+                                                                        <tr key={i} className="border-t border-slate-800/60">
+                                                                            <td className={l.action === 'BUY' ? 'text-emerald-300' : 'text-red-300'}>{l.action} {l.type}</td>
+                                                                            <td>{l.strike}{l.ratio > 1 ? ` ×${l.ratio}` : ''}</td>
+                                                                            <td className="text-right">{l.qty}</td>
+                                                                            <td className="text-right">{fmt(l.entryPrice, 2)}</td>
+                                                                            <td className="text-right text-slate-500">{l.exitPrice ? fmt(l.exitPrice, 2) : '—'}</td>
+                                                                            <td className="text-slate-500">{l.status}</td>
+                                                                            {d.trade_mode === 'LIVE' && <td className="text-slate-600 truncate max-w-[90px]" title={l.orderId}>{l.orderId || '—'}</td>}
+                                                                        </tr>
+                                                                    ))}
+                                                                    {pos.closedLegs?.map((l, i) => (
+                                                                        <tr key={`c${i}`} className="border-t border-slate-800/60 opacity-60">
+                                                                            <td className={l.action === 'BUY' ? 'text-emerald-300' : 'text-red-300'}>{l.action} {l.type}</td>
+                                                                            <td>{l.strike}</td><td className="text-right">{l.qty}</td>
+                                                                            <td className="text-right">{fmt(l.entryPrice, 2)}</td>
+                                                                            <td className="text-right">{fmt(l.exitPrice, 2)}</td>
+                                                                            <td className="text-slate-500">{l.closeReason || l.status}</td>
+                                                                            {d.trade_mode === 'LIVE' && <td className="text-slate-600">closed</td>}
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    )}
+                                                    {open && (
+                                                        <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-0.5 font-mono text-slate-400">
+                                                            <div>Net {isCredit ? 'credit' : 'debit'} <span className="text-slate-300">₹{fmt(Math.abs(pos.origCredit), 1)}/u</span>{unitToRupee ? ` (₹${fmt(Math.abs(pos.origCredit) * unitToRupee)})` : ''}</div>
+                                                            {Number.isFinite(pos.maxProfit) && <div>Max profit ₹{fmt(pos.maxProfit, 1)}/u{unitToRupee ? ` (₹${fmt(pos.maxProfit * unitToRupee)})` : ''}</div>}
+                                                            <div>Margin <span className="text-slate-300">₹{fmt(pos.marginEst || 0)}</span></div>
+                                                            <div className="text-emerald-300">TP level {rup(tpUnit)}{tpUnit != null && unitToRupee ? ` (${fmt(tpUnit,1)}/u)` : ''}</div>
+                                                            <div className="text-red-300">SL level {rup(slUnit)}{slUnit != null && unitToRupee ? ` (${fmt(slUnit,1)}/u)` : ''}</div>
+                                                            {P.leg_sl_x > 0 && <div className="text-amber-300">leg-SL @ entry ×{P.leg_sl_x}</div>}
+                                                            <div>MTM now <span className={pos.lastMtm > 0 ? 'text-emerald-300' : pos.lastMtm < 0 ? 'text-red-300' : 'text-slate-300'}>₹{fmt(pos.lastMtmRupees ?? 0)}</span></div>
+                                                            {expiry && <div>Expiry {expiry} · {dte} DTE</div>}
+                                                            <div className="text-slate-500">Exit by: {P.square_off && `sq-off ${P.square_off}`}{expiry ? ` · expiry-day 15:00${dte === 0 ? ' (today)' : ''}` : ''}{P.dte_exit != null ? ` · DTE≤${P.dte_exit}` : ''}</div>
+                                                        </div>
+                                                    )}
+                                                    {!open && <div className="font-mono text-slate-500">Flat. Last daily PnL ₹{fmt(d.daily?.pnlToday)} · lifetime {d.totals?.trades || 0} trades ₹{fmt(d.totals?.netPnl)}. Config → {exitBits.join(' · ') || 'defaults'}.</div>}
                                                 </div>
                                             )}
                                             {d.lastError && <div className="text-[10px] text-red-400 mb-2">⚠ {d.lastError}</div>}
@@ -1608,7 +1691,7 @@ export default function MultiLeg() {
                                 <div className="max-h-[300px] overflow-y-auto text-[11px] space-y-1">
                                     {mlDeps.events.map((e, i) => (
                                         <div key={i} className="flex gap-2 border-b border-slate-800/60 pb-1">
-                                            <span className="text-slate-600 whitespace-nowrap">{String(e.at).slice(11, 19)}</span>
+                                            <span className="text-slate-600 whitespace-nowrap" title={istDateTime(e.at) + ' IST'}>{istTimeSec(e.at)}</span>
                                             <span className={`font-semibold whitespace-nowrap ${/FAIL|ERROR|SKIP/.test(e.type) ? 'text-red-300' : /ENTRY|EXIT/.test(e.type) ? 'text-emerald-300' : 'text-sky-300'}`}>{e.type}</span>
                                             <span className="text-slate-400">{e.name ? `[${e.name}] ` : ''}{e.message}</span>
                                         </div>
@@ -1624,7 +1707,7 @@ export default function MultiLeg() {
                                     <tbody>
                                         {mlTrades.map((t, i) => (
                                             <tr key={i} className="border-t border-slate-800">
-                                                <td>{String(t.exitAt || '').slice(5, 16).replace('T', ' ')}</td>
+                                                <td title="IST">{istDateTime(t.exitAt)}</td>
                                                 <td>{t.name}</td>
                                                 <td className={t.trade_mode === 'LIVE' ? 'text-red-300' : 'text-sky-300'}>{t.trade_mode}</td>
                                                 <td className="text-slate-400">{t.exitReason}</td>
@@ -1747,7 +1830,7 @@ export default function MultiLeg() {
                                     <tbody>
                                         {[...resFiltered].sort((a, b) => new Date(b.exitAt) - new Date(a.exitAt)).map((t, i) => (
                                             <tr key={i} className="border-t border-slate-800">
-                                                <td className="whitespace-nowrap">{String(t.entryAt || '').slice(5, 16).replace('T', ' ')} → {String(t.exitAt || '').slice(11, 16)}</td>
+                                                <td className="whitespace-nowrap" title="IST">{istDateTime(t.entryAt)} → {istTime(t.exitAt)}</td>
                                                 <td className="truncate max-w-[120px]" title={t.template}>{templates.find(x => x.key === t.template)?.name || t.template}</td>
                                                 <td>{shortSym(t.symbol)}</td>
                                                 <td className={t.trade_mode === 'LIVE' ? 'text-red-300' : 'text-sky-300'}>{t.trade_mode}</td>
@@ -1770,11 +1853,21 @@ export default function MultiLeg() {
     );
 }
 
-function fmtClock(iso) {
-    if (!iso) return '—';
-    try { return new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }); }
+// All engine/trade timestamps are stored UTC; render them in IST explicitly
+// (timeZone:'Asia/Kolkata') so it's correct regardless of the viewer's browser
+// timezone — never raw-slice an ISO string (that shows UTC).
+const IST_TZ = 'Asia/Kolkata';
+function istStr(v, opts = {}) {
+    if (!v) return '—';
+    const d = new Date(v);
+    if (isNaN(d.getTime())) return '—';
+    try { return d.toLocaleString('en-IN', { timeZone: IST_TZ, hour12: false, ...opts }); }
     catch { return '—'; }
 }
+const istDateTime = (v) => istStr(v, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); // "21 Jul 13:42"
+const istTimeSec = (v) => istStr(v, { hour: '2-digit', minute: '2-digit', second: '2-digit' });               // "13:42:27"
+const istTime = (v) => istStr(v, { hour: '2-digit', minute: '2-digit' });                                     // "13:42"
+function fmtClock(iso) { return istDateTime(iso); }
 function fmtDur(iso) {
     if (!iso) return '';
     const ms = Date.now() - new Date(iso).getTime();

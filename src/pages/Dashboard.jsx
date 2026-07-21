@@ -742,19 +742,19 @@ export default function Dashboard() {
             <div className="p-4 bg-slate-800 rounded-lg">
                 <p className="text-slate-400 text-sm">Last Update</p>
                 <p className="text-xl font-bold text-slate-300">
-                    {marketData?.timestamp ? new Date(marketData.timestamp).toLocaleTimeString() : "--:--:--"}
+                    {marketData?.timestamp ? new Date(marketData.timestamp).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false }) : "--:--:--"}
                 </p>
             </div>
              <div className="p-4 bg-slate-800 rounded-lg">
                 <p className="text-slate-400 text-sm">Last Heartbeat</p>
                 <p className="text-xl font-bold text-green-400">
-                    {marketData?.lastHeartbeat ? new Date(marketData.lastHeartbeat).toLocaleTimeString() : "--:--:--"}
+                    {marketData?.lastHeartbeat ? new Date(marketData.lastHeartbeat).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false }) : "--:--:--"}
                 </p>
             </div>
             <div className="p-4 bg-slate-800 rounded-lg">
                 <p className="text-slate-400 text-sm">Last Signal Check</p>
                 <p className="text-xl font-bold text-yellow-400">
-                    {marketData?.lastSignalCheck ? new Date(marketData.lastSignalCheck).toLocaleTimeString() : "Waiting..."}
+                    {marketData?.lastSignalCheck ? new Date(marketData.lastSignalCheck).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false }) : "Waiting..."}
                 </p>
             </div>
         </div>
@@ -896,7 +896,7 @@ export default function Dashboard() {
                                       <span
                                           key={i}
                                           className={`w-1.5 h-3 rounded-sm ${colorFor(h.action, h.reason)}`}
-                                          title={`${new Date(h.ts).toLocaleTimeString('en-IN', { hour12: false })}\n${h.action}${h.type ? ' ' + h.type : ''}: ${h.reason}`}
+                                          title={`${new Date(h.ts).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false })}\n${h.action}${h.type ? ' ' + h.type : ''}: ${h.reason}`}
                                       />
                                   ))}
                               </div>
@@ -976,7 +976,7 @@ export default function Dashboard() {
                               ? `${Math.floor(hs / 60)}m ${hs % 60}s`
                               : `${hs}s`;
                       const entryTimeStr = pos.entry_time_iso
-                          ? new Date(pos.entry_time_iso).toLocaleTimeString('en-IN', { hour12: false })
+                          ? new Date(pos.entry_time_iso).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false })
                           : null;
 
                       // Spot move since entry
@@ -1220,8 +1220,8 @@ export default function Dashboard() {
                                                   ) : reviews.map((r, idx) => {
                                                       const style = ACTION_STYLE[r.action] || { txt: r.action, cls: 'bg-slate-700/60 text-slate-300' };
                                                       const ts = r.ts ? new Date(r.ts) : null;
-                                                      const tsStr = ts ? ts.toLocaleTimeString('en-IN', { hour12: false }) : '—';
-                                                      const dateStr = ts ? ts.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }) : '';
+                                                      const tsStr = ts ? ts.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }) : '—';
+                                                      const dateStr = ts ? ts.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' }) : '';
                                                       const heldMin = r.held_seconds != null ? Math.round(r.held_seconds / 60) : null;
                                                       const pnlVal = r.pnl_rs;
                                                       const applied = r.applied;
@@ -1530,15 +1530,15 @@ export default function Dashboard() {
                                 {/* Entry Time (Fallback to timestamp for old logs if action is BUY/ENTRY) */}
                                 <td className="p-3 text-slate-300">
                                     {trade.entryTime
-                                        ? new Date(trade.entryTime).toLocaleString()
-                                        : (trade.action === 'ENTRY' || trade.action === 'BUY' ? new Date(trade.timestamp).toLocaleString() : '-')}
+                                        ? new Date(trade.entryTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
+                                        : (trade.action === 'ENTRY' || trade.action === 'BUY' ? new Date(trade.timestamp).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : '-')}
                                 </td>
                                 
                                 {/* Exit Time (Fallback to timestamp for old logs if action is EXIT/SELL) */}
                                 <td className="p-3 text-slate-400">
                                     {trade.exitTime 
-                                        ? new Date(trade.exitTime).toLocaleString() 
-                                        : (trade.action === 'EXIT' || trade.action === 'SELL' ? new Date(trade.timestamp).toLocaleString() : '-')}
+                                        ? new Date(trade.exitTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) 
+                                        : (trade.action === 'EXIT' || trade.action === 'SELL' ? new Date(trade.timestamp).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : '-')}
                                 </td>
                                 
                                 <td className="p-3">
@@ -1732,7 +1732,7 @@ export default function Dashboard() {
                               )}
                               {activityEvents.map((ev, i) => {
                                   const ts = new Date(ev.timestamp);
-                                  const tsStr = ts.toLocaleString('en-IN', { hour12: false });
+                                  const tsStr = ts.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
                                   let typeBadge, rowTone, pnlOrConf, detail;
                                   if (ev.type === 'TRADE_ENTRY') {
                                       typeBadge = <span className="px-1.5 py-0.5 rounded bg-emerald-700/40 text-emerald-200">🟢 ENTRY</span>;
@@ -2147,7 +2147,7 @@ export default function Dashboard() {
                       {pass ? '✅ WOULD EXECUTE' : '❌ BLOCKED'}
                     </p>
                     <p className="text-xs text-slate-400 mt-0.5">
-                      {r.type} signal on {r.symbol} @ ₹{r.spot} &nbsp;·&nbsp; {new Date(r.timestamp).toLocaleTimeString()}
+                      {r.type} signal on {r.symbol} @ ₹{r.spot} &nbsp;·&nbsp; {new Date(r.timestamp).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false })}
                     </p>
                   </div>
 

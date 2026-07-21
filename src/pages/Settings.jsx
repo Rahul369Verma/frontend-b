@@ -426,7 +426,7 @@ export default function Settings() {
               </div>
               {cookieMeta?.updatedAt && (
                 <div className="text-xs text-slate-500">
-                  Last updated: {new Date(cookieMeta.updatedAt).toLocaleString()}
+                  Last updated: {new Date(cookieMeta.updatedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}
                 </div>
               )}
 

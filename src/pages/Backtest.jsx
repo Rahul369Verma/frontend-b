@@ -3374,13 +3374,13 @@ export default function Backtest() {
                       <XAxis
                         dataKey={isComparison ? 't' : 'date'}
                         stroke="#94a3b8"
-                        tickFormatter={isComparison ? (v) => `T${v}` : (s) => new Date(s).toLocaleDateString()}
+                        tickFormatter={isComparison ? (v) => `T${v}` : (s) => new Date(s).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" })}
                       />
                       <YAxis stroke="#94a3b8" domain={['auto', 'auto']} />
                       <Tooltip
                         contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155' }}
                         itemStyle={{ color: '#fff' }}
-                        labelFormatter={isComparison ? (v) => `Trade #${v}` : (l) => new Date(l).toLocaleString()}
+                        labelFormatter={isComparison ? (v) => `Trade #${v}` : (l) => new Date(l).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}
                       />
                       {isComparison ? (
                         <>
@@ -3473,7 +3473,7 @@ export default function Backtest() {
                     <tbody>
                       {result.trades.map((trade, idx) => (
                         <tr key={idx} className="border-b border-slate-700 hover:bg-slate-700/30">
-                          <td className="px-4 py-3 text-xs">{new Date(trade.entryTime).toLocaleString()}</td>
+                          <td className="px-4 py-3 text-xs">{new Date(trade.entryTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</td>
                           <td className="px-4 py-3 font-mono text-xs">{trade.option_symbol || '-'}</td>
                           <td className="px-4 py-3 text-slate-400 text-xs">{trade.volume || '-'}</td>
                           <td className="px-4 py-3 text-slate-500 text-xs">{trade.avg_volume ? Math.round(trade.avg_volume) : '-'}</td>
@@ -3574,7 +3574,7 @@ export default function Backtest() {
                               : '-'}
                           </td>
                           <td className="px-4 py-3 text-xs">₹{trade.invested_amount ? Number(trade.invested_amount).toFixed(2) : '-'}</td>
-                          <td className="px-4 py-3 text-xs">{new Date(trade.exitTime).toLocaleString()}</td>
+                          <td className="px-4 py-3 text-xs">{new Date(trade.exitTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</td>
                           {/* Exit price: spot or premium depending on view */}
                           <td className="px-4 py-3 text-xs">
                             {showSpotView && hasSpotData
