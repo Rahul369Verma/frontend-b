@@ -41,10 +41,20 @@ function budgetForLevel(L) {
     const exp = (b, r) => Math.round(b * Math.pow(r, L - 1));
     return {
         survivors1: 4 + 2 * L,
-        explore: Math.max(1, Math.round(L * 0.9)),
+        // stage-1 random param draws per STRATEGY (raced alongside defaults) —
+        // the broad-exploration lever. Quadratic ramp: cheap early (few draws),
+        // reaching 100 at the top level for a deep search.
+        explore: Math.min(100, Math.max(1, Math.round(L * L / 4))),
         signalSamples: Math.min(600, exp(3, 1.30)),
-        survivors2: 3 + Math.round(1.6 * L),
-        champions: Math.min(12, 2 + Math.floor(L / 3)),
+        survivors2: 5 + Math.round(2 * L),
+        // more champions at higher levels (was capped at 8 by level 20) — a big
+        // search should surface a big shortlist. Diversity-capped server-side so
+        // they're VARIED structures, not the same one repeated.
+        champions: Math.min(24, 2 + Math.round(L * 1.1)),
+        // how many signal strategies enter the race — the real "explore more"
+        // lever. Was hard-capped at 12; now scales with level up to the full
+        // catalog (server clamps to what's actually available/selected).
+        maxStrategies: Math.min(40, 6 + L),
         sweepCap: Math.min(20000, exp(60, 1.36)),
         gridDensity: L >= 15 ? 3 : L >= 8 ? 2 : 1,
         aiCallCap: 20 + 10 * L,
@@ -56,7 +66,8 @@ const BUDGET_HELP = {
     explore: 'stage-1 random param draws per strategy (raced ALONGSIDE defaults — a strategy is judged by its best variant, not just defaults)',
     signalSamples: 'random param draws per survivor (stage-2 refinement)',
     survivors2: 'stage-2 survivors (into structure sweep)',
-    champions: 'final champions',
+    champions: 'final champions (diversity-capped so they are varied structures)',
+    maxStrategies: 'how many signal strategies enter the race (scales with level)',
     sweepCap: 'max structure combos per survivor (ceiling)',
     gridDensity: 'structure grid resolution 1-3: finer TP/SL steps + wider strike range',
     aiCallCap: 'max AI confirmations per champion',
@@ -148,7 +159,7 @@ export default function MultiLeg() {
         const tpls = scanOutlook === 'all' ? templates : templates.filter(t => String(t.outlook).startsWith(scanOutlook));
         const dir = tpls.filter(t => /^bull|^bear/.test(String(t.outlook))).length;
         const neu = tpls.length - dir;
-        const nStrat = Math.min(12, autoStrategies.length || strategies.filter(s => s.optimizable !== false).length || 12);
+        const nStrat = Math.min(B.maxStrategies || 12, autoStrategies.length || strategies.filter(s => s.optimizable !== false).length || 12);
         const nSym = Math.max(1, scanSymbols.length);
         const pairings = autoEntryStyle === 'signal-only' ? nSym * tpls.length * nStrat : nSym * (dir * nStrat + neu);
         const gridAvg = B.gridDensity >= 3 ? 3500 : B.gridDensity === 2 ? 700 : 130;
@@ -217,6 +228,12 @@ export default function MultiLeg() {
             if (Array.isArray(list) && list.length) setStrategies(list);
         }).catch(() => {});
     }, [resetForTemplate]);
+
+    // OOS is ENFORCED in Auto (the backend floors the hold-out at 20% — an
+    // unattended search that ranks on the full period returns curve-fit
+    // winners). So when the Auto tab is active, "Off" isn't an option; snap a
+    // 0/low split up to 30% so the control matches what will actually run.
+    useEffect(() => { if (mode === 'auto' && (!split || split < 0.2)) setSplit(0.3); }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Entry-mode fields ride inside params so backtest AND sweep carry them —
     // INCLUDING tuned signal params (a champion's edge lives in its params;
@@ -648,13 +665,14 @@ export default function MultiLeg() {
                     {METRICS.map(m => <option key={m.v} value={m.v}>{m.label}</option>)}
                 </select>
             </label>
-            <label className="text-slate-400">Validation (OOS)
+            <label className="text-slate-400">Validation (OOS){mode === 'auto' && <span className="text-[9px] text-emerald-400 ml-1">enforced</span>}
                 <select value={split} onChange={e => setSplit(Number(e.target.value))} className={inputCls}>
-                    <option value={0}>Off (full period)</option>
+                    {mode !== 'auto' && <option value={0}>Off (full period)</option>}
                     <option value={0.2}>Hold out last 20%</option>
                     <option value={0.3}>Hold out last 30%</option>
                     <option value={0.4}>Hold out last 40%</option>
                 </select>
+                {mode === 'auto' && <span className="block text-[9px] text-slate-600 mt-0.5">Always on in Auto — you only choose how much to hold out.</span>}
             </label>
         </>
     );
