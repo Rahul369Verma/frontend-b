@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import {
-    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
+    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceDot, ReferenceArea, Legend,
 } from 'recharts';
 import { Layers, Play, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp } from 'lucide-react';
 
@@ -26,6 +26,7 @@ const OUTLOOK_COLORS = {
     'neutral-slightly-bullish': 'text-sky-300 border-sky-700/50', 'neutral-slightly-bearish': 'text-sky-300 border-sky-700/50',
 };
 const METRICS = [
+    { v: 'sharpe', label: 'Sharpe (smooth curve)' }, { v: 'sortino', label: 'Sortino (downside-safe)' },
     { v: 'netPnl', label: 'Net PnL' }, { v: 'profitFactor', label: 'Profit factor' },
     { v: 'roiOnMarginPct', label: 'ROI on margin' }, { v: 'winRate', label: 'Win rate' },
 ];
@@ -69,6 +70,7 @@ const shortSym = (s) => String(s).replace('NSE:', '').replace('BSE:', '').replac
 
 export default function MultiLeg() {
     const [templates, setTemplates] = useState([]);
+    const [presets, setPresets] = useState([]);            // professional starting bundles
     const [instruments, setInstruments] = useState(FALLBACK_SYMBOLS);
     const [tplKey, setTplKey] = useState('iron_condor');
     const [symbol, setSymbol] = useState(FALLBACK_SYMBOLS[0].v);
@@ -113,6 +115,15 @@ export default function MultiLeg() {
     const [savedList, setSavedList] = useState([]);
     const [savedDetail, setSavedDetail] = useState(null); // _id of the expanded saved-strategy row
     const [depDetail, setDepDetail] = useState(null);     // _id of the expanded deployment (full order detail)
+    const [depChart, setDepChart] = useState(null);       // _id of the deployment showing its live payoff chart
+    const [depPayoff, setDepPayoff] = useState(null);     // { id, data } — backend risk-graph (expiry + T+0 curves)
+    const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
+    const [confirmState, setConfirmState] = useState(null); // { title, body, danger, confirmLabel, requireText, onConfirm }
+    const [livePreview, setLivePreview] = useState(null);          // pre-deploy risk preview modal { strategy, tradeMode, data, loading }
+    const [pending, setPending] = useState({});             // per-action pending flags (button spinners)
+    const [depSort, setDepSort] = useLocalStorage('ml_dep_sort', 'state');   // state|mtm|pnl|name
+    const [depFilter, setDepFilter] = useLocalStorage('ml_dep_filter', 'all'); // all|LIVE|PAPER|open
+    const [lastPoll, setLastPoll] = useState({ at: null, ok: true });        // deploy-tab freshness/connection
     const [saveName, setSaveName] = useState('');
     const [saveMsg, setSaveMsg] = useState(null);
     const [deployLots, setDeployLots] = useState(1);
@@ -123,6 +134,7 @@ export default function MultiLeg() {
     const [resTrades, setResTrades] = useState([]);
     const [resLoading, setResLoading] = useState(false);
     const [resFilter, setResFilter] = useState({ mode: 'all', deploymentId: 'all', template: 'all', symbol: 'all' });
+    const [resTradeOpen, setResTradeOpen] = useState(null); // expanded trade (drill-down to legs)
     const [ivCalib, setIvCalib] = useState(null);      // chain-IV calibration result
     const [ivCalibBusy, setIvCalibBusy] = useState(false);
 
@@ -151,9 +163,9 @@ export default function MultiLeg() {
     // Reset editable params + starter sweep grid for a template. Called from
     // event handlers / fetch callbacks (NOT a render effect — avoids the
     // set-state-in-effect cascade).
-    const resetForTemplate = useCallback((t) => {
+    const resetForTemplate = useCallback((t, paramOverride = null) => {
         if (!t) return;
-        setParams({ ...t.defaults });
+        setParams(paramOverride ? { ...t.defaults, ...paramOverride } : { ...t.defaults });
         const g = t.style === 'credit'
             ? { tp_pct_credit: [30, 40, 50, 60], sl_x_credit: [1.5, 2.0], leg_sl_x: t.defaults.leg_sl_x ? [1.3, 1.4, 1.6] : undefined }
             : t.style === 'ratio'
@@ -169,11 +181,27 @@ export default function MultiLeg() {
         resetForTemplate((list || templates).find(t => t.key === key));
     }, [templates, resetForTemplate]);
 
+    // Apply a professional preset: template + its param bundle + entry-mode wiring.
+    const applyPreset = useCallback((preset) => {
+        if (!preset) return;
+        const t = templates.find(x => x.key === preset.template);
+        setTplKey(preset.template);
+        resetForTemplate(t, preset.params); // template defaults + the preset's deltas
+        if (preset.entry_mode === 'signal' && preset.signal_strategy) {
+            setEntryMode('signal'); setSignalStrategy(preset.signal_strategy);
+            setUseSignalExit(!!(preset.params || {}).use_signal_exit); setSignalParams(null);
+        } else { setEntryMode('time'); setUseSignalExit(false); setSignalParams(null); }
+        setResult(null); setSweep(null);
+    }, [templates, resetForTemplate]);
+
     useEffect(() => {
         axios.get(`${API_URL}/multileg/templates`).then(r => {
             const list = Array.isArray(r.data) ? r.data : [];
             setTemplates(list);
             resetForTemplate(list.find(t => t.key === 'iron_condor') || list[0]);
+        }).catch(() => {});
+        axios.get(`${API_URL}/multileg/presets`).then(r => {
+            if (Array.isArray(r.data)) setPresets(r.data);
         }).catch(() => {});
         // Same instrument source the Backtest page uses.
         axios.get(`${API_URL}/config/instruments`).then(r => {
@@ -319,7 +347,7 @@ export default function MultiLeg() {
             setAutoJob({ jobId: j.jobId });
             refreshAutoJobs();
         } catch (e) {
-            alert(`Resume failed: ${e.response?.data?.error || e.message}`);
+            pushToast(`Resume failed: ${e.response?.data?.error || e.message}`, 'error', 8000);
         }
     };
 
@@ -369,7 +397,9 @@ export default function MultiLeg() {
         axios.get(`${API_URL}/multileg/strategies`).then(r => setSavedList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
     }, []);
     const refreshDeployments = useCallback(() => {
-        axios.get(`${API_URL}/multileg/deployments`).then(r => setMlDeps(r.data || { deployments: [], events: [] })).catch(() => {});
+        axios.get(`${API_URL}/multileg/deployments`)
+            .then(r => { setMlDeps(r.data || { deployments: [], events: [] }); setLastPoll({ at: Date.now(), ok: true }); })
+            .catch(() => setLastPoll(p => ({ at: p.at, ok: false })));
         axios.get(`${API_URL}/multileg/trades`).then(r => setMlTrades(Array.isArray(r.data) ? r.data.slice(0, 30) : [])).catch(() => {});
         axios.get(`${API_URL}/multileg/status`).then(r => setMlStatus(r.data || null)).catch(() => {});
     }, []);
@@ -380,6 +410,19 @@ export default function MultiLeg() {
         const t = setInterval(refreshDeployments, 5000);
         return () => clearInterval(t);
     }, [mode, refreshSaved, refreshDeployments]);
+
+    // Live risk-graph (expiry + T+0 curves) for the deployment whose chart is
+    // open — fetched on open and refreshed with the deploy poll so it's dynamic.
+    useEffect(() => {
+        if (!depChart || mode !== 'deploy') { setDepPayoff(null); return; }
+        let alive = true;
+        const pull = () => axios.get(`${API_URL}/multileg/deployments/${depChart}/payoff`)
+            .then(r => { if (alive) setDepPayoff({ id: depChart, data: r.data }); })
+            .catch(() => { if (alive) setDepPayoff({ id: depChart, data: { error: true } }); });
+        pull();
+        const t = setInterval(pull, 5000);
+        return () => { alive = false; clearInterval(t); };
+    }, [depChart, mode]);
 
     // Results tab: pull the FULL structure-trade history (deployment list too,
     // for the filter dropdown). Refreshes on open + a gentle poll for live runs.
@@ -484,41 +527,81 @@ export default function MultiLeg() {
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
-    const deploySaved = async (s, tradeMode) => {
-        if (tradeMode === 'LIVE' && !window.confirm(
-            `Deploy "${s.name}" LIVE?\n\nThis places REAL orders at the broker (${deployLots} lot(s), market orders, hedges first). Are you sure?`)) return;
-        setError(null);
-        try {
-            await axios.post(`${API_URL}/multileg/strategies/${s._id}/deploy`, { trade_mode: tradeMode, lots: deployLots });
-            refreshDeployments();
-        } catch (e) { setError(e.response?.data?.error || e.message); }
+    const withPending = async (key, fn, okMsg) => {
+        setPending(p => ({ ...p, [key]: true }));
+        try { await fn(); if (okMsg) pushToast(okMsg, 'success'); }
+        catch (e) { pushToast(e.response?.data?.error || e.message, 'error', 8000); }
+        finally { setPending(p => { const n = { ...p }; delete n[key]; return n; }); }
     };
 
-    const deleteSaved = async (s) => {
-        if (!window.confirm(`Delete saved strategy "${s.name}"?`)) return;
-        await axios.delete(`${API_URL}/multileg/strategies/${s._id}`).catch(() => {});
-        refreshSaved();
+    // Deploy PAPER immediately; LIVE goes through the pre-deploy risk preview +
+    // type-to-confirm modal (opened by openPreview below).
+    const doDeploy = (s, tradeMode) => withPending(`deploy:${s._id}`, async () => {
+        await axios.post(`${API_URL}/multileg/strategies/${s._id}/deploy`, { trade_mode: tradeMode, lots: deployLots });
+        refreshDeployments();
+    }, `Deployed “${s.name}” ${tradeMode}`);
+
+    // Fetch a live risk preview, then open the modal (LIVE requires type-to-confirm).
+    const openPreview = async (s, tradeMode) => {
+        setLivePreview({ strategy: s, tradeMode, loading: true, data: null });
+        try {
+            const r = await axios.post(`${API_URL}/multileg/preview`, { template: s.template, symbol: s.symbol, params: s.params || {}, lots: deployLots, entry_mode: s.entry_mode });
+            setLivePreview({ strategy: s, tradeMode, loading: false, data: r.data });
+        } catch (e) {
+            setLivePreview({ strategy: s, tradeMode, loading: false, data: { error: e.response?.data?.error || e.message } });
+        }
+    };
+    const deploySaved = (s, tradeMode) => (tradeMode === 'PAPER' ? doDeploy(s, 'PAPER') : openPreview(s, 'LIVE'));
+
+    const deleteSaved = (s) => setConfirmState({
+        title: `Delete saved strategy “${s.name}”?`, danger: true, confirmLabel: 'Delete',
+        body: <span>The saved recipe is removed. Any deployments already created from it keep running.</span>,
+        onConfirm: () => withPending(`delsaved:${s._id}`, async () => { await axios.delete(`${API_URL}/multileg/strategies/${s._id}`); refreshSaved(); }, `Deleted “${s.name}”`),
+    });
+
+    const runDepAction = (dep, action) => withPending(`${action}:${dep._id}`, async () => {
+        if (action === 'stop') await axios.post(`${API_URL}/multileg/deployments/${dep._id}/stop`, {});
+        else if (action === 'stop-close') await axios.post(`${API_URL}/multileg/deployments/${dep._id}/stop`, { close: true });
+        else if (action === 'start') await axios.post(`${API_URL}/multileg/deployments/${dep._id}/start`, {});
+        else if (action === 'close') await axios.post(`${API_URL}/multileg/deployments/${dep._id}/close`, {});
+        else if (action === 'delete') await axios.delete(`${API_URL}/multileg/deployments/${dep._id}`);
+        refreshDeployments();
+    }, action === 'start' ? `Resumed “${dep.name}”` : action === 'stop' ? `Stopped “${dep.name}”` : null);
+
+    const depAction = (dep, action) => {
+        const isLive = dep.trade_mode === 'LIVE';
+        if (action === 'close' || action === 'stop-close') {
+            setConfirmState({
+                title: `${action === 'stop-close' ? 'Stop + close' : 'Close'} “${dep.name}” now?`, danger: true,
+                confirmLabel: action === 'stop-close' ? 'Stop + close' : 'Close now',
+                requireText: isLive ? dep.name : null,
+                body: <span>{isLive ? 'This sends REAL market exit orders at the broker (shorts bought back first). ' : 'Simulated close at the current quotes. '}The open structure will be squared off immediately{action === 'stop-close' ? ' and the deployment stopped' : ''}.</span>,
+                onConfirm: () => runDepAction(dep, action),
+            });
+        } else if (action === 'delete') {
+            setConfirmState({ title: `Delete deployment “${dep.name}”?`, danger: true, confirmLabel: 'Delete', requireText: isLive ? dep.name : null,
+                body: <span>Removes the deployment record. Only allowed when flat (no open structure).</span>,
+                onConfirm: () => runDepAction(dep, action) });
+        } else { runDepAction(dep, action); }
     };
 
-    const depAction = async (dep, action) => {
-        setError(null);
-        try {
-            if (action === 'stop') await axios.post(`${API_URL}/multileg/deployments/${dep._id}/stop`, {});
-            if (action === 'stop-close') {
-                if (!window.confirm(`Stop "${dep.name}" and CLOSE its open structure now?`)) return;
-                await axios.post(`${API_URL}/multileg/deployments/${dep._id}/stop`, { close: true });
-            }
-            if (action === 'start') await axios.post(`${API_URL}/multileg/deployments/${dep._id}/start`, {});
-            if (action === 'close') {
-                if (!window.confirm(`Close "${dep.name}"'s open structure at market now?`)) return;
-                await axios.post(`${API_URL}/multileg/deployments/${dep._id}/close`, {});
-            }
-            if (action === 'delete') {
-                if (!window.confirm(`Delete deployment "${dep.name}"?`)) return;
-                await axios.delete(`${API_URL}/multileg/deployments/${dep._id}`);
-            }
-            refreshDeployments();
-        } catch (e) { setError(e.response?.data?.error || e.message); }
+    // Bulk: stop-all (halt new entries) or close-all (square off every open structure).
+    const bulkAction = (kind) => {
+        const targets = (mlDeps.deployments || []).filter(d => kind === 'stop-all' ? d.status === 'ACTIVE' : ['OPEN', 'EXITING'].includes(d.position?.state));
+        if (!targets.length) { pushToast(`Nothing to ${kind === 'stop-all' ? 'stop' : 'close'}.`, 'info'); return; }
+        const anyLive = targets.some(d => d.trade_mode === 'LIVE');
+        setConfirmState({
+            title: `${kind === 'stop-all' ? 'Stop' : 'CLOSE'} all ${targets.length} ${kind === 'stop-all' ? 'active deployments' : 'open structures'}?`, danger: kind === 'close-all',
+            confirmLabel: kind === 'stop-all' ? 'Stop all' : 'Close all', requireText: anyLive && kind === 'close-all' ? 'CLOSE ALL' : null,
+            body: <span>{anyLive && kind === 'close-all' ? 'Includes LIVE books — REAL exit orders. ' : ''}{kind === 'stop-all' ? 'No new entries; open structures keep being managed.' : 'Every open structure is squared off at market now.'}</span>,
+            onConfirm: () => withPending('bulk', async () => {
+                const ep = kind === 'stop-all' ? (id) => axios.post(`${API_URL}/multileg/deployments/${id}/stop`, {}) : (id) => axios.post(`${API_URL}/multileg/deployments/${id}/close`, {});
+                const r = await Promise.allSettled(targets.map(d => ep(d._id)));
+                const failed = r.filter(x => x.status === 'rejected').length;
+                refreshDeployments();
+                pushToast(`${kind === 'stop-all' ? 'Stopped' : 'Closed'} ${targets.length - failed}/${targets.length}${failed ? ` · ${failed} failed` : ''}`, failed ? 'warn' : 'success');
+            }),
+        });
     };
 
     const runScan = async () => {
@@ -576,21 +659,42 @@ export default function MultiLeg() {
         </>
     );
 
+    const [presetKey, setPresetKey] = useState('');
+    const activePreset = presets.find(p => p.key === presetKey);
     const TemplatePicker = (
-        <div className="flex flex-wrap gap-2 mb-4">
-            {templates.map(t => (
-                <button key={t.key} onClick={() => selectTemplate(t.key)}
-                    className={`px-3 py-1.5 rounded border text-xs ${t.key === tplKey ? 'bg-primary/20 border-primary text-primary' : `bg-slate-800 hover:bg-slate-700 ${OUTLOOK_COLORS[t.outlook] || 'text-slate-300 border-slate-700'}`}`}
-                    title={t.notes}>
-                    {t.name}
-                </button>
-            ))}
-        </div>
+        <>
+            {presets.length > 0 && (
+                <div className="mb-3 p-2.5 rounded-lg border border-amber-800/40 bg-amber-950/10">
+                    <label className="flex flex-wrap items-center gap-2 text-xs text-amber-200">
+                        <span className="font-semibold">⭐ Professional preset</span>
+                        <select value={presetKey}
+                            onChange={e => { setPresetKey(e.target.value); const p = presets.find(x => x.key === e.target.value); if (p) applyPreset(p); }}
+                            className="bg-slate-800 border border-slate-700 rounded p-1 text-slate-200 text-xs">
+                            <option value="">— pick a trader-grade starting bundle —</option>
+                            {presets.map(p => <option key={p.key} value={p.key}>{p.name} · {p.tag}</option>)}
+                        </select>
+                        {presetKey && <button onClick={() => setPresetKey('')} className="text-[10px] text-slate-500 hover:text-slate-300">clear</button>}
+                    </label>
+                    {activePreset && <div className="text-[11px] text-slate-400 mt-1.5 leading-snug">{activePreset.note}</div>}
+                    <div className="text-[10px] text-slate-600 mt-1">Loads the template + a full, self-consistent param set. Edit anything before deploying — the pre-deploy review will flag risks.</div>
+                </div>
+            )}
+            <div className="flex flex-wrap gap-2 mb-4">
+                {templates.map(t => (
+                    <button key={t.key} onClick={() => { selectTemplate(t.key); setPresetKey(''); }}
+                        className={`px-3 py-1.5 rounded border text-xs ${t.key === tplKey ? 'bg-primary/20 border-primary text-primary' : `bg-slate-800 hover:bg-slate-700 ${OUTLOOK_COLORS[t.outlook] || 'text-slate-300 border-slate-700'}`}`}
+                        title={t.notes}>
+                        {t.name}
+                    </button>
+                ))}
+            </div>
+        </>
     );
 
     const SetupCard = (
         <div className="bg-surface rounded-xl border border-slate-700 p-4">
             <div className="text-sm font-semibold text-white mb-3 flex items-center gap-2"><SlidersHorizontal className="w-4 h-4 text-primary" /> Setup — {tpl?.name || tplKey}</div>
+            <MarketRead symbol={symbol} presets={presets} onApplyPreset={applyPreset} />
             <div className="grid grid-cols-2 gap-2 text-xs">
                 <label className="text-slate-400">Symbol
                     <select value={symbol} onChange={e => { setSymbol(e.target.value); const s = instruments.find(x => x.v === e.target.value); if (s?.spot) setSpot(s.spot); }}
@@ -824,8 +928,38 @@ export default function MultiLeg() {
         { id: 'results', label: 'Results', icon: TrendingUp, desc: 'Live/paper deployment results — KPIs, equity curve, every structure round-trip' },
     ];
 
+    // Deployments filtered + sorted for the panel (LIVE always first — real money on top).
+    const visibleDeps = useMemo(() => {
+        const isOpen = (d) => ['OPEN', 'ENTERING', 'EXITING'].includes(d.position?.state);
+        let list = (mlDeps.deployments || []).filter(d =>
+            depFilter === 'all' ? true : depFilter === 'open' ? isOpen(d) : d.trade_mode === depFilter);
+        const key = { state: (d) => (isOpen(d) ? 0 : d.status === 'ACTIVE' ? 1 : 2), mtm: (d) => -(d.position?.lastMtmRupees || 0), pnl: (d) => -(d.totals?.netPnl || 0), name: (d) => d.name };
+        const k = key[depSort] || key.state;
+        list = [...list].sort((a, b) => {
+            if ((a.trade_mode === 'LIVE') !== (b.trade_mode === 'LIVE')) return a.trade_mode === 'LIVE' ? -1 : 1; // LIVE first
+            const ka = k(a), kb = k(b); return typeof ka === 'string' ? ka.localeCompare(kb) : ka - kb;
+        });
+        return list;
+    }, [mlDeps.deployments, depFilter, depSort]);
+    // engine-health severity for the top banner
+    const engineHealth = useMemo(() => {
+        if (!mlStatus) return null;
+        const tickAgeS = mlStatus.lastTickAt ? (Date.now() - new Date(mlStatus.lastTickAt).getTime()) / 1000 : null;
+        if (mlStatus.halted) return { level: 'halt', msg: 'ENGINE HALTED — no new multileg entries. Open structures are still managed.' };
+        if (!mlStatus.started) return { level: 'halt', msg: 'ENGINE STOPPED — deployments are not being managed.' };
+        if (tickAgeS != null && tickAgeS > 40) return { level: 'stale', msg: `Loop stale — no engine tick for ${Math.round(tickAgeS)}s. Open structures may be UNMANAGED.` };
+        if (lastPoll.at && !lastPoll.ok) return { level: 'conn', msg: 'Dashboard can’t reach the server — data may be stale (retrying).' };
+        return null;
+    }, [mlStatus, lastPoll]);
+
     return (
         <div className="p-6 max-w-[1600px] mx-auto">
+            <Toasts toasts={toasts} dismiss={dismissToast} />
+            <ConfirmModal open={!!confirmState} {...(confirmState || {})}
+                onConfirm={() => { const c = confirmState; setConfirmState(null); c?.onConfirm?.(); }}
+                onCancel={() => setConfirmState(null)} />
+            <PreviewModal preview={livePreview} deployLots={deployLots} onCancel={() => setLivePreview(null)}
+                onConfirm={() => { const s = livePreview.strategy; setLivePreview(null); doDeploy(s, 'LIVE'); }} />
             <h1 className="text-2xl font-bold text-white flex items-center gap-3 mb-1">
                 <Layers className="w-6 h-6 text-primary" /> Multi-Leg Structures
             </h1>
@@ -879,6 +1013,8 @@ export default function MultiLeg() {
                                     <Tile label="Win rate" value={`${result.metrics.winRate}%`} />
                                     <Tile label="Net PnL" value={`₹${fmt(result.metrics.netPnl)}`} good={result.metrics.netPnl > 0} bad={result.metrics.netPnl < 0} />
                                     <Tile label="Profit factor" value={result.metrics.profitFactor === Infinity ? '∞' : result.metrics.profitFactor} />
+                                    <Tile label="Sharpe" value={result.metrics.sharpe != null ? result.metrics.sharpe : '—'} good={result.metrics.sharpe >= 1} bad={result.metrics.sharpe < 0} />
+                                    <Tile label="Sortino" value={result.metrics.sortino != null ? result.metrics.sortino : '—'} good={result.metrics.sortino >= 1.5} bad={result.metrics.sortino < 0} />
                                     <Tile label="Avg win" value={`₹${fmt(result.metrics.avgWin)}`} good />
                                     <Tile label="Avg loss" value={`₹${fmt(result.metrics.avgLoss)}`} bad />
                                     <Tile label="Max DD" value={`₹${fmt(result.metrics.maxDrawdown)}`} bad />
@@ -980,8 +1116,8 @@ export default function MultiLeg() {
                             <table className="w-full text-[11px] text-slate-300">
                                 <thead><tr className="text-slate-500 text-left">
                                     <th>#</th><th>Params (grid part)</th>
-                                    {sweep.split > 0 ? (<><th className="text-right">Val n</th><th className="text-right">Val win%</th><th className="text-right">Val net ₹</th><th className="text-right">Val PF</th><th className="text-right">Val ROI%</th><th className="text-right">Train net ₹</th></>)
-                                        : (<><th className="text-right">n</th><th className="text-right">Win%</th><th className="text-right">Net ₹</th><th className="text-right">PF</th><th className="text-right">ROI%</th><th className="text-right">MaxDD</th></>)}
+                                    {sweep.split > 0 ? (<><th className="text-right">Val n</th><th className="text-right">Val win%</th><th className="text-right">Val net ₹</th><th className="text-right">Val PF</th><th className="text-right">Val Sharpe</th><th className="text-right">Val ROI%</th><th className="text-right">Train net ₹</th></>)
+                                        : (<><th className="text-right">n</th><th className="text-right">Win%</th><th className="text-right">Net ₹</th><th className="text-right">PF</th><th className="text-right">Sharpe</th><th className="text-right">ROI%</th><th className="text-right">MaxDD</th></>)}
                                     <th className="text-right">Actions</th>
                                 </tr></thead>
                                 <tbody>
@@ -995,6 +1131,7 @@ export default function MultiLeg() {
                                                 <td className="text-right">{M(v, 'winRate')}</td>
                                                 <td className={`text-right font-semibold ${(v?.netPnl ?? 0) > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(v?.netPnl)}</td>
                                                 <td className="text-right">{M(v, 'profitFactor')}</td>
+                                                <td className={`text-right ${(v?.sharpe ?? 0) >= 1 ? 'text-emerald-300' : (v?.sharpe ?? 0) < 0 ? 'text-red-300' : ''}`}>{v?.sharpe != null ? v.sharpe : '—'}</td>
                                                 <td className="text-right">{v?.roiOnMarginPct != null ? `${v.roiOnMarginPct}%` : '—'}</td>
                                                 <td className="text-right">{sweep.split > 0 ? `₹${fmt(tr?.netPnl)}` : `₹${fmt(v?.maxDrawdown)}`}</td>
                                                 <td className="text-right whitespace-nowrap">
@@ -1253,6 +1390,13 @@ export default function MultiLeg() {
                                         <div className="text-xs text-slate-400 mb-2">
                                             {shortSym(ch.symbol)} · {ch.signal_strategy ? `signal: ${ch.signal_strategy}` : 'time-based entries'}
                                         </div>
+                                        {ch.robustness && (
+                                            <div className={`text-[11px] mb-2 px-2 py-1 rounded border ${ch.robustness.robust === true ? 'text-emerald-300 border-emerald-800/50 bg-emerald-950/20' : ch.robustness.robust === false ? 'text-red-300 border-red-800/50 bg-red-950/20' : 'text-slate-400 border-slate-700 bg-slate-800/30'}`}
+                                                title="Automatic out-of-sample check: how the validation-window metric held up vs the train window.">
+                                                {ch.robustness.robust === true ? '✓ Holds OOS' : ch.robustness.robust === false ? '⚠ Overfit risk' : 'OOS unknown'}
+                                                {ch.robustness.ratio != null ? ` · val/train ${ch.robustness.ratio}` : ''} — {ch.robustness.note}
+                                            </div>
+                                        )}
                                         <div className="grid grid-cols-3 gap-1 text-[11px] mb-2">
                                             <Tile label="Val net" value={`₹${fmt(ch.val?.netPnl)}`} good={ch.val?.netPnl > 0} bad={ch.val?.netPnl < 0} />
                                             <Tile label="Train net" value={`₹${fmt(ch.train?.netPnl)}`} good={ch.train?.netPnl > 0} bad={ch.train?.netPnl < 0} />
@@ -1281,7 +1425,7 @@ export default function MultiLeg() {
                                 <div className="bg-surface rounded-xl border border-slate-700 p-4 mt-4 overflow-x-auto">
                                     <div className="text-sm font-semibold text-white mb-2">Full leaderboard (stage-3 survivors)</div>
                                     <table className="w-full text-[11px] text-slate-300">
-                                        <thead><tr className="text-slate-500 text-left"><th>#</th><th>Structure</th><th>Symbol</th><th>Signal</th><th className="text-right">Val net ₹</th><th className="text-right">Val PF</th><th className="text-right">Val win%</th><th className="text-right">Train net ₹</th></tr></thead>
+                                        <thead><tr className="text-slate-500 text-left"><th>#</th><th>Structure</th><th>Symbol</th><th>Signal</th><th className="text-right">Val net ₹</th><th className="text-right">Val PF</th><th className="text-right">Val win%</th><th className="text-right">Train net ₹</th><th className="text-right">OOS</th></tr></thead>
                                         <tbody>
                                             {autoState.result.leaderboard.map((r, i) => (
                                                 <tr key={i} className="border-t border-slate-800">
@@ -1293,6 +1437,7 @@ export default function MultiLeg() {
                                                     <td className="text-right">{r.val?.profitFactor === Infinity ? '∞' : r.val?.profitFactor ?? '—'}</td>
                                                     <td className="text-right">{r.val?.winRate ?? '—'}</td>
                                                     <td className="text-right text-slate-400">₹{fmt(r.train?.netPnl)}</td>
+                                                    <td className="text-right" title={r.robustness?.note || ''}>{r.robustness?.robust === true ? <span className="text-emerald-400">✓</span> : r.robustness?.robust === false ? <span className="text-red-400">⚠</span> : <span className="text-slate-600">—</span>}</td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -1349,12 +1494,12 @@ export default function MultiLeg() {
                                                         className="px-2 py-0.5 mr-1 rounded border border-sky-700/50 bg-sky-900/20 text-sky-300 hover:bg-sky-900/40" title="Load into Backtest for inspection">
                                                         Load
                                                     </button>
-                                                    <button onClick={() => deploySaved(s, 'PAPER')}
-                                                        className="px-2 py-0.5 mr-1 rounded border border-emerald-700/50 bg-emerald-900/20 text-emerald-300 hover:bg-emerald-900/40" title="Deploy as PAPER (simulated fills at quotes)">
+                                                    <button onClick={() => deploySaved(s, 'PAPER')} disabled={pending[`deploy:${s._id}`]}
+                                                        className="px-2 py-0.5 mr-1 rounded border border-emerald-700/50 bg-emerald-900/20 text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-40" title="Deploy as PAPER (simulated fills at quotes)">
                                                         ▶ Paper
                                                     </button>
-                                                    <button onClick={() => deploySaved(s, 'LIVE')}
-                                                        className="px-2 py-0.5 mr-1 rounded border border-red-700/60 bg-red-900/25 text-red-300 hover:bg-red-900/45 font-semibold" title="Deploy LIVE — real broker orders (confirmation required)">
+                                                    <button onClick={() => deploySaved(s, 'LIVE')} disabled={pending[`deploy:${s._id}`]}
+                                                        className="px-2 py-0.5 mr-1 rounded border border-red-700/60 bg-red-900/25 text-red-300 hover:bg-red-900/45 font-semibold disabled:opacity-40" title="Deploy LIVE — shows a risk preview + type-to-confirm before any real order">
                                                         🔴 LIVE
                                                     </button>
                                                     <button onClick={() => deleteSaved(s)}
@@ -1491,8 +1636,33 @@ export default function MultiLeg() {
                         </div>
                     )}
 
+                    {/* Engine-health banner — a halted engine or stale loop means open structures may be unmanaged */}
+                    {engineHealth && (
+                        <div className={`rounded-xl border px-4 py-2.5 mb-4 flex items-center gap-2 text-sm font-semibold ${engineHealth.level === 'halt' ? 'border-red-600 bg-red-950/40 text-red-200' : engineHealth.level === 'stale' ? 'border-amber-500 bg-amber-950/40 text-amber-200' : 'border-slate-600 bg-slate-900 text-slate-300'}`} role="alert">
+                            <span className="text-lg" aria-hidden="true">{engineHealth.level === 'halt' ? '⛔' : engineHealth.level === 'stale' ? '⚠️' : '📡'}</span>
+                            {engineHealth.msg}
+                        </div>
+                    )}
+
                     <div className="bg-surface rounded-xl border border-slate-700 p-4 mb-4">
-                        <div className="text-sm font-semibold text-white mb-2 flex items-center gap-2"><Rocket className="w-4 h-4 text-amber-400" /> Deployments ({mlDeps.deployments.length})</div>
+                        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                            <div className="text-sm font-semibold text-white flex items-center gap-2"><Rocket className="w-4 h-4 text-amber-400" /> Deployments ({visibleDeps.length}{visibleDeps.length !== (mlDeps.deployments || []).length ? `/${(mlDeps.deployments || []).length}` : ''})</div>
+                            <div className="flex items-center gap-2 text-[11px]">
+                                {/* freshness / connection */}
+                                <span className={`flex items-center gap-1 ${!lastPoll.ok ? 'text-red-400' : 'text-slate-500'}`} title="Auto-refreshes every 5s">
+                                    <span className={`w-1.5 h-1.5 rounded-full ${!lastPoll.ok ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`} />
+                                    {lastPoll.at ? `updated ${istTime(lastPoll.at)}` : '…'}{!lastPoll.ok ? ' (offline)' : ''}
+                                </span>
+                                <select value={depFilter} onChange={e => setDepFilter(e.target.value)} className="bg-slate-800 border border-slate-700 rounded p-1 text-slate-300" aria-label="Filter deployments">
+                                    <option value="all">All books</option><option value="LIVE">LIVE</option><option value="PAPER">PAPER</option><option value="open">Open only</option>
+                                </select>
+                                <select value={depSort} onChange={e => setDepSort(e.target.value)} className="bg-slate-800 border border-slate-700 rounded p-1 text-slate-300" aria-label="Sort deployments">
+                                    <option value="state">Sort: state</option><option value="mtm">Sort: MTM</option><option value="pnl">Sort: total PnL</option><option value="name">Sort: name</option>
+                                </select>
+                                <button onClick={() => bulkAction('stop-all')} disabled={pending.bulk} className="px-2 py-1 rounded border border-amber-700/50 bg-amber-900/20 text-amber-300 hover:bg-amber-900/40 disabled:opacity-40">Stop all</button>
+                                <button onClick={() => bulkAction('close-all')} disabled={pending.bulk} className="px-2 py-1 rounded border border-red-700/50 bg-red-900/25 text-red-300 hover:bg-red-900/45 disabled:opacity-40">Close all</button>
+                            </div>
+                        </div>
                         {mlStatus && (
                             <div className="flex flex-wrap gap-3 text-[11px] font-mono mb-3 px-2 py-1.5 rounded border border-slate-800 bg-slate-900/40"
                                 title="Whole-book exposure vs engine limits. Greeks: Δ ₹/spot-pt · V ₹/IV-pt · Θ ₹/day. Short vega is what the vega cap gates on.">
@@ -1509,9 +1679,11 @@ export default function MultiLeg() {
                         )}
                         {mlDeps.deployments.length === 0 ? (
                             <div className="text-xs text-slate-500 py-4 text-center">No structure runners yet — deploy a saved strategy above (Paper first, always).</div>
+                        ) : visibleDeps.length === 0 ? (
+                            <div className="text-xs text-slate-500 py-4 text-center">No deployments match this filter.</div>
                         ) : (
                             <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                                {mlDeps.deployments.map(d => {
+                                {visibleDeps.map(d => {
                                     const st = d.position?.state || 'IDLE';
                                     const open = ['OPEN', 'ENTERING', 'EXITING'].includes(st);
                                     const pos = d.position || {};
@@ -1551,32 +1723,69 @@ export default function MultiLeg() {
                                     }
                                     const rup = (u) => (u != null && unitToRupee) ? `₹${fmt(u * unitToRupee)}` : (u != null ? `₹${fmt(u, 1)}/u` : '—');
                                     const detailOpen = depDetail === d._id;
+                                    const chartOpen = depChart === d._id;
+                                    const curve = (chartOpen && open) ? payoffCurve(pos, unitToRupee) : null;
+                                    const curSpot = pos.lastSpot || pos.entrySpot || null;
+                                    // backend risk-graph (expiry + live T+0 curves); client curve is the instant fallback
+                                    const pg = (chartOpen && depPayoff && depPayoff.id === d._id && depPayoff.data && !depPayoff.data.error && !depPayoff.data.empty) ? depPayoff.data : null;
+                                    const chartData = pg ? pg.curve : (curve ? curve.points.map(p => ({ spot: p.spot, expiry: p.pnl })) : []);
+                                    const chartBEs = pg ? pg.breakevens : (curve ? curve.breakevens : []);
+                                    const chartStrikes = pg ? pg.strikes : [...new Set((pos.legs || []).map(l => l.strike).filter(Boolean))];
+                                    const chartSpot = pg ? pg.spot : curSpot;
+                                    const chartNowPnl = pg ? pg.currentMtm : (pos.lastMtmRupees ?? null);
+                                    const chartMaxP = pg ? pg.maxProfit : (curve ? Math.max(...curve.points.map(p => p.pnl)) : null);
+                                    const chartMaxL = pg ? pg.maxLoss : (curve ? Math.min(...curve.points.map(p => p.pnl)) : null);
+                                    const tpRupee = (tpUnit != null && unitToRupee) ? Math.round(tpUnit * unitToRupee) : null;
+                                    const slRupee = (slUnit != null && unitToRupee) ? Math.round(slUnit * unitToRupee) : null;
+                                    const mtmHist = mlDeps.mtmHistory?.[d._id] || null;    // intraday sparkline
+                                    const feed = d._feed || null;                          // signal-feed health (IDLE deployments)
+                                    const isLive = d.trade_mode === 'LIVE';
+                                    const busy = Object.keys(pending).some(k => k.endsWith(`:${d._id}`));
+                                    // MTM is only live during market hours; flag a stale mark so an
+                                    // after-hours frozen number isn't read as a live P&L.
+                                    const mtmAgeMs = pos.lastMtmAt ? Date.now() - new Date(pos.lastMtmAt).getTime() : null;
+                                    const mtmStale = open && mtmAgeMs != null && mtmAgeMs > 3 * 60000;
                                     return (
-                                        <div key={d._id} className={`rounded-lg border p-3 ${d.trade_mode === 'LIVE' ? 'border-red-800/60 bg-red-950/10' : 'border-slate-700 bg-slate-900/40'}`}>
+                                        <div key={d._id} className={`rounded-lg border p-3 relative ${isLive ? 'border-red-600 bg-red-950/20 ring-1 ring-red-800/40' : 'border-slate-700 bg-slate-900/40'} ${busy ? 'opacity-70' : ''}`}>
+                                            {isLive && <div className="absolute -top-2 left-3 text-[8px] font-bold px-1.5 py-0.5 rounded bg-red-700 text-white tracking-wider">● REAL MONEY</div>}
                                             <div className="flex items-center justify-between mb-1">
-                                                <div className="text-xs font-semibold text-slate-200">{d.name}</div>
+                                                <div className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">{d.name}{busy && <RefreshCw className="w-3 h-3 animate-spin text-slate-400" />}</div>
                                                 <div className="flex gap-1">
                                                     <span className={`text-[10px] px-1.5 py-0.5 rounded border ${d.trade_mode === 'LIVE' ? 'border-red-700 text-red-300' : 'border-sky-700 text-sky-300'}`}>{d.trade_mode}</span>
                                                     <span className={`text-[10px] px-1.5 py-0.5 rounded border ${d.status === 'ACTIVE' ? 'border-emerald-700 text-emerald-300' : 'border-slate-600 text-slate-400'}`}>{d.status}</span>
                                                     <span className={`text-[10px] px-1.5 py-0.5 rounded border ${open ? 'border-amber-600 text-amber-300' : 'border-slate-700 text-slate-500'}`}>{st}</span>
+                                                    {open && <button onClick={() => setDepChart(depChart === d._id ? null : d._id)}
+                                                        className={`text-[10px] px-1.5 py-0.5 rounded border ${depChart === d._id ? 'border-sky-600 text-sky-300' : 'border-slate-600 text-slate-400'} hover:text-white`}
+                                                        title="Live payoff diagram — the spread's P&L-at-expiry curve with a 'you are here' marker at the current spot">📈 chart</button>}
                                                     <button onClick={() => setDepDetail(detailOpen ? null : d._id)}
                                                         className={`text-[10px] px-1.5 py-0.5 rounded border ${detailOpen ? 'border-amber-600 text-amber-300' : 'border-slate-600 text-slate-400'} hover:text-white`}
                                                         title="Full order detail — legs, prices, SL/TP levels, exit deadlines">{detailOpen ? '▲' : '▾'} details</button>
                                                 </div>
                                             </div>
-                                            <div className="text-[11px] text-slate-400 mb-1">
-                                                {templates.find(t => t.key === d.template)?.name || d.template} · {shortSym(d.symbol)} · {d.lots} lot(s)
-                                                {d.entry_mode === 'signal' ? ` · signal: ${d.signal_strategy}` : ' · time entry'}
+                                            <div className="text-[11px] text-slate-400 mb-1 flex flex-wrap items-center gap-x-1">
+                                                <span>{templates.find(t => t.key === d.template)?.name || d.template} · {shortSym(d.symbol)} · {d.lots} lot(s)
+                                                    {d.entry_mode === 'signal' ? ` · signal: ${d.signal_strategy}` : ' · time entry'}</span>
+                                                {feed && d.entry_mode === 'signal' && !open && (
+                                                    <span className={`ml-1 ${feed.ok ? 'text-emerald-500' : 'text-amber-400'}`} title={`Feed: ${feed.note}${feed.bars != null ? ` · ${feed.bars} bars` : ''} · last check ${istTimeSec(feed.at)} IST`}>
+                                                        ● {feed.ok ? 'feed ok' : feed.note}
+                                                    </span>
+                                                )}
                                             </div>
                                             <div className="grid grid-cols-3 gap-1 text-[11px] mb-2">
-                                                <div title="MTM = mark-to-market, the structure's live PnL if closed now. '/unit' is per single lot-share (before × lot size × lots); the ₹ figure is the actual money on the book.">
-                                                    <Tile label="MTM (₹ · /unit)"
+                                                <div title={mtmStale ? `Mark is STALE — last updated ${istTime(pos.lastMtmAt)} IST (market likely closed). This is not a live P&L; option quotes are frozen at their last trade.` : "MTM = mark-to-market, the structure's live PnL if closed now. '/unit' is per single lot-share (before × lot size × lots); the ₹ figure is the actual money on the book."}>
+                                                    <Tile label={mtmStale ? '⚠ MTM (stale)' : 'MTM (₹ · /unit)'}
                                                         value={d.position?.lastMtm != null ? `₹${fmt(d.position.lastMtmRupees ?? 0)} · ${fmt(d.position.lastMtm, 1)}/u` : '—'}
-                                                        good={d.position?.lastMtm > 0} bad={d.position?.lastMtm < 0} />
+                                                        good={!mtmStale && d.position?.lastMtm > 0} bad={!mtmStale && d.position?.lastMtm < 0} />
                                                 </div>
                                                 <Tile label="Today" value={`₹${fmt(d.daily?.pnlToday)}`} good={d.daily?.pnlToday > 0} bad={d.daily?.pnlToday < 0} />
                                                 <Tile label={`Total (${d.totals?.trades || 0})`} value={`₹${fmt(d.totals?.netPnl)}`} good={d.totals?.netPnl > 0} bad={d.totals?.netPnl < 0} />
                                             </div>
+                                            {open && mtmHist && mtmHist.length > 1 && (
+                                                <div className="flex items-center gap-2 mb-2 text-[9px] text-slate-500" title="Intraday MTM path (₹) since the engine started tracking">
+                                                    <span>MTM today</span><Sparkline data={mtmHist} />
+                                                    <span className={mtmHist[mtmHist.length - 1].pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}>₹{fmt(mtmHist[mtmHist.length - 1].pnl)}</span>
+                                                </div>
+                                            )}
                                             {open && d.position?.greeks && (
                                                 <div className="text-[10px] font-mono mb-2 flex gap-3"
                                                     title="Live book greeks — Δ: ₹ per 1pt spot move · V: ₹ per 1 IV point · Θ: ₹ per day. IVP = vol percentile at entry.">
@@ -1584,6 +1793,49 @@ export default function MultiLeg() {
                                                     <span className={d.position.greeks.vega < 0 ? 'text-amber-300' : 'text-sky-300'}>V ₹{fmt(d.position.greeks.vega, 1)}/IVpt</span>
                                                     <span className={d.position.greeks.theta > 0 ? 'text-emerald-300' : 'text-red-300'}>Θ ₹{fmt(d.position.greeks.theta, 1)}/day</span>
                                                     {d.position.ivpAtEntry != null && <span className="text-slate-500">IVP@in {fmt(d.position.ivpAtEntry, 0)}</span>}
+                                                </div>
+                                            )}
+                                            {/* Live RISK GRAPH — expiry payoff + current T+0 MTM curve, every level marked */}
+                                            {chartOpen && chartData.length > 0 && (
+                                                <div className="mb-2 border-t border-slate-800 pt-2">
+                                                    <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1 flex-wrap gap-x-3">
+                                                        <span className="flex items-center gap-2">
+                                                            <span className="text-emerald-300">━ expiry</span>
+                                                            {pg && <span className="text-sky-300">┅ now (T+0)</span>}
+                                                            {pg && <span className="text-violet-300/70">▨ ±1σ move</span>}
+                                                            <span className="text-sky-300 font-semibold">spot {fmt(chartSpot)}</span>
+                                                            <span className="text-slate-500">entry {fmt(pos.entrySpot)}</span>
+                                                            {pg && <span className="text-slate-500">IV {pg.ivAvgPct}% · {pg.dte}DTE</span>}
+                                                            {pg && pg.pop != null && <span className={pg.pop >= 50 ? 'text-emerald-300' : 'text-amber-300'} title="Probability of finishing profitable (lognormal, from IV)">POP {pg.pop}%</span>}
+                                                        </span>
+                                                        <span title="break-even spot levels">BE {chartBEs.length ? chartBEs.map(b => fmt(b)).join(' / ') : '—'}</span>
+                                                    </div>
+                                                    <ResponsiveContainer width="100%" height={230}>
+                                                        <LineChart data={chartData} margin={{ top: 8, right: 10, bottom: 2, left: 8 }}>
+                                                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                                                            {pg && pg.expectedMove > 0 && <ReferenceArea x1={pg.spot - pg.expectedMove} x2={pg.spot + pg.expectedMove} fill="#8b5cf6" fillOpacity={0.08} stroke="#8b5cf6" strokeOpacity={0.25} />}
+                                                            <XAxis dataKey="spot" type="number" domain={['dataMin', 'dataMax']} tick={{ fontSize: 9, fill: '#64748b' }}
+                                                                ticks={[...new Set([...chartStrikes, ...(pos.entrySpot ? [Math.round(pos.entrySpot)] : []), ...(chartSpot ? [Math.round(chartSpot)] : [])])].sort((a, b) => a - b)} />
+                                                            <YAxis tick={{ fontSize: 9, fill: '#64748b' }} width={54} tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} />
+                                                            <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', fontSize: 11 }} cursor={{ stroke: '#38bdf8', strokeDasharray: '3 3' }}
+                                                                formatter={(v, n) => [`₹${fmt(v)}`, n === 'now' ? 'P&L now' : 'P&L @ expiry']} labelFormatter={(l) => `spot ${fmt(l)}`} />
+                                                            <Legend wrapperStyle={{ fontSize: 9 }} />
+                                                            <ReferenceLine y={0} stroke="#64748b" />
+                                                            {tpRupee != null && <ReferenceLine y={tpRupee} stroke="#34d399" strokeDasharray="5 4" label={{ value: `TP ₹${fmt(tpRupee)}`, fontSize: 8, fill: '#34d399', position: 'right' }} />}
+                                                            {slRupee != null && <ReferenceLine y={slRupee} stroke="#f87171" strokeDasharray="5 4" label={{ value: `SL ₹${fmt(slRupee)}`, fontSize: 8, fill: '#f87171', position: 'right' }} />}
+                                                            {chartStrikes.map(k => <ReferenceLine key={k} x={k} stroke="#334155" strokeDasharray="2 2" label={{ value: k, fontSize: 8, fill: '#475569', position: 'insideBottom' }} />)}
+                                                            {pos.entrySpot && <ReferenceLine x={Math.round(pos.entrySpot)} stroke="#94a3b8" strokeDasharray="4 3" label={{ value: 'entry', fontSize: 8, fill: '#94a3b8', position: 'insideTopLeft' }} />}
+                                                            {chartSpot && <ReferenceLine x={Math.round(chartSpot)} stroke="#38bdf8" strokeWidth={2} label={{ value: 'now', fontSize: 9, fill: '#38bdf8', position: 'top' }} />}
+                                                            <Line type="monotone" name="expiry" dataKey="expiry" stroke="#34d399" dot={false} strokeWidth={2} />
+                                                            {pg && <Line type="monotone" name="now" dataKey="now" stroke="#38bdf8" dot={false} strokeWidth={1.5} strokeDasharray="5 3" />}
+                                                            {pg && chartSpot && chartNowPnl != null && <ReferenceDot x={Math.round(chartSpot)} y={pg.currentNowRupees} r={4} fill="#38bdf8" stroke="#0f172a" />}
+                                                        </LineChart>
+                                                    </ResponsiveContainer>
+                                                    <div className="text-[10px] text-slate-500 mt-0.5">
+                                                        {pg ? '● dot = your P&L right now. ' : ''}MTM now <span className={!mtmStale && pos.lastMtm > 0 ? 'text-emerald-300' : !mtmStale && pos.lastMtm < 0 ? 'text-red-300' : ''}>₹{fmt(chartNowPnl ?? 0)}</span> · max profit ₹{fmt(chartMaxP)} · max loss ₹{fmt(chartMaxL)}
+                                                        {!pg && <span className="text-slate-600"> · loading live T+0 curve…</span>}
+                                                        {pg && pg.stale && <span className="text-amber-400"> · ⚠ mark {pg.mtmAgeMin}m old (market closed — quotes frozen, not live)</span>}
+                                                    </div>
                                                 </div>
                                             )}
                                             {/* Entry timing + position detail (the trade's story) */}
@@ -1626,7 +1878,7 @@ export default function MultiLeg() {
                                                     {open && pos.legs?.length > 0 && (
                                                         <div className="overflow-x-auto">
                                                             <table className="w-full font-mono text-slate-300">
-                                                                <thead><tr className="text-slate-500 text-left"><th>Leg</th><th>Strike</th><th className="text-right">Qty</th><th className="text-right">Entry ₹</th><th className="text-right">Now/Exit</th><th>Status</th>{d.trade_mode === 'LIVE' && <th>OrderId</th>}</tr></thead>
+                                                                <thead><tr className="text-slate-500 text-left"><th>Leg</th><th>Strike</th><th className="text-right">Qty</th><th className="text-right">Entry ₹</th><th className="text-right">Now/Exit</th><th>Filled</th><th>Status</th>{d.trade_mode === 'LIVE' && <th>OrderId</th>}</tr></thead>
                                                                 <tbody>
                                                                     {pos.legs.map((l, i) => (
                                                                         <tr key={i} className="border-t border-slate-800/60">
@@ -1635,6 +1887,7 @@ export default function MultiLeg() {
                                                                             <td className="text-right">{l.qty}</td>
                                                                             <td className="text-right">{fmt(l.entryPrice, 2)}</td>
                                                                             <td className="text-right text-slate-500">{l.exitPrice ? fmt(l.exitPrice, 2) : '—'}</td>
+                                                                            <td className="text-slate-600">{l.filledAt ? istTimeSec(l.filledAt) : '—'}</td>
                                                                             <td className="text-slate-500">{l.status}</td>
                                                                             {d.trade_mode === 'LIVE' && <td className="text-slate-600 truncate max-w-[90px]" title={l.orderId}>{l.orderId || '—'}</td>}
                                                                         </tr>
@@ -1645,6 +1898,7 @@ export default function MultiLeg() {
                                                                             <td>{l.strike}</td><td className="text-right">{l.qty}</td>
                                                                             <td className="text-right">{fmt(l.entryPrice, 2)}</td>
                                                                             <td className="text-right">{fmt(l.exitPrice, 2)}</td>
+                                                                            <td className="text-slate-600">{l.filledAt ? istTimeSec(l.filledAt) : '—'}</td>
                                                                             <td className="text-slate-500">{l.closeReason || l.status}</td>
                                                                             {d.trade_mode === 'LIVE' && <td className="text-slate-600">closed</td>}
                                                                         </tr>
@@ -1672,10 +1926,10 @@ export default function MultiLeg() {
                                             {d.lastError && <div className="text-[10px] text-red-400 mb-2">⚠ {d.lastError}</div>}
                                             <div className="flex gap-1 flex-wrap">
                                                 {d.status === 'ACTIVE'
-                                                    ? <button onClick={() => depAction(d, open ? 'stop-close' : 'stop')} className="px-2 py-0.5 rounded border border-amber-700/50 bg-amber-900/20 text-amber-300 text-[11px] hover:bg-amber-900/40"><StopCircle className="w-3 h-3 inline mr-0.5" />{open ? 'Stop + close' : 'Stop'}</button>
-                                                    : <button onClick={() => depAction(d, 'start')} className="px-2 py-0.5 rounded border border-emerald-700/50 bg-emerald-900/20 text-emerald-300 text-[11px] hover:bg-emerald-900/40"><Play className="w-3 h-3 inline mr-0.5" />Resume</button>}
-                                                {st === 'OPEN' && <button onClick={() => depAction(d, 'close')} className="px-2 py-0.5 rounded border border-red-700/50 bg-red-900/20 text-red-300 text-[11px] hover:bg-red-900/40"><Square className="w-3 h-3 inline mr-0.5" />Close now</button>}
-                                                {!open && <button onClick={() => depAction(d, 'delete')} className="px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-400 text-[11px] hover:text-red-300"><Trash2 className="w-3 h-3 inline mr-0.5" />Delete</button>}
+                                                    ? <button onClick={() => depAction(d, open ? 'stop-close' : 'stop')} disabled={busy} aria-label={open ? `Stop and close ${d.name}` : `Stop ${d.name}`} className="px-2 py-0.5 rounded border border-amber-700/50 bg-amber-900/20 text-amber-300 text-[11px] hover:bg-amber-900/40 disabled:opacity-40"><StopCircle className="w-3 h-3 inline mr-0.5" />{open ? 'Stop + close' : 'Stop'}</button>
+                                                    : <button onClick={() => depAction(d, 'start')} disabled={busy} aria-label={`Resume ${d.name}`} className="px-2 py-0.5 rounded border border-emerald-700/50 bg-emerald-900/20 text-emerald-300 text-[11px] hover:bg-emerald-900/40 disabled:opacity-40"><Play className="w-3 h-3 inline mr-0.5" />Resume</button>}
+                                                {st === 'OPEN' && <button onClick={() => depAction(d, 'close')} disabled={busy} aria-label={`Close ${d.name} now`} className="px-2 py-0.5 rounded border border-red-700/50 bg-red-900/20 text-red-300 text-[11px] hover:bg-red-900/40 disabled:opacity-40"><Square className="w-3 h-3 inline mr-0.5" />Close now</button>}
+                                                {!open && <button onClick={() => depAction(d, 'delete')} disabled={busy} aria-label={`Delete ${d.name}`} className="px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-400 text-[11px] hover:text-red-300 disabled:opacity-40"><Trash2 className="w-3 h-3 inline mr-0.5" />Delete</button>}
                                             </div>
                                         </div>
                                     );
@@ -1824,12 +2078,18 @@ export default function MultiLeg() {
                                 <div className="text-sm font-semibold text-white mb-2">Structure round-trips ({resFiltered.length})</div>
                                 <table className="w-full text-[11px] text-slate-300">
                                     <thead><tr className="text-slate-500 text-left">
-                                        <th>Entry → Exit</th><th>Structure</th><th>Sym</th><th>Mode</th><th>Reason</th>
+                                        <th></th><th>Entry → Exit</th><th>Structure</th><th>Sym</th><th>Mode</th><th>Reason</th>
                                         <th className="text-right">Credit/u</th><th className="text-right">IVP@in</th><th className="text-right">Gross ₹</th><th className="text-right">Chg</th><th className="text-right">Net ₹</th>
                                     </tr></thead>
                                     <tbody>
-                                        {[...resFiltered].sort((a, b) => new Date(b.exitAt) - new Date(a.exitAt)).map((t, i) => (
-                                            <tr key={i} className="border-t border-slate-800">
+                                        {[...resFiltered].sort((a, b) => new Date(b.exitAt) - new Date(a.exitAt)).map((t, i) => {
+                                            const tid = t._id || `${t.deploymentId}-${t.entryAt}`;
+                                            const openT = resTradeOpen === tid;
+                                            const allLegs = [...(t.legs || []), ...(t.closedLegs || [])];
+                                            return (
+                                            <React.Fragment key={tid}>
+                                            <tr className="border-t border-slate-800 hover:bg-slate-800/40 cursor-pointer" onClick={() => setResTradeOpen(openT ? null : tid)}>
+                                                <td className="text-slate-500 w-4">{openT ? '▲' : '▾'}</td>
                                                 <td className="whitespace-nowrap" title="IST">{istDateTime(t.entryAt)} → {istTime(t.exitAt)}</td>
                                                 <td className="truncate max-w-[120px]" title={t.template}>{templates.find(x => x.key === t.template)?.name || t.template}</td>
                                                 <td>{shortSym(t.symbol)}</td>
@@ -1841,7 +2101,28 @@ export default function MultiLeg() {
                                                 <td className="text-right text-slate-500">₹{fmt(t.charges)}</td>
                                                 <td className={`text-right font-semibold ${t.netPnl > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(t.netPnl)}</td>
                                             </tr>
-                                        ))}
+                                            {openT && (
+                                                <tr className="bg-slate-900/60"><td colSpan={11} className="p-2">
+                                                    <div className="text-[10px] text-slate-400 mb-1">Held {t.holdDays != null ? `${t.holdDays}d` : fmtDur(t.entryAt)} · spot {fmt(t.entrySpot)} → {fmt(t.exitSpot)} · net credit at entry ₹{fmt(t.origCredit, 1)}/u{t.lots ? ` · ${t.lots} lot(s)` : ''}</div>
+                                                    {allLegs.length > 0 ? (
+                                                        <table className="w-full text-[10px] font-mono text-slate-300">
+                                                            <thead><tr className="text-slate-500 text-left"><th>Leg</th><th>Strike</th><th className="text-right">Entry ₹</th><th className="text-right">Exit ₹</th><th>Close</th></tr></thead>
+                                                            <tbody>{allLegs.map((l, j) => (
+                                                                <tr key={j} className="border-t border-slate-800/60">
+                                                                    <td className={l.action === 'BUY' ? 'text-emerald-300' : 'text-red-300'}>{l.action} {l.type}</td>
+                                                                    <td>{l.strike}{l.ratio > 1 ? ` ×${l.ratio}` : ''}</td>
+                                                                    <td className="text-right">{fmt(l.entryPrice, 2)}</td>
+                                                                    <td className="text-right">{l.exitPrice != null ? fmt(l.exitPrice, 2) : '—'}</td>
+                                                                    <td className="text-slate-500">{l.closeReason || l.reason || l.status || '—'}</td>
+                                                                </tr>
+                                                            ))}</tbody>
+                                                        </table>
+                                                    ) : <div className="text-[10px] text-slate-500">No leg detail stored for this trade.</div>}
+                                                </td></tr>
+                                            )}
+                                            </React.Fragment>
+                                            );
+                                        })}
                                     </tbody>
                                 </table>
                             </div>
@@ -1849,6 +2130,143 @@ export default function MultiLeg() {
                     )}
                 </div>
             )}
+        </div>
+    );
+}
+
+// ── Reusable UI primitives (pro-desk polish) ─────────────────────────────
+// Persist a bit of UI state (open panels, filters, sort) across refreshes.
+function useLocalStorage(key, initial) {
+    const [v, setV] = React.useState(() => {
+        try { const s = localStorage.getItem(key); return s != null ? JSON.parse(s) : initial; } catch { return initial; }
+    });
+    React.useEffect(() => { try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* quota */ } }, [key, v]);
+    return [v, setV];
+}
+
+// Tiny inline SVG sparkline for the intraday MTM path (no chart lib overhead).
+function Sparkline({ data, width = 68, height = 20 }) {
+    if (!data || data.length < 2) return <span className="text-slate-600 text-[9px]">—</span>;
+    const ys = data.map(d => d.pnl);
+    const min = Math.min(...ys, 0), max = Math.max(...ys, 0), rng = (max - min) || 1;
+    const step = width / (data.length - 1);
+    const pts = ys.map((y, i) => `${(i * step).toFixed(1)},${(height - ((y - min) / rng) * height).toFixed(1)}`).join(' ');
+    const last = ys[ys.length - 1];
+    const zeroY = (height - ((0 - min) / rng) * height).toFixed(1);
+    return (
+        <svg width={width} height={height} className="overflow-visible" aria-hidden="true">
+            <line x1="0" y1={zeroY} x2={width} y2={zeroY} stroke="#334155" strokeWidth="0.5" strokeDasharray="2 2" />
+            <polyline points={pts} fill="none" stroke={last >= 0 ? '#34d399' : '#f87171'} strokeWidth="1.2" />
+        </svg>
+    );
+}
+
+// Toast notifications — non-blocking, dismissible, colored by kind.
+function useToasts() {
+    const [toasts, setToasts] = React.useState([]);
+    const push = React.useCallback((msg, kind = 'info', ms = 5000) => {
+        const id = Math.random().toString(36).slice(2);
+        setToasts(t => [...t, { id, msg, kind }]);
+        if (ms) setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), ms);
+        return id;
+    }, []);
+    const dismiss = React.useCallback((id) => setToasts(t => t.filter(x => x.id !== id)), []);
+    return { toasts, push, dismiss };
+}
+function Toasts({ toasts, dismiss }) {
+    return (
+        <div className="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm" role="status" aria-live="polite">
+            {toasts.map(t => (
+                <div key={t.id} className={`flex items-start gap-2 px-3 py-2 rounded-lg border shadow-lg text-xs ${t.kind === 'error' ? 'bg-red-950/90 border-red-700 text-red-200' : t.kind === 'success' ? 'bg-emerald-950/90 border-emerald-700 text-emerald-200' : t.kind === 'warn' ? 'bg-amber-950/90 border-amber-700 text-amber-200' : 'bg-slate-900/95 border-slate-600 text-slate-200'}`}>
+                    <span className="flex-1 whitespace-pre-wrap">{t.msg}</span>
+                    <button onClick={() => dismiss(t.id)} className="text-slate-400 hover:text-white" aria-label="Dismiss">✕</button>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+// Confirmation modal with optional type-to-confirm + a risk-summary body.
+function ConfirmModal({ open, title, danger, confirmLabel = 'Confirm', requireText, onConfirm, onCancel, children }) {
+    const [typed, setTyped] = React.useState('');
+    React.useEffect(() => { if (open) setTyped(''); }, [open]);
+    if (!open) return null;
+    const ok = !requireText || typed.trim() === requireText;
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" onKeyDown={e => e.key === 'Escape' && onCancel()}>
+            <div className={`w-full max-w-md rounded-xl border p-4 ${danger ? 'border-red-700 bg-slate-900' : 'border-slate-600 bg-slate-900'}`}>
+                <div className={`text-sm font-bold mb-2 ${danger ? 'text-red-300' : 'text-white'}`}>{title}</div>
+                <div className="text-xs text-slate-300 space-y-2 mb-3">{children}</div>
+                {requireText && (
+                    <label className="block text-[11px] text-slate-400 mb-3">Type <span className="font-mono text-slate-200">{requireText}</span> to confirm
+                        <input autoFocus value={typed} onChange={e => setTyped(e.target.value)}
+                            className="w-full mt-1 bg-slate-800 border border-slate-700 rounded p-1.5 text-slate-200 font-mono" />
+                    </label>
+                )}
+                <div className="flex justify-end gap-2">
+                    <button onClick={onCancel} className="px-3 py-1.5 rounded border border-slate-600 bg-slate-800 text-slate-300 text-xs hover:text-white">Cancel</button>
+                    <button onClick={() => ok && onConfirm()} disabled={!ok}
+                        className={`px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-40 ${danger ? 'bg-red-700 hover:bg-red-600 text-white' : 'bg-emerald-700 hover:bg-emerald-600 text-white'}`}>{confirmLabel}</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// Pre-deploy RISK PREVIEW modal — live legs/credit/max-loss/margin/breakevens/
+// expected-move/POP resolved before any order; LIVE requires type-to-confirm.
+function PreviewModal({ preview, deployLots, onConfirm, onCancel }) {
+    const [typed, setTyped] = React.useState('');
+    React.useEffect(() => { setTyped(''); }, [preview?.strategy?._id]);
+    if (!preview) return null;
+    const { strategy: s, data, loading } = preview;
+    const need = s?.name || '';
+    const ok = typed.trim() === need;
+    const Row = ({ k, v, cls }) => (<div className="flex justify-between"><span className="text-slate-500">{k}</span><span className={`font-mono ${cls || 'text-slate-200'}`}>{v}</span></div>);
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true">
+            <div className="w-full max-w-lg rounded-xl border border-red-700 bg-slate-900 p-4">
+                <div className="text-sm font-bold text-red-300 mb-1">🔴 Deploy “{need}” LIVE — confirm risk</div>
+                <div className="text-[11px] text-slate-400 mb-3">Real broker orders · {deployLots} lot(s) · marketable-limit, hedges first. Review before confirming.</div>
+                {loading ? <div className="text-xs text-slate-400 py-6 text-center">Pricing the structure at the live chain…</div>
+                    : data?.error ? <div className="text-xs text-red-400 py-4">Preview failed: {data.error}<div className="text-slate-500 mt-1">(needs live market hours + a valid chain). You can still deploy, but you’ll be doing so blind.</div></div>
+                    : data ? (
+                        <div className="space-y-2 text-xs">
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                                <Row k="Structure" v={data.name} />
+                                <Row k="Spot" v={fmt(data.spot)} />
+                                <Row k="Net credit" v={`₹${fmt(data.creditRupees)} (${fmt(data.creditPerUnit, 1)}/u)`} cls={data.creditRupees >= 0 ? 'text-emerald-300' : 'text-amber-300'} />
+                                <Row k="Margin (est)" v={`₹${fmt(data.marginEst)}${data.marginBasis === 'span' ? ' (SPAN)' : ''}`} cls={data.fundsOk === false ? 'text-red-300' : ''} />
+                                <Row k="Max profit" v={data.maxProfit != null ? `₹${fmt(data.maxProfit)}` : '∞'} cls="text-emerald-300" />
+                                <Row k="Max loss" v={data.maxLoss != null ? `₹${fmt(data.maxLoss)}` : 'UNLIMITED'} cls={data.maxLoss != null ? 'text-red-300' : 'text-red-400 font-bold'} />
+                                <Row k="Break-evens" v={data.breakevens?.length ? data.breakevens.map(b => fmt(b)).join(' / ') : '—'} />
+                                <Row k="Prob. of profit" v={data.pop != null ? `${data.pop}%` : '—'} cls={data.pop >= 50 ? 'text-emerald-300' : 'text-amber-300'} />
+                                <Row k="Expected move (±1σ)" v={`±${fmt(data.expectedMove)} (${data.dte}DTE)`} />
+                                <Row k="ATM IV" v={`${data.ivAtmPct}%`} />
+                            </div>
+                            {data.unbounded && <div className="text-[11px] text-red-400 border border-red-800 rounded p-1.5">⚠ UNDEFINED tail risk — this structure can lose without limit unless leg-SL / structure-SL are set.</div>}
+                            {data.fundsOk === false && <div className="text-[11px] text-red-400 border border-red-800 rounded p-1.5">⛔ Insufficient funds — needs ₹{fmt(data.marginEst)} margin but only ₹{fmt(data.fundsAvailable)} available. A LIVE deploy will be refused.</div>}
+                            {Array.isArray(data.lint) && data.lint.length > 0 && (
+                                <div className="space-y-1">
+                                    <div className="text-[10px] uppercase tracking-wide text-slate-500">Pre-deploy review</div>
+                                    {data.lint.map((l, i) => (
+                                        <div key={i} className={`text-[11px] rounded px-1.5 py-1 border ${l.level === 'danger' ? 'text-red-300 border-red-800 bg-red-950/20' : l.level === 'warn' ? 'text-amber-300 border-amber-800/60 bg-amber-950/10' : 'text-slate-400 border-slate-700 bg-slate-800/30'}`}>
+                                            {l.level === 'danger' ? '⛔' : l.level === 'warn' ? '⚠' : 'ℹ'} {l.msg}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            <div className="text-[10px] font-mono text-slate-500">{data.legs?.map((l, i) => <span key={i} className={l.action === 'BUY' ? 'text-emerald-400' : 'text-red-400'}>{l.action} {l.strike}{l.type} @{fmt(l.premium, 1)}{i < data.legs.length - 1 ? ' · ' : ''}</span>)}</div>
+                        </div>
+                    ) : null}
+                <label className="block text-[11px] text-slate-400 mt-3 mb-3">Type <span className="font-mono text-slate-200">{need}</span> to place LIVE orders
+                    <input autoFocus value={typed} onChange={e => setTyped(e.target.value)} className="w-full mt-1 bg-slate-800 border border-slate-700 rounded p-1.5 text-slate-200 font-mono" />
+                </label>
+                <div className="flex justify-end gap-2">
+                    <button onClick={onCancel} className="px-3 py-1.5 rounded border border-slate-600 bg-slate-800 text-slate-300 text-xs hover:text-white">Cancel</button>
+                    <button onClick={() => ok && onConfirm()} disabled={!ok} className="px-3 py-1.5 rounded bg-red-700 hover:bg-red-600 text-white text-xs font-semibold disabled:opacity-40">Deploy LIVE</button>
+                </div>
+            </div>
         </div>
     );
 }
@@ -1868,6 +2286,41 @@ const istDateTime = (v) => istStr(v, { day: '2-digit', month: 'short', hour: '2-
 const istTimeSec = (v) => istStr(v, { hour: '2-digit', minute: '2-digit', second: '2-digit' });               // "13:42:27"
 const istTime = (v) => istStr(v, { hour: '2-digit', minute: '2-digit' });                                     // "13:42"
 function fmtClock(iso) { return istDateTime(iso); }
+// Expiry-payoff curve of the CURRENTLY-OPEN legs (computed from actual fills,
+// so it's correct even for a partially-closed structure — closed-leg PnL folds
+// in via realizedLegPnl). Returns { points:[{spot,pnl}], breakevens[], from, to }.
+function payoffCurve(pos, unitToRupee) {
+    const legs = (pos?.legs || []).filter(l => l && l.strike && l.status !== 'CLOSED');
+    if (!legs.length) return null;
+    const mult = unitToRupee || 1;
+    const strikes = legs.map(l => l.strike);
+    const lo = Math.min(...strikes), hi = Math.max(...strikes);
+    const span = Math.max(hi - lo, 100);
+    const from = lo - span, to = hi + span;              // show the wings + both tails
+    const step = Math.max(1, Math.round((to - from) / 90));
+    const intr = (type, k, S) => type === 'CE' ? Math.max(0, S - k) : Math.max(0, k - S);
+    const at = (S) => {
+        let u = pos.realizedLegPnl || 0;
+        for (const l of legs) {
+            const iv = intr(l.type, l.strike, S);
+            u += (l.action === 'SELL' ? (l.entryPrice - iv) : (iv - l.entryPrice)) * (l.ratio || 1);
+        }
+        return u * mult;
+    };
+    const points = [];
+    for (let S = from; S <= to; S += step) points.push({ spot: Math.round(S), pnl: Math.round(at(S)) });
+    // breakevens: sign changes between adjacent points (linear interp)
+    const breakevens = [];
+    for (let i = 1; i < points.length; i++) {
+        const a = points[i - 1], b = points[i];
+        if ((a.pnl <= 0 && b.pnl > 0) || (a.pnl >= 0 && b.pnl < 0)) {
+            const t = a.pnl / (a.pnl - b.pnl);
+            breakevens.push(Math.round(a.spot + t * (b.spot - a.spot)));
+        }
+    }
+    return { points, breakevens, from, to };
+}
+
 function fmtDur(iso) {
     if (!iso) return '';
     const ms = Date.now() - new Date(iso).getTime();
@@ -1884,6 +2337,54 @@ function Tile({ label, value, good, bad, small }) {
         <div className="bg-slate-800/60 border border-slate-700 rounded p-2">
             <div className="text-[10px] text-slate-500">{label}</div>
             <div className={`${small ? 'text-[10px]' : 'text-sm font-semibold'} ${good ? 'text-emerald-300' : bad ? 'text-red-300' : 'text-slate-200'}`}>{value}</div>
+        </div>
+    );
+}
+
+// Market Read — fuses price momentum with option-seller positioning (OI / PCR /
+// max-pain / walls) into a directional bias for the selected symbol, with a
+// one-click "load the fitting structure" button. On-demand (hits the broker).
+const BIAS_STYLE = { bullish: 'text-emerald-300 border-emerald-700/50 bg-emerald-950/20', bearish: 'text-red-300 border-red-700/50 bg-red-950/20', neutral: 'text-amber-300 border-amber-700/50 bg-amber-950/10' };
+function MarketRead({ symbol, presets, onApplyPreset }) {
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [err, setErr] = useState(null);
+    const load = async () => {
+        setLoading(true); setErr(null);
+        try { const r = await axios.get(`${API_URL}/multileg/market-context`, { params: { symbol } }); setData(r.data); }
+        catch (e) { setErr(e.response?.data?.error || e.message); }
+        finally { setLoading(false); }
+    };
+    useEffect(() => { setData(null); setErr(null); }, [symbol]);
+    const preset = data && presets.find(p => p.key === data.suggested?.preset);
+    return (
+        <div className="rounded-lg border border-slate-700 bg-slate-800/30 p-2.5 mb-3">
+            <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-200">🧭 Market read <span className="text-slate-500 font-normal">— momentum + where the sellers are</span></span>
+                <button onClick={load} disabled={loading} className="text-[10px] px-2 py-0.5 rounded border border-slate-600 bg-slate-800 text-slate-300 hover:text-white disabled:opacity-40">{loading ? 'reading…' : data ? 'refresh' : 'read now'}</button>
+            </div>
+            {err && <div className="text-[11px] text-red-400 mt-1.5">{err}</div>}
+            {data && (
+                <div className="mt-2 space-y-1.5">
+                    <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                        <span className={`px-2 py-0.5 rounded border font-semibold uppercase ${BIAS_STYLE[data.bias] || ''}`}>{data.bias} · {data.confidence}</span>
+                        <span className="text-slate-500">{data.summary}</span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 text-[10px]">
+                        <Tile label="Momentum" value={data.momentum?.dir || '—'} small good={data.momentum?.dir === 'up'} bad={data.momentum?.dir === 'down'} />
+                        <Tile label="Sellers (PCR)" value={data.sellers?.pcr != null ? `${data.sellers.tilt} · ${data.sellers.pcr}` : (data.sellers?.tilt || '—')} small />
+                        <Tile label="Support / Resist" value={`${data.support ?? '—'} / ${data.resistance ?? '—'}`} small />
+                        <Tile label="Max pain / spot" value={`${data.sellers?.maxPain ?? '—'} / ${data.spot ?? '—'}`} small />
+                    </div>
+                    {data.suggested && (
+                        <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                            <span>→ {data.suggested.note}</span>
+                            {preset && <button onClick={() => onApplyPreset(preset)} className="text-[10px] px-2 py-0.5 rounded border border-primary/40 bg-primary/15 text-primary hover:bg-primary/25">Load {preset.name}</button>}
+                        </div>
+                    )}
+                    <div className="text-[9px] text-slate-600">A read, not a guarantee — momentum can flip and OI is a snapshot. Confirm with a backtest before deploying.</div>
+                </div>
+            )}
         </div>
     );
 }
