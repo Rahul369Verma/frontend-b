@@ -128,6 +128,8 @@ export default function MultiLeg() {
     const [depDetail, setDepDetail] = useState(null);     // _id of the expanded deployment (full order detail)
     const [depChart, setDepChart] = useState(null);       // _id of the deployment showing its live payoff chart
     const [depPayoff, setDepPayoff] = useState(null);     // { id, data } — backend risk-graph (expiry + T+0 curves)
+    const [depActivity, setDepActivity] = useState(null); // _id of the deployment showing its P&L activity (equity) chart
+    const [activityData, setActivityData] = useState(null); // { id, data } — cumulative realized P&L + live open MTM
     const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
     const [confirmState, setConfirmState] = useState(null); // { title, body, danger, confirmLabel, requireText, onConfirm }
     const [livePreview, setLivePreview] = useState(null);          // pre-deploy risk preview modal { strategy, tradeMode, data, loading }
@@ -440,6 +442,20 @@ export default function MultiLeg() {
         const t = setInterval(pull, 5000);
         return () => { alive = false; clearInterval(t); };
     }, [depChart, mode]);
+
+    // P&L Activity (equity curve of booked trades + live open MTM) for the
+    // deployment whose activity chart is open. Refreshed with the deploy poll
+    // so the open-MTM leading point stays live.
+    useEffect(() => {
+        if (!depActivity || mode !== 'deploy') { setActivityData(null); return; }
+        let alive = true;
+        const pull = () => axios.get(`${API_URL}/multileg/deployments/${depActivity}/activity`)
+            .then(r => { if (alive) setActivityData({ id: depActivity, data: r.data }); })
+            .catch(() => { if (alive) setActivityData({ id: depActivity, data: { error: true } }); });
+        pull();
+        const t = setInterval(pull, 10000);
+        return () => { alive = false; clearInterval(t); };
+    }, [depActivity, mode]);
 
     // Results tab: pull the FULL structure-trade history (deployment list too,
     // for the filter dropdown). Refreshes on open + a gentle poll for live runs.
@@ -1742,6 +1758,9 @@ export default function MultiLeg() {
                                     const rup = (u) => (u != null && unitToRupee) ? `₹${fmt(u * unitToRupee)}` : (u != null ? `₹${fmt(u, 1)}/u` : '—');
                                     const detailOpen = depDetail === d._id;
                                     const chartOpen = depChart === d._id;
+                                    const activityOpen = depActivity === d._id;
+                                    const act = (activityOpen && activityData && activityData.id === d._id && activityData.data && !activityData.data.error) ? activityData.data : null;
+                                    const actSeries = act ? [...(act.points || []), ...(act.openPoint ? [act.openPoint] : [])] : [];
                                     const curve = (chartOpen && open) ? payoffCurve(pos, unitToRupee) : null;
                                     const curSpot = pos.lastSpot || pos.entrySpot || null;
                                     // backend risk-graph (expiry + live T+0 curves); client curve is the instant fallback
@@ -1775,6 +1794,9 @@ export default function MultiLeg() {
                                                     {open && <button onClick={() => setDepChart(depChart === d._id ? null : d._id)}
                                                         className={`text-[10px] px-1.5 py-0.5 rounded border ${depChart === d._id ? 'border-sky-600 text-sky-300' : 'border-slate-600 text-slate-400'} hover:text-white`}
                                                         title="Live payoff diagram — the spread's P&L-at-expiry curve with a 'you are here' marker at the current spot">📈 chart</button>}
+                                                    {(d.totals?.trades > 0 || open) && <button onClick={() => setDepActivity(depActivity === d._id ? null : d._id)}
+                                                        className={`text-[10px] px-1.5 py-0.5 rounded border ${depActivity === d._id ? 'border-violet-600 text-violet-300' : 'border-slate-600 text-slate-400'} hover:text-white`}
+                                                        title="P&L activity — the cumulative equity curve of every booked trade, plus the live unrealized MTM of the current open structure">📊 activity</button>}
                                                     <button onClick={() => setDepDetail(detailOpen ? null : d._id)}
                                                         className={`text-[10px] px-1.5 py-0.5 rounded border ${detailOpen ? 'border-amber-600 text-amber-300' : 'border-slate-600 text-slate-400'} hover:text-white`}
                                                         title="Full order detail — legs, prices, SL/TP levels, exit deadlines">{detailOpen ? '▲' : '▾'} details</button>
@@ -1854,6 +1876,40 @@ export default function MultiLeg() {
                                                         {!pg && <span className="text-slate-600"> · loading live T+0 curve…</span>}
                                                         {pg && pg.stale && <span className="text-amber-400"> · ⚠ mark {pg.mtmAgeMin}m old (market closed — quotes frozen, not live)</span>}
                                                     </div>
+                                                </div>
+                                            )}
+                                            {/* P&L ACTIVITY — cumulative equity curve of every booked trade + live open MTM */}
+                                            {activityOpen && (
+                                                <div className="mb-2 border-t border-slate-800 pt-2">
+                                                    {!act ? (
+                                                        <div className="text-[10px] text-slate-500 py-3 text-center">{activityData?.data?.error ? 'could not load activity' : 'loading activity…'}</div>
+                                                    ) : actSeries.length === 0 ? (
+                                                        <div className="text-[10px] text-slate-500 py-3 text-center">No booked trades yet — the equity curve appears after the first exit.</div>
+                                                    ) : (<>
+                                                        <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1 flex-wrap gap-x-3">
+                                                            <span className="flex items-center gap-2">
+                                                                <span className="text-violet-300">━ cumulative P&L</span>
+                                                                <span className="text-slate-500">{act.summary.trades} trades · {act.summary.winRate}% win</span>
+                                                                <span className={act.summary.realized >= 0 ? 'text-emerald-300' : 'text-red-300'}>realized ₹{fmt(act.summary.realized)}</span>
+                                                                {act.summary.openMtm != null && <span className={act.summary.openMtm >= 0 ? 'text-emerald-300' : 'text-red-300'}>+ open ₹{fmt(act.summary.openMtm)} → ₹{fmt(act.summary.withOpen)}</span>}
+                                                            </span>
+                                                            <span className="text-slate-500">best ₹{fmt(act.summary.best)} · worst ₹{fmt(act.summary.worst)}</span>
+                                                        </div>
+                                                        <ResponsiveContainer width="100%" height={230}>
+                                                            <LineChart data={actSeries} margin={{ top: 8, right: 12, bottom: 2, left: 8 }}>
+                                                                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                                                                <XAxis dataKey="i" type="number" domain={['dataMin', 'dataMax']} tick={{ fontSize: 9, fill: '#64748b' }} tickFormatter={(v) => `#${v}`} />
+                                                                <YAxis tick={{ fontSize: 9, fill: '#64748b' }} width={54} tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} />
+                                                                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', fontSize: 11 }} cursor={{ stroke: '#a78bfa', strokeDasharray: '3 3' }}
+                                                                    formatter={(v, n, p) => [`₹${fmt(v)}`, 'cumulative']}
+                                                                    labelFormatter={(l, pl) => { const pt = pl && pl[0] && pl[0].payload; return pt ? `trade #${pt.i} · ${istStr(pt.t, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${pt.open ? 'OPEN' : pt.reason} · this ₹${fmt(pt.net)}` : `#${l}`; }} />
+                                                                <ReferenceLine y={0} stroke="#64748b" />
+                                                                <Line type="monotone" dataKey="cum" stroke="#a78bfa" strokeWidth={2}
+                                                                    dot={(props) => { const { cx, cy, payload } = props; const col = payload.open ? '#38bdf8' : (payload.net >= 0 ? '#34d399' : '#f87171'); return <circle key={payload.i} cx={cx} cy={cy} r={payload.open ? 4 : 3} fill={col} stroke="#0f172a" strokeWidth={1} />; }} />
+                                                            </LineChart>
+                                                        </ResponsiveContainer>
+                                                        <div className="text-[10px] text-slate-500 mt-0.5">Each dot = one booked structure (green win / red loss); the line is running net P&L. {act.openPoint ? <span className="text-sky-300">Blue dot = current open structure’s unrealized MTM.</span> : ''}</div>
+                                                    </>)}
                                                 </div>
                                             )}
                                             {/* Entry timing + position detail (the trade's story) */}
