@@ -134,6 +134,11 @@ const DataManager = () => {
     const [spotStatus, setSpotStatus] = useState(null);
 
     // Form - Options
+    // Live option-chain archive (continuous prod recorder)
+    const [optArchive, setOptArchive] = useState(null);
+    const [optArchBusy, setOptArchBusy] = useState(false);
+    const [optArchMsg, setOptArchMsg] = useState(null);
+
     const [optRange, setOptRange] = useState(10);
     const [optLoading, setOptLoading] = useState(false);
     const [optStatus, setOptStatus] = useState(null);
@@ -185,6 +190,38 @@ const DataManager = () => {
         } catch (e) {
             console.error("Failed to fetch archives", e);
         }
+    };
+
+    // Live option-chain archive: status + storage stats, polled while visible.
+    const fetchOptArchive = async () => {
+        try {
+            const res = await fetch(`${API_URL}/data/option-archive/status`);
+            setOptArchive(await res.json());
+        } catch (e) { /* panel shows its own loading state */ }
+    };
+    useEffect(() => {
+        fetchOptArchive();
+        const t = setInterval(fetchOptArchive, 15000);
+        return () => clearInterval(t);
+    }, []);
+
+    const archiveControl = async (action) => {
+        setOptArchBusy(true); setOptArchMsg(null);
+        try {
+            const res = await fetch(`${API_URL}/data/option-archive/control`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action }),
+            });
+            const data = await res.json();
+            if (data.error) setOptArchMsg(`❌ ${data.error}`);
+            else if (action === 'snapshot') {
+                const r = data.result || {};
+                setOptArchMsg(r.skipped ? `⏭️ skipped — ${r.skipped}` : `✅ captured ${r.wrote ?? 0} index snapshot(s) in ${r.ms ?? '?'}ms`);
+            } else setOptArchMsg(`✅ ${action}ed`);
+            if (data.status) setOptArchive(prev => ({ ...(prev || {}), ...data.status }));
+            fetchOptArchive();
+        } catch (e) { setOptArchMsg(`❌ ${e.message}`); }
+        finally { setOptArchBusy(false); setTimeout(() => setOptArchMsg(null), 8000); }
     };
 
     // --- Handlers ---
@@ -340,11 +377,135 @@ const DataManager = () => {
         label: instruments[k].underlying
     }));
 
+    // ── Live option-chain archive (prod recorder) ────────────────────────────
+    const fmtBytes = (b) => {
+        if (b == null || !Number.isFinite(b)) return '—';
+        if (b < 1024) return `${b} B`;
+        if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`;
+        if (b < 1073741824) return `${(b / 1048576).toFixed(1)} MB`;
+        return `${(b / 1073741824).toFixed(2)} GB`;
+    };
+    const fmtNum = (n) => (n == null ? '—' : Number(n).toLocaleString('en-IN'));
+    const ago = (t) => {
+        if (!t) return 'never';
+        const s = Math.round((Date.now() - new Date(t).getTime()) / 1000);
+        if (s < 60) return `${s}s ago`;
+        if (s < 3600) return `${Math.round(s / 60)}m ago`;
+        if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+        return `${Math.round(s / 86400)}d ago`;
+    };
+    const oa = optArchive;
+    const OptionArchivePanel = (
+        <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg mb-8">
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                    <FaDatabase className="text-purple-400" /> Live Option-Chain Archive
+                    {oa && (
+                        <span className={`text-[11px] px-2 py-0.5 rounded border font-semibold ${oa.running ? 'border-green-600 text-green-300 bg-green-900/25' : oa.active ? 'border-yellow-600 text-yellow-300 bg-yellow-900/20' : 'border-gray-600 text-gray-400'}`}>
+                            {oa.running ? '● RECORDING' : oa.active ? 'IDLE' : 'INACTIVE'}
+                        </span>
+                    )}
+                </h2>
+                <div className="flex gap-2">
+                    <button onClick={() => archiveControl('snapshot')} disabled={optArchBusy}
+                        className="text-xs px-3 py-1.5 rounded border border-purple-600 bg-purple-900/25 text-purple-200 hover:bg-purple-900/50 disabled:opacity-40"
+                        title="Capture one snapshot of every index right now (works off-hours, for verification)">
+                        {optArchBusy ? <FaSpinner className="animate-spin inline" /> : '📸'} Snapshot now
+                    </button>
+                    <button onClick={() => archiveControl(oa?.running ? 'stop' : 'start')} disabled={optArchBusy}
+                        className="text-xs px-3 py-1.5 rounded border border-gray-600 bg-gray-900 text-gray-300 hover:text-white disabled:opacity-40">
+                        {oa?.running ? 'Stop' : 'Start'}
+                    </button>
+                </div>
+            </div>
+            <p className="text-xs text-gray-500 mb-4">
+                Records every index's real chain — premiums, OI, bid/ask and <strong className="text-gray-400">implied vol per strike</strong> — continuously in production.
+                This is the dataset that makes backtesting on <em>actual</em> option prices (with skew) possible; spot-based Black-Scholes can't model it.
+            </p>
+
+            {!oa ? <div className="text-sm text-gray-500">Loading archive status…</div> : (<>
+                {!oa.active && (
+                    <div className="text-xs mb-4 p-2 rounded border border-yellow-800/60 bg-yellow-900/15 text-yellow-300">
+                        ⚠ Not recording — {oa.reason}. Environment: <strong>{oa.environment}</strong>.
+                        Recording is production-only so the shared broker rate-limit stays available to live trading.
+                    </div>
+                )}
+                {/* headline stats */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                    <div className="bg-gray-900/70 border border-gray-700 rounded p-3">
+                        <div className="text-[10px] text-gray-500 uppercase">Total storage</div>
+                        <div className="text-lg font-bold text-purple-300">{fmtBytes(oa.storage?.totalBytes)}</div>
+                        <div className="text-[10px] text-gray-500">data {fmtBytes(oa.storage?.storageSizeBytes)} + idx {fmtBytes(oa.storage?.indexSizeBytes)}</div>
+                    </div>
+                    <div className="bg-gray-900/70 border border-gray-700 rounded p-3">
+                        <div className="text-[10px] text-gray-500 uppercase">Snapshots saved</div>
+                        <div className="text-lg font-bold text-blue-300">{fmtNum(oa.storage?.documents)}</div>
+                        <div className="text-[10px] text-gray-500">{fmtNum(oa.snapshotsToday)} today · avg {fmtBytes(oa.storage?.avgDocBytes)}</div>
+                    </div>
+                    <div className="bg-gray-900/70 border border-gray-700 rounded p-3">
+                        <div className="text-[10px] text-gray-500 uppercase">Growth</div>
+                        <div className="text-lg font-bold text-green-300">{oa.growth ? `${fmtBytes(oa.growth.perDayBytes)}/day` : '—'}</div>
+                        <div className="text-[10px] text-gray-500">{oa.growth ? `~${fmtBytes(oa.growth.projected1yBytes)}/yr projected` : 'needs a full day of data'}</div>
+                    </div>
+                    <div className="bg-gray-900/70 border border-gray-700 rounded p-3">
+                        <div className="text-[10px] text-gray-500 uppercase">Retention</div>
+                        <div className="text-lg font-bold text-gray-200">{oa.config?.retentionDays}d</div>
+                        <div className="text-[10px] text-gray-500">auto-expires · cap ≈ {oa.growth ? fmtBytes(oa.growth.atRetentionBytes) : '—'}</div>
+                    </div>
+                </div>
+
+                {/* runtime */}
+                <div className="flex flex-wrap gap-x-5 gap-y-1 text-[11px] font-mono text-gray-400 mb-4 px-3 py-2 rounded bg-gray-900/50 border border-gray-800">
+                    <span>env <span className="text-gray-200">{oa.environment}</span></span>
+                    <span>market <span className={oa.marketOpen?.open ? 'text-green-400' : 'text-gray-500'}>{oa.marketOpen?.open ? 'OPEN' : 'closed'}</span></span>
+                    <span>every <span className="text-gray-200">{oa.config?.intervalSec}s</span></span>
+                    <span>strikes <span className="text-gray-200">ATM±{oa.config?.strikesEachSide}</span></span>
+                    <span>cycles <span className="text-gray-200">{fmtNum(oa.metrics?.cycles)}</span></span>
+                    <span>written <span className="text-green-300">{fmtNum(oa.metrics?.snapshots)}</span></span>
+                    <span>failures <span className={oa.metrics?.failures ? 'text-red-400' : 'text-gray-500'}>{fmtNum(oa.metrics?.failures)}</span></span>
+                    <span>last cycle <span className="text-gray-200">{ago(oa.metrics?.lastCycleAt)}</span>{oa.metrics?.lastCycleMs != null ? ` (${oa.metrics.lastCycleMs}ms)` : ''}</span>
+                    {oa.storage?.compressionRatio && <span>compression <span className="text-gray-200">{oa.storage.compressionRatio}×</span></span>}
+                </div>
+                {oa.metrics?.lastError && (
+                    <div className="text-[11px] text-red-300 mb-3">last error: {oa.metrics.lastError.message} <span className="text-gray-600">({ago(oa.metrics.lastError.at)})</span></div>
+                )}
+
+                {/* per-index coverage */}
+                <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                        <thead><tr className="text-gray-500 text-left border-b border-gray-700">
+                            <th className="py-1">Index</th><th className="text-right">Snapshots</th><th className="text-right">Days</th>
+                            <th className="text-right">Strikes</th><th className="text-right">Last spot</th><th className="text-right">First</th><th className="text-right">Last</th>
+                        </tr></thead>
+                        <tbody>
+                            {(oa.coverage || []).length === 0 ? (
+                                <tr><td colSpan={7} className="py-3 text-center text-gray-600">No snapshots recorded yet — press “Snapshot now” to verify the pipeline, or wait for market hours in production.</td></tr>
+                            ) : oa.coverage.map((c) => (
+                                <tr key={c.symbol} className="border-b border-gray-800/70">
+                                    <td className="py-1 text-gray-200">{String(c.symbol).split(':')[1]?.replace('-INDEX', '') || c.symbol}</td>
+                                    <td className="text-right text-blue-300">{fmtNum(c.snapshots)}</td>
+                                    <td className="text-right">{fmtNum(c.tradingDays)}</td>
+                                    <td className="text-right">{c.avgStrikes ?? '—'}</td>
+                                    <td className="text-right">{c.lastSpot ?? '—'}</td>
+                                    <td className="text-right text-gray-500">{c.firstAt ? new Date(c.firstAt).toLocaleDateString('en-IN') : '—'}</td>
+                                    <td className="text-right text-gray-400">{ago(c.lastAt)}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+                {optArchMsg && <div className="text-xs mt-3 text-gray-300">{optArchMsg}</div>}
+            </>)}
+        </div>
+    );
+
     return (
         <div className="p-6 bg-gray-900 min-h-screen text-white">
             <h1 className="text-2xl font-bold flex items-center gap-2 mb-6">
                 <FaDatabase className="text-blue-400" /> Data Archivist
             </h1>
+
+            {OptionArchivePanel}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
 
