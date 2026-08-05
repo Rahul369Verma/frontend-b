@@ -1078,7 +1078,7 @@ export default function MultiLeg() {
                         </div>
                     </div>
 
-                    {/* Greek attribution — is this template a theta engine or a vol bet?
+                    {/* Greek attribution —- is this template a theta engine or a vol bet?
                         Net P&L cannot answer that, and the two imply opposite entry rules. */}
                     {result?.attribution && (
                         <div className="mt-4">
