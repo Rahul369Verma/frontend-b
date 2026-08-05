@@ -3,6 +3,8 @@ import axios from 'axios';
 import { Play, Activity, ChevronDown, ChevronUp, Bot, Copy, Check, Square, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useGlobalState } from '../context/GlobalContext';
+import CollapsibleCard from '../components/CollapsibleCard';
+import AttributionPanel from '../components/viz/AttributionPanel';
 
 const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
 
@@ -3147,6 +3149,27 @@ export default function Backtest() {
                   ))}
                 </div>
               )}
+
+              {/* P&L attribution + transaction-cost analysis over the simulated
+                  trades. Surfaced HERE, not only on the live risk page, because
+                  a take-profit sitting below its round-trip break-even books
+                  "wins" that are net losses — and that is discoverable before
+                  deployment instead of afterwards with real money. */}
+              {result.attribution && (
+                <CollapsibleCard
+                  title="Cost & greek attribution"
+                  icon={Activity}
+                  storageKey="backtest:attribution"
+                  defaultOpen
+                  bodyClassName="px-4 pb-4 pt-0"
+                  summary={<span className="text-xs text-slate-500">
+                    where the money comes from, and whether costs leave any of it
+                  </span>}
+                >
+                  <AttributionPanel data={result.attribution} context="backtest" />
+                </CollapsibleCard>
+              )}
+
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 <div className="p-4 bg-slate-800 rounded-lg">
                   <p className="text-slate-400 text-sm">Total P&L</p>

@@ -4,6 +4,7 @@ import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceDot, ReferenceArea, Legend,
 } from 'recharts';
 import { Layers, Play, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp } from 'lucide-react';
+import StructureAttributionPanel from '../components/viz/StructureAttributionPanel';
 
 const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
 
@@ -128,6 +129,7 @@ export default function MultiLeg() {
     const [depDetail, setDepDetail] = useState(null);     // _id of the expanded deployment (full order detail)
     const [depChart, setDepChart] = useState(null);       // _id of the deployment showing its live payoff chart
     const [depPayoff, setDepPayoff] = useState(null);     // { id, data } — backend risk-graph (expiry + T+0 curves)
+    const [depRecon, setDepRecon] = useState(null);       // { id, data } — broker fill/PnL reconciliation (LIVE only)
     const [depActivity, setDepActivity] = useState(null); // _id of the deployment showing its P&L activity (equity) chart
     const [activityData, setActivityData] = useState(null); // { id, data } — cumulative realized P&L + live open MTM
     const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
@@ -429,6 +431,22 @@ export default function MultiLeg() {
         const t = setInterval(refreshDeployments, 5000);
         return () => clearInterval(t);
     }, [mode, refreshSaved, refreshDeployments]);
+
+    // Broker reconciliation for the LIVE deployment whose details are open:
+    // our recorded fills ⟷ broker trade-book VWAP ⟷ broker net position, plus
+    // PnL restated gross vs net-of-charges. Read-only, fetched on demand.
+    useEffect(() => {
+        if (!depDetail || mode !== 'deploy') { setDepRecon(null); return; }
+        const d = (mlDeps.deployments || []).find(x => x._id === depDetail);
+        if (!d || d.trade_mode !== 'LIVE' || !['OPEN', 'EXITING'].includes(d.position?.state)) { setDepRecon(null); return; }
+        let alive = true;
+        const pull = () => axios.get(`${API_URL}/multileg/deployments/${depDetail}/reconcile`)
+            .then(r => { if (alive) setDepRecon({ id: depDetail, data: r.data }); })
+            .catch(e => { if (alive) setDepRecon({ id: depDetail, data: { error: e.response?.data?.error || e.message } }); });
+        pull();
+        const t = setInterval(pull, 15000);
+        return () => { alive = false; clearInterval(t); };
+    }, [depDetail, mode, mlDeps.deployments]);
 
     // Live risk-graph (expiry + T+0 curves) for the deployment whose chart is
     // open — fetched on open and refreshed with the deploy poll so it's dynamic.
@@ -1059,6 +1077,14 @@ export default function MultiLeg() {
                             )}
                         </div>
                     </div>
+
+                    {/* Greek attribution — is this template a theta engine or a vol bet?
+                        Net P&L cannot answer that, and the two imply opposite entry rules. */}
+                    {result?.attribution && (
+                        <div className="mt-4">
+                            <StructureAttributionPanel data={result.attribution} />
+                        </div>
+                    )}
 
                     {result?.trades?.length > 0 && (
                         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
@@ -1812,10 +1838,22 @@ export default function MultiLeg() {
                                                 )}
                                             </div>
                                             <div className="grid grid-cols-3 gap-1 text-[11px] mb-2">
-                                                <div title={mtmStale ? `Mark is STALE — last updated ${istTime(pos.lastMtmAt)} IST (market likely closed). This is not a live P&L; option quotes are frozen at their last trade.` : "MTM = mark-to-market, the structure's live PnL if closed now. '/unit' is per single lot-share (before × lot size × lots); the ₹ figure is the actual money on the book."}>
-                                                    <Tile label={mtmStale ? '⚠ MTM (stale)' : 'MTM (₹ · /unit)'}
-                                                        value={d.position?.lastMtm != null ? `₹${fmt(d.position.lastMtmRupees ?? 0)} · ${fmt(d.position.lastMtm, 1)}/u` : '—'}
-                                                        good={!mtmStale && d.position?.lastMtm > 0} bad={!mtmStale && d.position?.lastMtm < 0} />
+                                                {/* NET is the headline number: gross premium difference flatters a
+                                                    multi-leg structure by the whole round-trip cost (~₹230 on a 4-leg
+                                                    index fly), which is often larger than the MTM itself. */}
+                                                <div title={mtmStale
+                                                    ? `Mark is STALE — last updated ${istTime(pos.lastMtmAt)} IST (market likely closed). Not a live P&L; option quotes are frozen at their last trade.`
+                                                    : `NET = what actually lands in the account if you close now: gross premium difference MINUS estimated round-trip charges (brokerage + STT + exchange + GST + stamp).\n\ngross ₹${fmt(pos.lastMtmRupees ?? 0)}  −  charges ₹${fmt(pos.lastMtmChargesEst ?? 0)}  =  net ₹${fmt(pos.lastMtmNetRupees ?? 0)}\n\nYour broker's unrealised PnL usually excludes charges — compare it to GROSS, and your ledger to NET.`}>
+                                                    <Tile label={mtmStale ? '⚠ MTM net (stale)' : 'MTM net (after charges)'}
+                                                        value={pos.lastMtmNetRupees != null
+                                                            ? `₹${fmt(pos.lastMtmNetRupees)}`
+                                                            : (pos.lastMtm != null ? `₹${fmt(pos.lastMtmRupees ?? 0)} gross` : '—')}
+                                                        good={!mtmStale && pos.lastMtmNetRupees > 0} bad={!mtmStale && pos.lastMtmNetRupees < 0} />
+                                                    {pos.lastMtmNetRupees != null && (
+                                                        <div className="text-[9px] text-slate-500 mt-0.5 font-mono">
+                                                            gross ₹{fmt(pos.lastMtmRupees)} · chg ₹{fmt(pos.lastMtmChargesEst)} · {fmt(pos.lastMtm, 1)}/u
+                                                        </div>
+                                                    )}
                                                 </div>
                                                 <Tile label="Today" value={`₹${fmt(d.daily?.pnlToday)}`} good={d.daily?.pnlToday > 0} bad={d.daily?.pnlToday < 0} />
                                                 <Tile label={`Total (${d.totals?.trades || 0})`} value={`₹${fmt(d.totals?.netPnl)}`} good={d.totals?.netPnl > 0} bad={d.totals?.netPnl < 0} />
@@ -1961,7 +1999,7 @@ export default function MultiLeg() {
                                                                             <td className="text-right">{l.qty}</td>
                                                                             <td className="text-right">{fmt(l.entryPrice, 2)}</td>
                                                                             <td className="text-right text-slate-500">{l.exitPrice ? fmt(l.exitPrice, 2) : '—'}</td>
-                                                                            <td className="text-slate-600">{l.filledAt ? istTimeSec(l.filledAt) : '—'}</td>
+                                                                            <td className="text-slate-600 whitespace-nowrap" title={l.filledAt ? `${istDateTimeSec(l.filledAt)} IST` : ''}>{l.filledAt ? istSmartSec(l.filledAt, pos.entryAt) : '—'}</td>
                                                                             <td className="text-slate-500">{l.status}</td>
                                                                             {d.trade_mode === 'LIVE' && <td className="text-slate-600 truncate max-w-[90px]" title={l.orderId}>{l.orderId || '—'}</td>}
                                                                         </tr>
@@ -1972,7 +2010,7 @@ export default function MultiLeg() {
                                                                             <td>{l.strike}</td><td className="text-right">{l.qty}</td>
                                                                             <td className="text-right">{fmt(l.entryPrice, 2)}</td>
                                                                             <td className="text-right">{fmt(l.exitPrice, 2)}</td>
-                                                                            <td className="text-slate-600">{l.filledAt ? istTimeSec(l.filledAt) : '—'}</td>
+                                                                            <td className="text-slate-600 whitespace-nowrap" title={l.filledAt ? `${istDateTimeSec(l.filledAt)} IST` : ''}>{l.filledAt ? istSmartSec(l.filledAt, pos.entryAt) : '—'}</td>
                                                                             <td className="text-slate-500">{l.closeReason || l.status}</td>
                                                                             {d.trade_mode === 'LIVE' && <td className="text-slate-600">closed</td>}
                                                                         </tr>
@@ -1995,6 +2033,51 @@ export default function MultiLeg() {
                                                         </div>
                                                     )}
                                                     {!open && <div className="font-mono text-slate-500">Flat. Last daily PnL ₹{fmt(d.daily?.pnlToday)} · lifetime {d.totals?.trades || 0} trades ₹{fmt(d.totals?.netPnl)}. Config → {exitBits.join(' · ') || 'defaults'}.</div>}
+
+                                                    {/* ── BROKER RECONCILIATION (LIVE only) ───────────────────
+                                                        Does our book match the broker's? Per-leg: our recorded fill
+                                                        vs trade-book VWAP vs net-position avg. Then PnL restated
+                                                        gross (what the broker's unrealised P&L shows) vs net after
+                                                        charges (what the ledger shows). */}
+                                                    {isLive && open && depRecon?.id === d._id && (() => {
+                                                        const R = depRecon.data || {};
+                                                        if (R.error) return <div className="text-[10px] text-red-400 border-t border-slate-800 pt-1.5">Reconcile failed: {R.error}</div>;
+                                                        if (R.notApplicable || R.empty) return null;
+                                                        return (
+                                                            <div className="border-t border-slate-800 pt-2 space-y-1">
+                                                                <div className="flex items-center gap-2 flex-wrap">
+                                                                    <span className="text-[10px] font-semibold text-slate-300">Broker reconciliation</span>
+                                                                    {R.priceReconciled
+                                                                        ? <span className="text-[9px] px-1.5 py-0.5 rounded border border-emerald-700 text-emerald-300">✓ fills match broker</span>
+                                                                        : <span className="text-[9px] px-1.5 py-0.5 rounded border border-amber-600 text-amber-300">⚠ {R.mismatches || 0} leg(s) differ</span>}
+                                                                    {R.mtmAgeMinutes != null && R.mtmAgeMinutes > 5 && <span className="text-[9px] text-slate-500">mark {R.mtmAgeMinutes}m old</span>}
+                                                                </div>
+                                                                <div className="overflow-x-auto">
+                                                                    <table className="w-full text-[9px] font-mono text-slate-300">
+                                                                        <thead><tr className="text-slate-500 text-left"><th>Leg</th><th className="text-right">Ours</th><th className="text-right">Broker VWAP</th><th className="text-right">Pos avg</th><th className="text-right">Drift</th><th>Source</th></tr></thead>
+                                                                        <tbody>
+                                                                            {(R.legs || []).map((l, i) => (
+                                                                                <tr key={i} className="border-t border-slate-800/60">
+                                                                                    <td className={l.action === 'BUY' ? 'text-emerald-300' : 'text-red-300'}>{l.action} {l.strike}</td>
+                                                                                    <td className="text-right">{fmt(l.ourEntryPrice, 2)}</td>
+                                                                                    <td className="text-right">{l.brokerVwap != null ? fmt(l.brokerVwap, 2) : '—'}</td>
+                                                                                    <td className="text-right text-slate-500">{l.brokerAvgPrice != null ? fmt(l.brokerAvgPrice, 2) : '—'}</td>
+                                                                                    <td className={`text-right ${l.material ? 'text-amber-300 font-bold' : 'text-slate-500'}`}>{l.drift != null ? `${l.drift > 0 ? '+' : ''}${fmt(l.drift, 2)}` : '—'}</td>
+                                                                                    <td className={l.priceSource === 'broker_vwap' ? 'text-emerald-500' : 'text-amber-400'}>{l.priceSource === 'broker_vwap' ? 'broker' : l.priceSource}</td>
+                                                                                </tr>
+                                                                            ))}
+                                                                        </tbody>
+                                                                    </table>
+                                                                </div>
+                                                                <div className="font-mono text-slate-400">
+                                                                    PnL at our prices: gross <span className={R.grossRupees >= 0 ? 'text-emerald-300' : 'text-red-300'}>₹{fmt(R.grossRupees)}</span>
+                                                                    {' '}− charges ₹{fmt(R.chargesRupees)} = net <span className={R.netRupees >= 0 ? 'text-emerald-300' : 'text-red-300'}>₹{fmt(R.netRupees)}</span>
+                                                                </div>
+                                                                <div className="text-[9px] text-slate-600">Broker unrealised P&L excludes charges → compare it to <span className="text-slate-400">gross</span>; compare your ledger to <span className="text-slate-400">net</span>.</div>
+                                                                {(R.warnings || []).map((w, i) => <div key={i} className="text-[9px] text-amber-400">⚠ {w}</div>)}
+                                                            </div>
+                                                        );
+                                                    })()}
                                                 </div>
                                             )}
                                             {d.lastError && <div className="text-[10px] text-red-400 mb-2">⚠ {d.lastError}</div>}
@@ -2019,7 +2102,9 @@ export default function MultiLeg() {
                                 <div className="max-h-[300px] overflow-y-auto text-[11px] space-y-1">
                                     {mlDeps.events.map((e, i) => (
                                         <div key={i} className="flex gap-2 border-b border-slate-800/60 pb-1">
-                                            <span className="text-slate-600 whitespace-nowrap" title={istDateTime(e.at) + ' IST'}>{istTimeSec(e.at)}</span>
+                                            <span className="text-slate-600 whitespace-nowrap" title={istDateTimeSec(e.at) + ' IST'}>
+                                                <span className="text-slate-700">{istDate(e.at)}</span> {istTimeSec(e.at)}
+                                            </span>
                                             <span className={`font-semibold whitespace-nowrap ${/FAIL|ERROR|SKIP/.test(e.type) ? 'text-red-300' : /ENTRY|EXIT/.test(e.type) ? 'text-emerald-300' : 'text-sky-300'}`}>{e.type}</span>
                                             <span className="text-slate-400">{e.name ? `[${e.name}] ` : ''}{e.message}</span>
                                         </div>
@@ -2031,11 +2116,12 @@ export default function MultiLeg() {
                             <div className="text-sm font-semibold text-white mb-2">Structure trades ({mlTrades.length})</div>
                             {mlTrades.length === 0 ? <div className="text-xs text-slate-500">No completed structure round-trips yet.</div> : (
                                 <table className="w-full text-[11px] text-slate-300">
-                                    <thead><tr className="text-slate-500 text-left"><th>Exit</th><th>Name</th><th>Mode</th><th>Reason</th><th className="text-right">Gross ₹</th><th className="text-right">Charges</th><th className="text-right">Net ₹</th></tr></thead>
+                                    <thead><tr className="text-slate-500 text-left"><th>Entry</th><th>Exit</th><th>Name</th><th>Mode</th><th>Reason</th><th className="text-right">Gross ₹</th><th className="text-right">Charges</th><th className="text-right">Net ₹</th></tr></thead>
                                     <tbody>
                                         {mlTrades.map((t, i) => (
                                             <tr key={i} className="border-t border-slate-800">
-                                                <td title="IST">{istDateTime(t.exitAt)}</td>
+                                                <td className="whitespace-nowrap" title="Entry (IST)">{istDateTime(t.entryAt)}</td>
+                                                <td className="whitespace-nowrap" title="Exit (IST) — date shown when it differs from entry">{istSmart(t.exitAt, t.entryAt)}<DayGap from={t.entryAt} to={t.exitAt} /></td>
                                                 <td>{t.name}</td>
                                                 <td className={t.trade_mode === 'LIVE' ? 'text-red-300' : 'text-sky-300'}>{t.trade_mode}</td>
                                                 <td className="text-slate-400">{t.exitReason}</td>
@@ -2164,7 +2250,7 @@ export default function MultiLeg() {
                                             <React.Fragment key={tid}>
                                             <tr className="border-t border-slate-800 hover:bg-slate-800/40 cursor-pointer" onClick={() => setResTradeOpen(openT ? null : tid)}>
                                                 <td className="text-slate-500 w-4">{openT ? '▲' : '▾'}</td>
-                                                <td className="whitespace-nowrap" title="IST">{istDateTime(t.entryAt)} → {istTime(t.exitAt)}</td>
+                                                <td className="whitespace-nowrap" title={`Entry ${istDateTimeSec(t.entryAt)} → Exit ${istDateTimeSec(t.exitAt)} IST`}>{istSpan(t.entryAt, t.exitAt)}<DayGap from={t.entryAt} to={t.exitAt} /></td>
                                                 <td className="truncate max-w-[120px]" title={t.template}>{templates.find(x => x.key === t.template)?.name || t.template}</td>
                                                 <td>{shortSym(t.symbol)}</td>
                                                 <td className={t.trade_mode === 'LIVE' ? 'text-red-300' : 'text-sky-300'}>{t.trade_mode}</td>
@@ -2289,6 +2375,12 @@ function ConfirmModal({ open, title, danger, confirmLabel = 'Confirm', requireTe
 
 // Pre-deploy RISK PREVIEW modal — live legs/credit/max-loss/margin/breakevens/
 // expected-move/POP resolved before any order; LIVE requires type-to-confirm.
+// Hoisted OUT of PreviewModal: a component created during render gets a new
+// identity every pass, so React remounts it and any state it holds resets.
+function Row({ k, v, cls }) {
+    return (<div className="flex justify-between"><span className="text-slate-500">{k}</span><span className={`font-mono ${cls || 'text-slate-200'}`}>{v}</span></div>);
+}
+
 function PreviewModal({ preview, deployLots, onConfirm, onCancel }) {
     const [typed, setTyped] = React.useState('');
     React.useEffect(() => { setTyped(''); }, [preview?.strategy?._id]);
@@ -2296,7 +2388,6 @@ function PreviewModal({ preview, deployLots, onConfirm, onCancel }) {
     const { strategy: s, data, loading } = preview;
     const need = s?.name || '';
     const ok = typed.trim() === need;
-    const Row = ({ k, v, cls }) => (<div className="flex justify-between"><span className="text-slate-500">{k}</span><span className={`font-mono ${cls || 'text-slate-200'}`}>{v}</span></div>);
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true">
             <div className="w-full max-w-lg rounded-xl border border-red-700 bg-slate-900 p-4">
@@ -2359,7 +2450,42 @@ function istStr(v, opts = {}) {
 const istDateTime = (v) => istStr(v, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); // "21 Jul 13:42"
 const istTimeSec = (v) => istStr(v, { hour: '2-digit', minute: '2-digit', second: '2-digit' });               // "13:42:27"
 const istTime = (v) => istStr(v, { hour: '2-digit', minute: '2-digit' });                                     // "13:42"
+const istDate = (v) => istStr(v, { day: '2-digit', month: 'short' });                                         // "21 Jul"
+const istDateTimeSec = (v) => istStr(v, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' }); // "21 Jul 13:42:27"
 function fmtClock(iso) { return istDateTime(iso); }
+
+// ── Overnight-aware timestamps ───────────────────────────────────────────────
+// Unlike the intraday engine, multileg structures routinely hold across sessions
+// (see holdDays on multilegTrade), so a bare "15:20" is genuinely ambiguous — you
+// cannot tell a same-day exit from one three days later. These helpers drop the
+// date only when it is unambiguous (same IST calendar day as the reference) and
+// show it whenever it differs.
+function istDayKey(v) {                    // "2026-08-05" in IST, or null
+    if (!v) return null;
+    const d = new Date(v);
+    if (isNaN(d.getTime())) return null;
+    try { return d.toLocaleDateString('en-CA', { timeZone: IST_TZ }); }
+    catch { return null; }
+}
+const sameIstDay = (a, b) => { const k = istDayKey(a); return k != null && k === istDayKey(b); };
+const istSmart = (v, ref) => (ref && sameIstDay(v, ref) ? istTime(v) : istDateTime(v));
+const istSmartSec = (v, ref) => (ref && sameIstDay(v, ref) ? istTimeSec(v) : istDateTimeSec(v));
+// "21 Jul 13:42 → 15:20" same day · "21 Jul 13:42 → 24 Jul 15:20" across days
+const istSpan = (from, to) => `${istDateTime(from)} → ${istSmart(to, from)}`;
+// Whole IST calendar days spanned, for the "+2d" overnight marker. Counts date
+// boundaries crossed, not elapsed hours, so a 15:20→09:20 hold reads as +1d.
+function istDayGap(from, to) {
+    const a = istDayKey(from), b = istDayKey(to);
+    if (!a || !b) return 0;
+    const diff = Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000);
+    return Number.isFinite(diff) && diff > 0 ? diff : 0;
+}
+// Amber "+Nd" chip — the at-a-glance answer to "did this exit on a later day?"
+function DayGap({ from, to }) {
+    const n = istDayGap(from, to);
+    if (!n) return null;
+    return <span className="text-amber-400 ml-1" title={`Held across ${n} calendar day${n > 1 ? 's' : ''} — exit is NOT the same day as entry`}>+{n}d</span>;
+}
 // Expiry-payoff curve of the CURRENTLY-OPEN legs (computed from actual fills,
 // so it's correct even for a partially-closed structure — closed-leg PnL folds
 // in via realizedLegPnl). Returns { points:[{spot,pnl}], breakevens[], from, to }.
