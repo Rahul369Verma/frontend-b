@@ -5,6 +5,7 @@ import {
 } from 'recharts';
 import { Layers, Play, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp } from 'lucide-react';
 import StructureAttributionPanel from '../components/viz/StructureAttributionPanel';
+import { HELP } from '../data/multilegHelp';
 
 const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
 
@@ -432,13 +433,20 @@ export default function MultiLeg() {
         return () => clearInterval(t);
     }, [mode, refreshSaved, refreshDeployments]);
 
+    // Eligibility as a STABLE primitive — depending on mlDeps.deployments (a
+    // fresh array identity every 5s poll) would re-create this effect every
+    // poll, clearing the 15s interval before it ever fires.
+    const reconEligible = useMemo(() => {
+        if (!depDetail || mode !== 'deploy') return false;
+        const d = (mlDeps.deployments || []).find(x => x._id === depDetail);
+        return !!d && d.trade_mode === 'LIVE' && ['OPEN', 'EXITING'].includes(d.position?.state);
+    }, [depDetail, mode, mlDeps.deployments]);
+
     // Broker reconciliation for the LIVE deployment whose details are open:
     // our recorded fills ⟷ broker trade-book VWAP ⟷ broker net position, plus
     // PnL restated gross vs net-of-charges. Read-only, fetched on demand.
     useEffect(() => {
-        if (!depDetail || mode !== 'deploy') { setDepRecon(null); return; }
-        const d = (mlDeps.deployments || []).find(x => x._id === depDetail);
-        if (!d || d.trade_mode !== 'LIVE' || !['OPEN', 'EXITING'].includes(d.position?.state)) { setDepRecon(null); return; }
+        if (!reconEligible) { setDepRecon(null); return; }
         let alive = true;
         const pull = () => axios.get(`${API_URL}/multileg/deployments/${depDetail}/reconcile`)
             .then(r => { if (alive) setDepRecon({ id: depDetail, data: r.data }); })
@@ -446,7 +454,7 @@ export default function MultiLeg() {
         pull();
         const t = setInterval(pull, 15000);
         return () => { alive = false; clearInterval(t); };
-    }, [depDetail, mode, mlDeps.deployments]);
+    }, [depDetail, mode, reconEligible]);   // primitive dep: mlDeps.deployments is a NEW array every 5s poll, which would tear down + refetch on every poll instead of every 15s
 
     // Live risk-graph (expiry + T+0 curves) for the deployment whose chart is
     // open — fetched on open and refreshed with the deploy poll so it's dynamic.
@@ -1062,16 +1070,16 @@ export default function MultiLeg() {
                             {result?.metrics && (
                                 <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
                                     <Tile label="Trades" value={result.metrics.n} />
-                                    <Tile label="Win rate" value={`${result.metrics.winRate}%`} />
+                                    <Tile label="Win rate" help="win-rate" value={`${result.metrics.winRate}%`} />
                                     <Tile label="Net PnL" value={`₹${fmt(result.metrics.netPnl)}`} good={result.metrics.netPnl > 0} bad={result.metrics.netPnl < 0} />
-                                    <Tile label="Profit factor" value={result.metrics.profitFactor === Infinity ? '∞' : result.metrics.profitFactor} />
-                                    <Tile label="Sharpe" value={result.metrics.sharpe != null ? result.metrics.sharpe : '—'} good={result.metrics.sharpe >= 1} bad={result.metrics.sharpe < 0} />
-                                    <Tile label="Sortino" value={result.metrics.sortino != null ? result.metrics.sortino : '—'} good={result.metrics.sortino >= 1.5} bad={result.metrics.sortino < 0} />
+                                    <Tile label="Profit factor" help="profit-factor" value={result.metrics.profitFactor === Infinity ? '∞' : result.metrics.profitFactor} />
+                                    <Tile label="Sharpe" help="sharpe" value={result.metrics.sharpe != null ? result.metrics.sharpe : '—'} good={result.metrics.sharpe >= 1} bad={result.metrics.sharpe < 0} />
+                                    <Tile label="Sortino" help="sortino" value={result.metrics.sortino != null ? result.metrics.sortino : '—'} good={result.metrics.sortino >= 1.5} bad={result.metrics.sortino < 0} />
                                     <Tile label="Avg win" value={`₹${fmt(result.metrics.avgWin)}`} good />
                                     <Tile label="Avg loss" value={`₹${fmt(result.metrics.avgLoss)}`} bad />
-                                    <Tile label="Max DD" value={`₹${fmt(result.metrics.maxDrawdown)}`} bad />
-                                    <Tile label="Avg margin" value={`₹${fmt(result.metrics.avgMargin)}`} />
-                                    <Tile label="ROI on margin" value={result.metrics.roiOnMarginPct != null ? `${result.metrics.roiOnMarginPct}%` : '—'} good={result.metrics.roiOnMarginPct > 0} />
+                                    <Tile label="Max DD" help="max-drawdown" value={`₹${fmt(result.metrics.maxDrawdown)}`} bad />
+                                    <Tile label="Avg margin" help="avg-margin" value={`₹${fmt(result.metrics.avgMargin)}`} />
+                                    <Tile label="ROI on margin" help="roi-on-margin" value={result.metrics.roiOnMarginPct != null ? `${result.metrics.roiOnMarginPct}%` : '—'} good={result.metrics.roiOnMarginPct > 0} />
                                     <Tile label="Exits" value={Object.entries(result.metrics.exitReasons || {}).map(([k, v]) => `${k}:${v}`).join(' ')} small />
                                 </div>
                             )}
@@ -1458,12 +1466,12 @@ export default function MultiLeg() {
                                             </div>
                                         )}
                                         <div className="grid grid-cols-3 gap-1 text-[11px] mb-2">
-                                            <Tile label="Val net" value={`₹${fmt(ch.val?.netPnl)}`} good={ch.val?.netPnl > 0} bad={ch.val?.netPnl < 0} />
+                                            <Tile label="Val net" help="oos-validation" value={`₹${fmt(ch.val?.netPnl)}`} good={ch.val?.netPnl > 0} bad={ch.val?.netPnl < 0} />
                                             <Tile label="Train net" value={`₹${fmt(ch.train?.netPnl)}`} good={ch.train?.netPnl > 0} bad={ch.train?.netPnl < 0} />
                                             <Tile label="Full net" value={`₹${fmt(ch.full?.netPnl)}`} good={ch.full?.netPnl > 0} bad={ch.full?.netPnl < 0} />
-                                            <Tile label="Val PF" value={ch.val?.profitFactor === Infinity ? '∞' : ch.val?.profitFactor ?? '—'} />
+                                            <Tile label="Val PF" help="oos-validation" value={ch.val?.profitFactor === Infinity ? '∞' : ch.val?.profitFactor ?? '—'} />
                                             <Tile label="Win%" value={ch.full?.winRate ?? '—'} />
-                                            <Tile label="ROI/margin" value={ch.full?.roiOnMarginPct != null ? `${ch.full.roiOnMarginPct}%` : '—'} />
+                                            <Tile label="ROI/margin" help="roi-on-margin" value={ch.full?.roiOnMarginPct != null ? `${ch.full.roiOnMarginPct}%` : '—'} />
                                         </div>
                                         {ch.withAi && (
                                             <div className="text-[11px] mb-2 p-2 rounded bg-violet-900/20 border border-violet-700/40 text-violet-200">
@@ -1583,7 +1591,7 @@ export default function MultiLeg() {
                                                                     <Tile label="Win Rate" value={m.winRate != null ? `${m.winRate}%` : '—'} good={m.winRate >= 50} />
                                                                     <Tile label="Profit Factor" value={m.profitFactor == null ? '∞' : fmt(m.profitFactor, 2)} good={m.profitFactor == null || m.profitFactor >= 1.3} bad={m.profitFactor != null && m.profitFactor < 1} />
                                                                     <Tile label="Max Drawdown" value={`₹${fmt(m.maxDrawdown)}`} bad={m.maxDrawdown < 0} />
-                                                                    <Tile label="ROI on margin" value={m.roiOnMarginPct != null ? `${fmt(m.roiOnMarginPct, 1)}%` : '—'} good={m.roiOnMarginPct > 0} />
+                                                                    <Tile label="ROI on margin" help="roi-on-margin" value={m.roiOnMarginPct != null ? `${fmt(m.roiOnMarginPct, 1)}%` : '—'} good={m.roiOnMarginPct > 0} />
                                                                     <Tile label="Avg Win" value={`₹${fmt(m.avgWin)}`} good />
                                                                     <Tile label="Avg Loss" value={`₹${fmt(m.avgLoss)}`} bad />
                                                                     <Tile label="Avg margin (capital)" value={`₹${fmt(m.avgMargin)}`} />
@@ -1759,9 +1767,13 @@ export default function MultiLeg() {
                                     if (P.sl_pct_debit) exitBits.push(`SL ${P.sl_pct_debit}%`);
                                     if (P.leg_sl_x) exitBits.push(`legSL ${P.leg_sl_x}×`);
                                     if (P.dte_exit != null) exitBits.push(`DTE≤${P.dte_exit}`);
+                                    if (P.hold_days > 0) exitBits.push(`hold ≤${P.hold_days}d`);
                                     if (P.tp_x_debit) exitBits.push(`TP ${P.tp_x_debit}× debit`);
                                     if (P.use_signal_exit) exitBits.push('early-exit');
                                     if (P.square_off) exitBits.push(`sq-off ${P.square_off}`);
+                                    // the "if nothing moves" close date — knowable at entry, so show it
+                                    const proj = open ? projectExit(pos, P, expiry) : null;
+                                    const heldSessions = open ? sessionsBetween(new Date(pos.entryAt).getTime(), Date.now()) : null;
                                     // per-unit → ₹ multiplier = lotSize×lots. Prefer the engine's own
                                     // ratio (lastMtmRupees/lastMtm), which is correct even after a broker
                                     // lot-correction/partial-fill; fall back to leg.qty/ratio.
@@ -1797,6 +1809,12 @@ export default function MultiLeg() {
                                     const chartSpot = pg ? pg.spot : curSpot;
                                     const chartNowPnl = pg ? pg.currentMtm : (pos.lastMtmRupees ?? null);
                                     const chartMaxP = pg ? pg.maxProfit : (curve ? Math.max(...curve.points.map(p => p.pnl)) : null);
+                                    // TRUE tail, not the plot window. `pg.maxLoss` is now the
+                                    // analyzer's verdict and is NULL when the tail is undefined —
+                                    // an uncovered short must never render a comforting finite
+                                    // number (a narrow window could even make it positive).
+                                    const chartUnbounded = pg ? !!pg.unbounded : (pos.legs || []).some(l => l.action === 'SELL')
+                                        && !(pos.legs || []).some(b2 => b2.action === 'BUY' && b2.type === (pos.legs || []).find(x => x.action === 'SELL')?.type);
                                     const chartMaxL = pg ? pg.maxLoss : (curve ? Math.min(...curve.points.map(p => p.pnl)) : null);
                                     const tpRupee = (tpUnit != null && unitToRupee) ? Math.round(tpUnit * unitToRupee) : null;
                                     const slRupee = (slUnit != null && unitToRupee) ? Math.round(slUnit * unitToRupee) : null;
@@ -1808,6 +1826,29 @@ export default function MultiLeg() {
                                     // after-hours frozen number isn't read as a live P&L.
                                     const mtmAgeMs = pos.lastMtmAt ? Date.now() - new Date(pos.lastMtmAt).getTime() : null;
                                     const mtmStale = open && mtmAgeMs != null && mtmAgeMs > 3 * 60000;
+                                    // A STALE mark must never headline while a FRESH one exists lower on
+                                    // the same card. Observed live: the tile showed net −₹64 from 15:15
+                                    // yesterday (8.6h old) while the reconciliation panel three rows down
+                                    // showed the true current net +₹161 — two authoritative-looking numbers
+                                    // ₹224 apart. Prefer the freshly-marked value when we have one.
+                                    const freshRecon = (depRecon?.id === d._id && depRecon.data && !depRecon.data.error && depRecon.data.netRupees != null) ? depRecon.data : null;
+                                    // NOT a freshness signal. The payoff endpoint returns
+                                    // `currentMtm: pos.lastMtmRupees` — literally the same stored
+                                    // number the tile already shows; live quotes there drive only the
+                                    // curve SHAPE and spot, and the T+0 level is anchored to
+                                    // pos.lastMtm. Treating its presence as "live" relabelled an
+                                    // 8-hour-stale mark green the moment the chart was opened, and
+                                    // because the endpoint's own `stale` flag uses the SAME 3-minute
+                                    // threshold as mtmStale, the contradiction was guaranteed rather
+                                    // than occasional. Only a genuine recompute (freshRecon) counts.
+                                    const shownNet = freshRecon ? freshRecon.netRupees : pos.lastMtmNetRupees;
+                                    const shownGross = freshRecon ? freshRecon.grossRupees : pos.lastMtmRupees;
+                                    const shownChg = freshRecon ? freshRecon.chargesRupees : pos.lastMtmChargesEst;
+                                    // If a recon ran, the number ON SCREEN is that recompute, so it is
+                                    // fresh whatever the stored mark's age. Otherwise we are showing
+                                    // pos.lastMtmNetRupees and its freshness IS the stored mark's age.
+                                    const shownIsFresh = freshRecon ? true : !mtmStale;
+                                    const ageTxt = mtmAgeMs == null ? '' : mtmAgeMs < 90 * 60000 ? `${Math.round(mtmAgeMs / 60000)}m old` : `${(mtmAgeMs / 3600000).toFixed(1)}h old`;
                                     return (
                                         <div key={d._id} className={`rounded-lg border p-3 relative ${isLive ? 'border-red-600 bg-red-950/20 ring-1 ring-red-800/40' : 'border-slate-700 bg-slate-900/40'} ${busy ? 'opacity-70' : ''}`}>
                                             {isLive && <div className="absolute -top-2 left-3 text-[8px] font-bold px-1.5 py-0.5 rounded bg-red-700 text-white tracking-wider">● REAL MONEY</div>}
@@ -1844,14 +1885,16 @@ export default function MultiLeg() {
                                                 <div title={mtmStale
                                                     ? `Mark is STALE — last updated ${istTime(pos.lastMtmAt)} IST (market likely closed). Not a live P&L; option quotes are frozen at their last trade.`
                                                     : `NET = what actually lands in the account if you close now: gross premium difference MINUS estimated round-trip charges (brokerage + STT + exchange + GST + stamp).\n\ngross ₹${fmt(pos.lastMtmRupees ?? 0)}  −  charges ₹${fmt(pos.lastMtmChargesEst ?? 0)}  =  net ₹${fmt(pos.lastMtmNetRupees ?? 0)}\n\nYour broker's unrealised PnL usually excludes charges — compare it to GROSS, and your ledger to NET.`}>
-                                                    <Tile label={mtmStale ? '⚠ MTM net (stale)' : 'MTM net (after charges)'}
-                                                        value={pos.lastMtmNetRupees != null
-                                                            ? `₹${fmt(pos.lastMtmNetRupees)}`
+                                                    <Tile help="mtm-net" label={shownIsFresh ? 'MTM net (after charges)' : (mtmStale ? `⚠ MTM net · ${ageTxt}` : 'MTM net (after charges)')}
+                                                        value={shownNet != null
+                                                            ? `₹${fmt(shownNet)}`
                                                             : (pos.lastMtm != null ? `₹${fmt(pos.lastMtmRupees ?? 0)} gross` : '—')}
-                                                        good={!mtmStale && pos.lastMtmNetRupees > 0} bad={!mtmStale && pos.lastMtmNetRupees < 0} />
-                                                    {pos.lastMtmNetRupees != null && (
+                                                        good={(shownIsFresh || !mtmStale) && shownNet > 0} bad={(shownIsFresh || !mtmStale) && shownNet < 0} />
+                                                    {shownNet != null && (
                                                         <div className="text-[9px] text-slate-500 mt-0.5 font-mono">
-                                                            gross ₹{fmt(pos.lastMtmRupees)} · chg ₹{fmt(pos.lastMtmChargesEst)} · {fmt(pos.lastMtm, 1)}/u
+                                                            gross ₹{fmt(shownGross)} · chg ₹{fmt(shownChg)}
+                                                            {shownIsFresh ? <span className="text-emerald-600"> · live</span>
+                                                                          : <span className="text-amber-500"> · {ageTxt}</span>}
                                                         </div>
                                                     )}
                                                 </div>
@@ -1906,14 +1949,49 @@ export default function MultiLeg() {
                                                             {chartSpot && <ReferenceLine x={Math.round(chartSpot)} stroke="#38bdf8" strokeWidth={2} label={{ value: 'now', fontSize: 9, fill: '#38bdf8', position: 'top' }} />}
                                                             <Line type="monotone" name="expiry" dataKey="expiry" stroke="#34d399" dot={false} strokeWidth={2} />
                                                             {pg && <Line type="monotone" name="now" dataKey="now" stroke="#38bdf8" dot={false} strokeWidth={1.5} strokeDasharray="5 3" />}
+                                                            {pg?.tPlus && <Line type="monotone" name="next open" dataKey="tPlus" stroke="#c084fc" dot={false} strokeWidth={1.5} strokeDasharray="2 3" />}
                                                             {pg && chartSpot && chartNowPnl != null && <ReferenceDot x={Math.round(chartSpot)} y={pg.currentNowRupees} r={4} fill="#38bdf8" stroke="#0f172a" />}
                                                         </LineChart>
                                                     </ResponsiveContainer>
                                                     <div className="text-[10px] text-slate-500 mt-0.5">
-                                                        {pg ? '● dot = your P&L right now. ' : ''}MTM now <span className={!mtmStale && pos.lastMtm > 0 ? 'text-emerald-300' : !mtmStale && pos.lastMtm < 0 ? 'text-red-300' : ''}>₹{fmt(chartNowPnl ?? 0)}</span> · max profit ₹{fmt(chartMaxP)} · max loss ₹{fmt(chartMaxL)}
+                                                        {pg ? '● dot = your P&L right now. ' : ''}MTM now <span className={!mtmStale && pos.lastMtm > 0 ? 'text-emerald-300' : !mtmStale && pos.lastMtm < 0 ? 'text-red-300' : ''}>₹{fmt(chartNowPnl ?? 0)}</span> · max profit ₹{fmt(chartMaxP)} · max loss {chartUnbounded || chartMaxL == null
+                                                            ? <span className="text-red-400 font-bold">UNBOUNDED</span>
+                                                            : <>₹{fmt(chartMaxL)}</>}
                                                         {!pg && <span className="text-slate-600"> · loading live T+0 curve…</span>}
                                                         {pg && pg.stale && <span className="text-amber-400"> · ⚠ mark {pg.mtmAgeMin}m old (market closed — quotes frozen, not live)</span>}
                                                     </div>
+                                                    {/* ── NEXT-OPEN DECAY PROJECTION ────────────────────────
+                                                        Deliberately shows the vega counterweight on the same
+                                                        line as the theta number. For anything past ~2 DTE one
+                                                        IV point outweighs a full day of decay, so a theta
+                                                        projection printed alone is a misleading number. */}
+                                                    {pg?.tPlus && (
+                                                        <div className="mt-1 rounded border border-purple-800/40 bg-purple-950/20 p-1.5 text-[10px] leading-relaxed">
+                                                            <div className="text-purple-200">
+                                                                <span className="font-semibold">If nothing moves</span>, at the next open
+                                                                (<span className="text-slate-300">{pg.tPlus.dayKey}</span>
+                                                                {pg.tPlus.skipped?.length ? <span className="text-slate-500"> · skips {pg.tPlus.skipped.map(x => x.why).join(' + ')}</span> : null})
+                                                                {' → '}
+                                                                <span className={pg.tPlus.decayRupees >= 0 ? 'text-emerald-300 font-semibold' : 'text-red-300 font-semibold'}>
+                                                                    {pg.tPlus.decayRupees >= 0 ? '+' : '−'}₹{fmt(Math.abs(pg.tPlus.decayRupees))}
+                                                                </span>
+                                                                <span className="text-slate-500"> from time decay alone</span>
+                                                            </div>
+                                                            <div className="text-slate-400">
+                                                                But a <span className="text-amber-300">1-point IV move is worth ₹{fmt(Math.abs(pg.tPlus.bookVegaRupeesPerIvPt))}</span>
+                                                                {Math.abs(pg.tPlus.bookVegaRupeesPerIvPt) > Math.abs(pg.tPlus.decayRupees)
+                                                                    ? <span className="text-amber-300"> — more than this whole projection.</span>
+                                                                    : '.'}
+                                                                {' '}Overnight the index typically moves ±{fmt(pg.tPlus.sigmaOvernight)} pts, which this number ignores.
+                                                            </div>
+                                                            <div className="text-slate-600">
+                                                                Decay counted as {pg.tPlus.businessDaysEquivalent} trading-days-equivalent, not {pg.tPlus.calendarDaysAhead} calendar days
+                                                                (weekends decay slower than the clock). Gross, before charges. Only true at today&apos;s spot — the dotted purple line shows every other spot.
+                                                                {pg.tPlus.multiExpiry && <span className="text-amber-400"> ⚠ multi-expiry structure: legs decay at different rates.</span>}
+                                                                {pg.tPlus.calendarStale && <span className="text-amber-400"> ⚠ holiday calendar out of date — weekends only.</span>}
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             )}
                                             {/* P&L ACTIVITY — cumulative equity curve of every booked trade + live open MTM */}
@@ -1953,7 +2031,11 @@ export default function MultiLeg() {
                                             {/* Entry timing + position detail (the trade's story) */}
                                             {open && pos.entryAt && (
                                                 <div className="text-[10px] font-mono text-slate-400 mb-2 space-y-0.5 border-t border-slate-800 pt-1.5">
-                                                    <div>⏱ <span className="text-slate-300">Entered {fmtClock(pos.entryAt)}</span> · held {fmtDur(pos.entryAt)}{pos.entryDir ? ` · dir ${pos.entryDir}` : ''}</div>
+                                                    <div title={heldSessions != null ? `held = CALENDAR elapsed since entry (what the hold_days cap counts). ${heldSessions} trading session(s) touched — weekends/holidays age the position without a single tick.` : undefined}>
+                                                        ⏱ <span className="text-slate-300">Entered {fmtClock(pos.entryAt)}</span> · held {fmtDur(pos.entryAt)}
+                                                        {heldSessions != null && <span className="text-slate-500"> ({heldSessions} sess)</span>}
+                                                        {pos.entryDir ? ` · dir ${pos.entryDir}` : ''}
+                                                    </div>
                                                     <div>
                                                         spot@in {fmt(pos.entrySpot)}
                                                         {pos.origCredit != null && <> · net {pos.origCredit > 0 ? 'credit' : 'debit'} <span className="text-slate-300">₹{fmt(Math.abs(pos.origCredit), 1)}/u</span></>}
@@ -1984,7 +2066,7 @@ export default function MultiLeg() {
                                                         <div>Created <span className="text-slate-300">{istDateTime(d.createdAt)}</span></div>
                                                         <div>Mode <span className={d.trade_mode === 'LIVE' ? 'text-red-300' : 'text-sky-300'}>{d.trade_mode}</span> · {d.status}</div>
                                                         <div>Entry <span className="text-slate-300">{d.entry_mode === 'signal' ? `${d.signal_strategy}${P.use_signal_exit ? ' +exit' : ''}` : `time ${P.entry_time || '09:20'}`}</span></div>
-                                                        {open && <><div>Entered <span className="text-slate-300">{istDateTime(pos.entryAt)}</span> · held {fmtDur(pos.entryAt)}</div>
+                                                        {open && <><div>Entered <span className="text-slate-300">{istDateTime(pos.entryAt)}</span> · held {fmtDur(pos.entryAt)}{heldSessions != null ? ` (${heldSessions} sess)` : ''}</div>
                                                         <div>Entry spot <span className="text-slate-300">{fmt(pos.entrySpot)}</span>{pos.entryDir ? ` · dir ${pos.entryDir}` : ''}</div></>}
                                                     </div>
                                                     {open && pos.legs?.length > 0 && (
@@ -2021,15 +2103,30 @@ export default function MultiLeg() {
                                                     )}
                                                     {open && (
                                                         <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-0.5 font-mono text-slate-400">
-                                                            <div>Net {isCredit ? 'credit' : 'debit'} <span className="text-slate-300">₹{fmt(Math.abs(pos.origCredit), 1)}/u</span>{unitToRupee ? ` (₹${fmt(Math.abs(pos.origCredit) * unitToRupee)})` : ''}</div>
+                                                            <div>Net {isCredit ? 'credit' : 'debit'}<Help k="net-credit-debit" /> <span className="text-slate-300">₹{fmt(Math.abs(pos.origCredit), 1)}/u</span>{unitToRupee ? ` (₹${fmt(Math.abs(pos.origCredit) * unitToRupee)})` : ''}</div>
                                                             {Number.isFinite(pos.maxProfit) && <div>Max profit ₹{fmt(pos.maxProfit, 1)}/u{unitToRupee ? ` (₹${fmt(pos.maxProfit * unitToRupee)})` : ''}</div>}
-                                                            <div>Margin <span className="text-slate-300">₹{fmt(pos.marginEst || 0)}</span></div>
-                                                            <div className="text-emerald-300">TP level {rup(tpUnit)}{tpUnit != null && unitToRupee ? ` (${fmt(tpUnit,1)}/u)` : ''}</div>
-                                                            <div className="text-red-300">SL level {rup(slUnit)}{slUnit != null && unitToRupee ? ` (${fmt(slUnit,1)}/u)` : ''}</div>
-                                                            {P.leg_sl_x > 0 && <div className="text-amber-300">leg-SL @ entry ×{P.leg_sl_x}</div>}
+                                                            <div>Margin<Help k="margin" /> <span className="text-slate-300">₹{fmt(pos.marginEst || 0)}</span></div>
+                                                            <div className="text-emerald-300">TP level<Help k="tp-level" /> {rup(tpUnit)}{tpUnit != null && unitToRupee ? ` (${fmt(tpUnit,1)}/u)` : ''}</div>
+                                                            <div className="text-red-300">SL level<Help k="sl-level" /> {rup(slUnit)}{slUnit != null && unitToRupee ? ` (${fmt(slUnit,1)}/u)` : ''}</div>
+                                                            {P.leg_sl_x > 0 && <div className="text-amber-300">leg-SL<Help k="leg-sl" /> @ entry ×{P.leg_sl_x}</div>}
                                                             <div>MTM now <span className={pos.lastMtm > 0 ? 'text-emerald-300' : pos.lastMtm < 0 ? 'text-red-300' : 'text-slate-300'}>₹{fmt(pos.lastMtmRupees ?? 0)}</span></div>
-                                                            {expiry && <div>Expiry {expiry} · {dte} DTE</div>}
-                                                            <div className="text-slate-500">Exit by: {P.square_off && `sq-off ${P.square_off}`}{expiry ? ` · expiry-day 15:00${dte === 0 ? ' (today)' : ''}` : ''}{P.dte_exit != null ? ` · DTE≤${P.dte_exit}` : ''}</div>
+                                                            {expiry && <div>Expiry {expiry} · {dte} DTE<Help k="dte" /></div>}
+                                                            {proj ? (
+                                                                <div className={`col-span-2 md:col-span-3 ${proj.overdue ? 'text-amber-300' : 'text-slate-400'}`}
+                                                                    title={`Time-based close if price does nothing. Binding rule: ${proj.rule} (${proj.why}), due ${istDateTime(new Date(proj.at).toISOString())}.`
+                                                                        + (proj.fires !== proj.at ? ` The engine only acts on a tick, so it fires at the next session open: ${istDateTime(new Date(proj.fires).toISOString())}.` : '')
+                                                                        + (proj.others.length ? ` Then: ${proj.others.map(o => `${o.why} ${istDateTime(new Date(o.at).toISOString())}`).join(' · ')}.` : '')
+                                                                        + ' TP/SL/early-exit can close it sooner.'}>
+                                                                    Closes<Help k="projected-close" /> <span className={proj.overdue ? 'text-amber-200 font-semibold' : 'text-slate-300'}>{istDateTime(new Date(proj.fires).toISOString())}</span>
+                                                                    <span className="text-slate-500"> · {proj.why}</span>
+                                                                    {proj.overdue
+                                                                        ? <span className="text-amber-300"> · already tripped — closes at the next tick</span>
+                                                                        : <span className="text-slate-500"> · in {fmtDurTo(proj.fires)}</span>}
+                                                                    {proj.others.length > 0 && <span className="text-slate-600"> · then {proj.others[0].why}</span>}
+                                                                </div>
+                                                            ) : (
+                                                                <div className="text-slate-500">Exit by: no time-based rule — TP/SL only</div>
+                                                            )}
                                                         </div>
                                                     )}
                                                     {!open && <div className="font-mono text-slate-500">Flat. Last daily PnL ₹{fmt(d.daily?.pnlToday)} · lifetime {d.totals?.trades || 0} trades ₹{fmt(d.totals?.netPnl)}. Config → {exitBits.join(' · ') || 'defaults'}.</div>}
@@ -2063,15 +2160,20 @@ export default function MultiLeg() {
                                                                                     <td className="text-right">{l.brokerVwap != null ? fmt(l.brokerVwap, 2) : '—'}</td>
                                                                                     <td className="text-right text-slate-500">{l.brokerAvgPrice != null ? fmt(l.brokerAvgPrice, 2) : '—'}</td>
                                                                                     <td className={`text-right ${l.material ? 'text-amber-300 font-bold' : 'text-slate-500'}`}>{l.drift != null ? `${l.drift > 0 ? '+' : ''}${fmt(l.drift, 2)}` : '—'}</td>
-                                                                                    <td className={l.priceSource === 'broker_vwap' ? 'text-emerald-500' : 'text-amber-400'}>{l.priceSource === 'broker_vwap' ? 'broker' : l.priceSource}</td>
+                                                                                    <td className={l.priceSource === 'broker_vwap' ? 'text-emerald-500' : 'text-amber-400'} title={l.qtyMatch === false ? `qty/direction mismatch: broker net ${l.brokerNetQty}, expected ${l.action === 'BUY' ? '+' : '−'}${l.qty}` : ''}>{l.priceSource === 'broker_vwap' ? 'broker' : l.priceSource}{l.qtyMatch === false ? ' ⚠qty' : ''}</td>
                                                                                 </tr>
                                                                             ))}
                                                                         </tbody>
                                                                     </table>
                                                                 </div>
                                                                 <div className="font-mono text-slate-400">
-                                                                    PnL at our prices: gross <span className={R.grossRupees >= 0 ? 'text-emerald-300' : 'text-red-300'}>₹{fmt(R.grossRupees)}</span>
-                                                                    {' '}− charges ₹{fmt(R.chargesRupees)} = net <span className={R.netRupees >= 0 ? 'text-emerald-300' : 'text-red-300'}>₹{fmt(R.netRupees)}</span>
+                                                                    {R.netRupees == null ? (
+                                                                        <span className="text-amber-400">PnL restatement unavailable — no live marks for every leg (₹0 would read as “flat”, so nothing is shown).</span>
+                                                                    ) : (<>
+                                                                        PnL at our prices: gross <span className={R.grossRupees > 0 ? 'text-emerald-300' : R.grossRupees < 0 ? 'text-red-300' : 'text-slate-300'}>₹{fmt(R.grossRupees)}</span>
+                                                                        {' '}− charges ₹{fmt(R.chargesRupees)} = net <span className={R.netRupees > 0 ? 'text-emerald-300' : R.netRupees < 0 ? 'text-red-300' : 'text-slate-300'}>₹{fmt(R.netRupees)}</span>
+                                                                        {R.realizedLegRupees_informational ? <span className="text-slate-500" title="Realized P&L of legs already closed (e.g. a leg stop-loss). Shown for context — it is ALREADY inside the gross figure, not added to it.">{' '}(incl. ₹{fmt(R.realizedLegRupees_informational)} booked legs)</span> : null}
+                                                                    </>)}
                                                                 </div>
                                                                 <div className="text-[9px] text-slate-600">Broker unrealised P&L excludes charges → compare it to <span className="text-slate-400">gross</span>; compare your ledger to <span className="text-slate-400">net</span>.</div>
                                                                 {(R.warnings || []).map((w, i) => <div key={i} className="text-[9px] text-amber-400">⚠ {w}</div>)}
@@ -2347,7 +2449,12 @@ function Toasts({ toasts, dismiss }) {
 }
 
 // Confirmation modal with optional type-to-confirm + a risk-summary body.
-function ConfirmModal({ open, title, danger, confirmLabel = 'Confirm', requireText, onConfirm, onCancel, children }) {
+// NOTE: `body` must stay in this signature. Every call site passes the warning
+// text as `body` (spread via {...confirmState}); it was missing from the
+// destructure, so the entire risk disclosure — "sends REAL market exit orders",
+// the shorts-bought-back-first ordering note, the PAPER-vs-LIVE sentence —
+// rendered as an EMPTY div on every destructive dialog.
+function ConfirmModal({ open, title, danger, confirmLabel = 'Confirm', requireText, onConfirm, onCancel, body, children }) {
     const [typed, setTyped] = React.useState('');
     React.useEffect(() => { if (open) setTyped(''); }, [open]);
     if (!open) return null;
@@ -2356,7 +2463,7 @@ function ConfirmModal({ open, title, danger, confirmLabel = 'Confirm', requireTe
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" onKeyDown={e => e.key === 'Escape' && onCancel()}>
             <div className={`w-full max-w-md rounded-xl border p-4 ${danger ? 'border-red-700 bg-slate-900' : 'border-slate-600 bg-slate-900'}`}>
                 <div className={`text-sm font-bold mb-2 ${danger ? 'text-red-300' : 'text-white'}`}>{title}</div>
-                <div className="text-xs text-slate-300 space-y-2 mb-3">{children}</div>
+                <div className="text-xs text-slate-300 space-y-2 mb-3">{body || children}</div>
                 {requireText && (
                     <label className="block text-[11px] text-slate-400 mb-3">Type <span className="font-mono text-slate-200">{requireText}</span> to confirm
                         <input autoFocus value={typed} onChange={e => setTyped(e.target.value)}
@@ -2532,10 +2639,141 @@ function fmtDur(iso) {
     return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
-function Tile({ label, value, good, bad, small }) {
+/** Same shape as fmtDur but forward-looking (time UNTIL a future instant). */
+function fmtDurTo(ms) {
+    if (!Number.isFinite(ms)) return '';
+    const d = ms - Date.now();
+    if (d <= 0) return 'now';
+    const m = Math.floor(d / 60000);
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ${m % 60}m`;
+    return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
+// ── HOLD / EXIT-DEADLINE PROJECTION ──────────────────────────────────────────
+// `held` is CALENDAR elapsed time (that is also exactly what the engine's
+// hold_days cap counts: `(now - entryAt)/86400e3 >= hold_days`). Over a weekend
+// those two diverge sharply from what a trader feels — a Wednesday entry reads
+// "2d" on Friday morning and "4d" on Sunday without a single session passing.
+// So we show the session count next to it: a 4-calendar-day-old position that
+// has only traded 2 sessions is NOT the same risk, but it IS equally aged-out
+// as far as hold_days is concerned. Weekends only (no NSE holiday calendar on
+// the client) — holidays make the real session count a touch lower.
+
+const IST_MS = 5.5 * 3600e3;
+/** IST calendar-day index (days since epoch, IST). */
+const istDay = (ms) => Math.floor((ms + IST_MS) / 86400e3);
+/** 0=Sun … 6=Sat, in IST. */
+const istDow = (ms) => new Date(ms + IST_MS).getUTCDay();
+/** IST midnight (as a UTC ms instant) of the day containing `ms`. */
+const istMidnight = (ms) => istDay(ms) * 86400e3 - IST_MS;
+/** Trading sessions (Mon–Fri) touched between two instants, inclusive of both ends. */
+function sessionsBetween(aMs, bMs) {
+    if (!Number.isFinite(aMs) || !Number.isFinite(bMs) || bMs < aMs) return null;
+    let n = 0;
+    for (let d = istDay(aMs); d <= istDay(bMs); d++) {
+        const dow = istDow(d * 86400e3 - IST_MS);
+        if (dow !== 0 && dow !== 6) n++;
+    }
+    return n;
+}
+/**
+ * The engine only acts on a tick, and ticks only happen inside a session. A
+ * deadline that lands on a Saturday/Sunday/after-hours does NOT fire then — it
+ * fires at the first tick of the next session. Snap forward so the projected
+ * close is the instant the engine will actually pull the trigger.
+ */
+const SESSION_OPEN_MIN = 9 * 60 + 16;   // isSessionOpen() lower bound, IST
+const SESSION_CLOSE_MIN = 15 * 60 + 30;
+function nextTickAfter(ms) {
+    if (!Number.isFinite(ms)) return null;
+    let t = ms;
+    for (let guard = 0; guard < 10; guard++) {
+        const dow = istDow(t), mins = Math.floor((t - istMidnight(t)) / 60000);
+        if (dow === 0 || dow === 6) { t = istMidnight(t) + 86400e3; continue; }   // weekend → next day 00:00
+        if (mins < SESSION_OPEN_MIN) return istMidnight(t) + SESSION_OPEN_MIN * 60000;
+        if (mins > SESSION_CLOSE_MIN) { t = istMidnight(t) + 86400e3; continue; } // after close → next day
+        return t;
+    }
+    return t;
+}
+/**
+ * When will this structure close if NOTHING moves? Mirrors the time-based exits
+ * in exits.js `_monitor` (hold_days / dte_exit / expiry-day 15:00 / square_off)
+ * and returns the EARLIEST — the one that actually binds. TP/SL can of course
+ * close it sooner; this is the "no further price action" deadline, which is
+ * knowable the moment we enter and so should never be a mystery on the card.
+ */
+function projectExit(pos, P, expiry) {
+    if (!pos?.entryAt) return null;
+    const entry = new Date(pos.entryAt).getTime();
+    if (!Number.isFinite(entry)) return null;
+    const cands = [];
+    if (P.hold_days > 0) cands.push({ at: entry + Number(P.hold_days) * 86400e3, rule: 'HOLD_CAP', why: `hold cap ${P.hold_days}d` });
+    if (expiry) {
+        const expClose = new Date(expiry + 'T15:30:00+05:30').getTime();   // exits.js minDte reference
+        if (P.dte_exit != null) cands.push({ at: expClose - Number(P.dte_exit) * 86400e3, rule: 'DTE_EXIT', why: `DTE≤${P.dte_exit}` });
+        cands.push({ at: new Date(expiry + 'T15:00:00+05:30').getTime(), rule: 'EXPIRY_DAY', why: 'expiry-day 15:00' });
+    }
+    if (P.square_off) {
+        const [h, m] = String(P.square_off).split(':').map(Number);
+        if (Number.isFinite(h)) cands.push({ at: istMidnight(Date.now()) + (h * 60 + (m || 0)) * 60000, rule: 'SQUARE_OFF', why: `sq-off ${P.square_off}` });
+    }
+    const valid = cands.filter(c => Number.isFinite(c.at));
+    if (!valid.length) return null;
+    const win = valid.reduce((a, b) => (b.at < a.at ? b : a));
+    const fires = nextTickAfter(win.at);
+    // "overdue" = the DEADLINE has passed, even though the engine cannot act
+    // until the next tick. That gap is exactly what a weekend creates, and it
+    // is the state a trader most needs flagged: the close is already decided.
+    return { ...win, at: win.at, fires, overdue: win.at <= Date.now(), others: valid.filter(c => c !== win).sort((a, b) => a.at - b.at) };
+}
+
+/**
+ * Inline "?" help. Click to open a plain-language explanation of the number it
+ * sits next to — what it means, how THIS system computes it, and the way it is
+ * most often misread. Copy lives in ../data/multilegHelp.js.
+ *
+ * Deliberately click-to-open rather than hover-only: hover tooltips are
+ * unreachable on touch and vanish while you are still reading them.
+ */
+function Help({ k, className = '' }) {
+    const [open, setOpen] = React.useState(false);
+    const h = HELP[k];
+    if (!h) return null;
+    return (
+        <span className={`relative inline-block align-middle ${className}`}>
+            <button type="button"
+                onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+                onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); }}
+                aria-label={`What does "${h.label}" mean?`}
+                aria-expanded={open}
+                className="ml-1 w-3.5 h-3.5 rounded-full border border-slate-600 text-slate-500 hover:text-sky-300 hover:border-sky-500 text-[9px] leading-none align-middle">?</button>
+            {open && (
+                <>
+                    <span className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setOpen(false); }} />
+                    <span role="tooltip"
+                        className="absolute z-50 left-0 top-5 w-72 rounded-lg border border-slate-600 bg-slate-900 p-2.5 shadow-xl text-left normal-case font-normal tracking-normal block">
+                        <span className="block text-[11px] font-semibold text-sky-200 mb-1">{h.label}</span>
+                        <span className="block text-[11px] text-slate-200 mb-1.5">{h.short}</span>
+                        <span className="block text-[10px] text-slate-400 leading-relaxed">{h.detail}</span>
+                        {h.gotcha && (
+                            <span className="block text-[10px] text-amber-300/90 leading-relaxed mt-1.5 pt-1.5 border-t border-slate-700">
+                                <span className="font-semibold">Watch out: </span>{h.gotcha}
+                            </span>
+                        )}
+                    </span>
+                </>
+            )}
+        </span>
+    );
+}
+
+function Tile({ label, value, good, bad, small, help }) {
     return (
         <div className="bg-slate-800/60 border border-slate-700 rounded p-2">
-            <div className="text-[10px] text-slate-500">{label}</div>
+            <div className="text-[10px] text-slate-500">{label}{help ? <Help k={help} /> : null}</div>
             <div className={`${small ? 'text-[10px]' : 'text-sm font-semibold'} ${good ? 'text-emerald-300' : bad ? 'text-red-300' : 'text-slate-200'}`}>{value}</div>
         </div>
     );
