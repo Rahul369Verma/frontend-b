@@ -14,6 +14,7 @@
 //   PUT  /api/deployments/:id                → partial update (params, name)
 //   POST /api/deployments/:id/toggle         → on/off (per deployment)
 //   POST /api/deployments/:id/toggle-mode    → PAPER/LIVE (per deployment)
+//   POST /api/deployments/:id/toggle-ai      → AI confirmation on/off (per deployment)
 //   DELETE /api/deployments/:id              → remove (refuses if open position)
 //
 // Handlers passed from Dashboard (reuse its modals — no duplicated machinery):
@@ -256,6 +257,22 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
             await _mutate('Mode', () => axios.post(`${API_URL}/deployments/${d._id}/toggle-mode`, { tradeMode: newMode }));
         } finally { setBusyId(null); }
     };
+    // AI confirmation on/off for THIS deployment. The engine gate is an OR over
+    // enable_ai_confirmation || use_ai_confirmation, so the backend writes both —
+    // see POST /api/deployments/:id/toggle-ai.
+    const toggleAi = async (d) => {
+        const p = d.params || {};
+        const currentlyOn = !!(p.enable_ai_confirmation || p.use_ai_confirmation);
+        const next = !currentlyOn;
+        const confirmMsg = next
+            ? `Enable AI confirmation for "${d.name}"?\n\nEvery signal will be sent to the AI for a CONFIRM/REJECT verdict before entry, and its SL/TP may be applied (subject to the reward:risk floor).`
+            : `Disable AI confirmation for "${d.name}"?\n\nSignals will go straight to execution with NO AI gate, using the strategy's own SL/TP.`;
+        if (!window.confirm(confirmMsg)) return;
+        setBusyId(d._id);
+        try {
+            await _mutate('AI toggle', () => axios.post(`${API_URL}/deployments/${d._id}/toggle-ai`, { enabled: next }));
+        } finally { setBusyId(null); }
+    };
     const remove = async (d) => {
         if (!window.confirm(`Delete deployment "${d.name}"?\nEngine refuses if a position is still open on it.`)) return;
         setBusyId(d._id);
@@ -401,6 +418,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                                         isEditing={editingId === d._id}
                                         onToggleActive={() => toggleActive(d)}
                                         onToggleMode={() => toggleMode(d)}
+                                        onToggleAi={() => toggleAi(d)}
                                         onDelete={() => remove(d)}
                                         onToggleExpand={() => setExpanded(s => ({ ...s, [d._id]: !s[d._id] }))}
                                         onToggleEdit={() => setEditingId(editingId === d._id ? null : d._id)}
@@ -455,7 +473,7 @@ function PnlBadge({ label, stats }) {
 function DeploymentCard({
     d, strategies, sessionHealth, globalConfig,
     isBusy, isExpanded, isEditing,
-    onToggleActive, onToggleMode, onDelete, onToggleExpand, onToggleEdit, onEdited,
+    onToggleActive, onToggleMode, onToggleAi, onDelete, onToggleExpand, onToggleEdit, onEdited,
     onTest, onSim, onManualTrade, onResults, pnlWindows,
 }) {
     const params = d.params || {};
@@ -501,6 +519,29 @@ function DeploymentCard({
                         <span className={`text-xs ml-2 font-bold ${isLive ? 'text-red-400' : 'text-slate-400'}`}>LIVE</span>
                     </div>
 
+                    {/* AI confirmation toggle (switch — same affordance as PAPER/LIVE).
+                        OFF means signals go straight to execution on the strategy's
+                        own SL/TP, with no CONFIRM/REJECT gate and no AI bracket. */}
+                    <div className="flex items-center bg-slate-800/80 px-2 py-1 rounded border border-slate-600/50">
+                        <span className="text-xs mr-2" aria-hidden="true">🤖</span>
+                        <label
+                            className="relative inline-flex items-center cursor-pointer"
+                            title={aiEnabled
+                                ? 'AI confirmation ON — every signal is gated by a CONFIRM/REJECT verdict. Click to disable for THIS deployment only.'
+                                : 'AI confirmation OFF — signals execute directly on the strategy SL/TP. Click to enable for THIS deployment only.'}
+                        >
+                            <input
+                                type="checkbox"
+                                className="sr-only peer"
+                                checked={aiEnabled}
+                                disabled={isBusy}
+                                onChange={onToggleAi}
+                            />
+                            <div className="w-9 h-5 bg-slate-600 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-violet-500"></div>
+                        </label>
+                        <span className={`text-xs ml-2 font-bold ${aiEnabled ? 'text-violet-300' : 'text-slate-500'}`}>AI</span>
+                    </div>
+
                     {/* Identity — name is clickable → opens analytics for this deployment */}
                     <button
                         onClick={onResults}
@@ -513,10 +554,15 @@ function DeploymentCard({
                         {strategyLabel(strategies, d.strategyName)}
                     </span>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300 font-mono">{resolution}m</span>
-                    {aiEnabled && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-violet-500/20 border border-violet-500/40 text-violet-300 flex items-center gap-1">
-                            🤖 AI
-                            {params.ai_follow_sl_tp && <span className="text-violet-400">SL/TP</span>}
+                    {/* The 🤖 toggle above already shows whether AI is on; this badge
+                        now carries only the extra detail it can't — that the AI's
+                        SL/TP is being adopted (subject to the reward:risk floor). */}
+                    {aiEnabled && params.ai_follow_sl_tp && (
+                        <span
+                            className="text-xs px-2 py-0.5 rounded-full bg-violet-500/20 border border-violet-500/40 text-violet-300"
+                            title={`AI SL/TP is adopted when it clears the reward:risk floor (ai_min_rr = ${params.ai_min_rr ?? 1.5}); otherwise the strategy's own levels are used.`}
+                        >
+                            SL/TP
                         </span>
                     )}
                     <span
