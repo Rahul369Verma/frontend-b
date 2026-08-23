@@ -3,7 +3,7 @@ import axios from 'axios';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceDot, ReferenceArea, Legend,
 } from 'recharts';
-import { Layers, Play, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp } from 'lucide-react';
+import { Layers, Play, Pause, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp } from 'lucide-react';
 import StructureAttributionPanel from '../components/viz/StructureAttributionPanel';
 import { HELP } from '../data/multilegHelp';
 
@@ -359,7 +359,7 @@ export default function MultiLeg() {
         setAutoJob({ jobId: j.jobId });
     };
 
-    // Resume an interrupted marathon from its last stage checkpoint — the
+    // Resume an interrupted/paused marathon from its last stage checkpoint — the
     // server re-fetches candles, rebuilds the pool, and skips finished stages.
     const resumeJob = async (j) => {
         try {
@@ -373,16 +373,66 @@ export default function MultiLeg() {
         }
     };
 
+    // Pause = stop now, keep the place. The worker pool is killed so the cores
+    // come back immediately, and the run settles as 'paused' — resumable from
+    // its last checkpoint. A pause is ALSO the operator's veto on automatic
+    // resume: the server only restarts runs that died on their own.
+    const pauseJob = async (j) => {
+        try {
+            const r = await axios.post(`${API_URL}/multileg/optimize/${j.jobId}/pause`);
+            const d = r.data || {};
+            pushToast(d.note || `Paused — Resume picks up from stage ${d.resumeFromStage}`,
+                d.resumable ? 'success' : 'warn', d.resumable ? 5000 : 9000);
+            if (autoJob?.jobId === j.jobId) setRunning(false);
+            refreshAutoJobs();
+        } catch (e) {
+            pushToast(`Pause failed: ${e.response?.data?.error || e.message}`, 'error', 8000);
+        }
+    };
+
+    // Forget a run (a running one is killed first). Nothing else references
+    // these docs — the champions live in the run's own result blob, so deleting
+    // is only ever a housekeeping loss.
+    const deleteJob = (j) => setConfirmState({
+        title: j.status === 'running' ? 'Kill and delete this running job?' : 'Delete this run?',
+        danger: true, confirmLabel: j.status === 'running' ? 'Kill + delete' : 'Delete',
+        body: <span>{j.status === 'running'
+            ? 'The run is cancelled (its worker threads die immediately) and the record is removed — progress and checkpoints are lost.'
+            : 'Removes the record, its checkpoint and its results. Not recoverable — Resume will no longer be possible.'}</span>,
+        onConfirm: () => withPending(`deljob:${j.jobId}`, async () => {
+            await axios.delete(`${API_URL}/multileg/optimize/${j.jobId}`);
+            if (autoJob?.jobId === j.jobId) { setAutoJob(null); setAutoState(null); setRunning(false); }
+            refreshAutoJobs();
+        }, 'Run deleted'),
+    });
+
+    const clearFinishedJobs = () => setConfirmState({
+        title: 'Clear all finished runs?', danger: true, confirmLabel: 'Clear finished',
+        body: <span>Deletes every run that is not currently running — including paused and interrupted ones, so their checkpoints can no longer be resumed.</span>,
+        onConfirm: () => withPending('deljobs', async () => {
+            const r = await axios.delete(`${API_URL}/multileg/optimize`);
+            const gone = r.data?.removed ?? 0;
+            if (autoJob?.jobId && autoState && autoState.status !== 'running') { setAutoJob(null); setAutoState(null); setRunning(false); }
+            refreshAutoJobs();
+            pushToast(`Cleared ${gone} run${gone === 1 ? '' : 's'}`, 'success');
+        }),
+    });
+
     // poll the running job
     useEffect(() => {
         if (!autoJob?.jobId) return;
+        let idleTicks = 0; // polls spent stopped — bounds how long we wait for an auto-resume
         const t = setInterval(() => {
             axios.get(`${API_URL}/multileg/optimize/${autoJob.jobId}`).then(r => {
+                const st = r.data.status;
                 setAutoState(r.data);
-                if (['done', 'error', 'cancelled'].includes(r.data.status)) {
-                    setRunning(false);
-                    clearInterval(t);
-                }
+                setRunning(st === 'running');
+                // paused/cancelled/done are final decisions. 'error' and
+                // 'interrupted' can come BACK by themselves (the server
+                // auto-resumes a run that died), so keep watching a while.
+                if (['done', 'cancelled', 'paused'].includes(st)) clearInterval(t);
+                else if (st === 'running') idleTicks = 0;
+                else if (++idleTicks > 72) clearInterval(t); // ~3 min
             }).catch(() => { /* transient poll failure — keep polling */ });
         }, 2500);
         return () => clearInterval(t);
@@ -837,6 +887,14 @@ export default function MultiLeg() {
                     <input type="number" value={params.max_loss_per_day ?? ''} placeholder="off" onChange={e => setParams(p => ({ ...p, max_loss_per_day: e.target.value === '' ? undefined : Number(e.target.value) }))}
                         className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
                 </label>
+                <label className="text-slate-500" title="Refuse a structure whose SHORT-vol exposure exceeds this. ₹ lost per 1 IV point. Blank = off. Now enforced in BOTH the backtest and the live engine, so a backtest can no longer approve a structure production would reject.">max_entry_vega ₹/IVpt
+                    <input type="number" value={params.max_entry_vega_rupees ?? ''} placeholder="off" onChange={e => setParams(p => ({ ...p, max_entry_vega_rupees: e.target.value === '' ? undefined : Number(e.target.value) }))}
+                        className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                </label>
+                <label className="text-slate-500" title="Refuse a structure BORN directional: per-unit |delta| above this is rejected at entry. A neutral fly/condor sits near 0.01-0.02 when freshly struck. Blank = off. Mirrored in the live engine.">max_entry_|Δ|/unit
+                    <input type="number" step="0.01" value={params.max_entry_abs_delta_units ?? ''} placeholder="off" onChange={e => setParams(p => ({ ...p, max_entry_abs_delta_units: e.target.value === '' ? undefined : Number(e.target.value) }))}
+                        className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                </label>
                 <label className="text-slate-500" title="LIVE entries are limit orders capped this % from the quote — a gapping wing can't fill arbitrarily far away">entry_slippage_cap_pct
                     <input type="number" step="0.1" value={params.entry_slippage_cap_pct ?? 1.5} onChange={e => setParams(p => ({ ...p, entry_slippage_cap_pct: Number(e.target.value) }))}
                         className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
@@ -1080,6 +1138,14 @@ export default function MultiLeg() {
                                     <Tile label="Max DD" help="max-drawdown" value={`₹${fmt(result.metrics.maxDrawdown)}`} bad />
                                     <Tile label="Avg margin" help="avg-margin" value={`₹${fmt(result.metrics.avgMargin)}`} />
                                     <Tile label="ROI on margin" help="roi-on-margin" value={result.metrics.roiOnMarginPct != null ? `${result.metrics.roiOnMarginPct}%` : '—'} good={result.metrics.roiOnMarginPct > 0} />
+                                    {(() => {
+                                        const ds = (result.trades || []).map(t => t.maxAbsDeltaUnits).filter(v => Number.isFinite(v));
+                                        if (!ds.length) return null;
+                                        const worst = Math.max(...ds);
+                                        const avg = ds.reduce((a, b) => a + b, 0) / ds.length;
+                                        return <Tile label="Worst Δ/unit" value={`${fmt(worst, 2)} (avg ${fmt(avg, 2)})`} bad={worst >= 0.5}
+                                            help="delta" />;
+                                    })()}
                                     <Tile label="Exits" value={Object.entries(result.metrics.exitReasons || {}).map(([k, v]) => `${k}:${v}`).join(' ')} small />
                                 </div>
                             )}
@@ -1113,7 +1179,7 @@ export default function MultiLeg() {
                                 <div className="text-sm font-semibold text-white mb-2">Trades ({result.trades.length})</div>
                                 <div className="max-h-[340px] overflow-y-auto">
                                     <table className="w-full text-[11px] text-slate-300">
-                                        <thead className="sticky top-0 bg-surface"><tr className="text-slate-500 text-left"><th>Entry</th><th>Exit</th><th>Hold</th><th>Reason</th><th className="text-right">Spot in→out</th><th className="text-right">Credit</th><th className="text-right">Margin</th><th className="text-right">Net ₹</th></tr></thead>
+                                        <thead className="sticky top-0 bg-surface"><tr className="text-slate-500 text-left"><th>Entry</th><th>Exit</th><th>Hold</th><th>Reason</th><th className="text-right">Spot in→out</th><th className="text-right">Credit</th><th className="text-right" title="Position size actually taken. 'risk' basis = sized to risk_per_trade, so it varies per trade.">Lots</th><th className="text-right" title="Worst per-unit delta the structure carried at ANY point in its life. A 'neutral' structure that reaches 0.5+ was not neutral. Exit-time delta hides this because exits cluster at DTE 0 where the reading is dominated by terminal gamma.">Worst Δ/u</th><th className="text-right">Margin</th><th className="text-right">Net ₹</th></tr></thead>
                                         <tbody>
                                             {result.trades.slice().reverse().map((t, i) => (
                                                 <tr key={i} className="border-t border-slate-800">
@@ -1123,6 +1189,10 @@ export default function MultiLeg() {
                                                     <td className="text-slate-400">{t.reason}</td>
                                                     <td className="text-right text-slate-400">{fmt(t.spotEntry)}→{fmt(t.spotExit)}</td>
                                                     <td className="text-right">₹{fmt(t.credit, 1)}</td>
+                                                    <td className="text-right text-slate-400">{t.lots ?? '—'}{t.sizeBasis === 'risk' ? <span className="text-sky-400" title={`risk-sized (worst case ₹${fmt(t.perLotRisk)}/lot)`}>*</span> : null}</td>
+                                                    <td className={`text-right ${t.maxAbsDeltaUnits >= 0.5 ? 'text-amber-300 font-semibold' : 'text-slate-500'}`}
+                                                        title={t.greeks ? `at exit: Δ₹${fmt(t.greeks.delta,1)}/pt · V₹${fmt(t.greeks.vega,1)}/IVpt · Θ₹${fmt(t.greeks.theta,1)}/day` : ''}>
+                                                        {t.maxAbsDeltaUnits != null ? fmt(t.maxAbsDeltaUnits, 2) : '—'}</td>
                                                     <td className="text-right text-slate-500">₹{fmt(t.margin)}</td>
                                                     <td className={`text-right font-semibold ${t.netPnl > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(t.netPnl)}</td>
                                                 </tr>
@@ -1378,8 +1448,15 @@ export default function MultiLeg() {
                                     {running ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
                                     {running ? 'Running…' : 'Start Auto-Optimize ⚡'}
                                 </button>
-                                {running && (
-                                    <button onClick={cancelAuto} className="w-full mt-2 py-1.5 bg-red-900/20 border border-red-700/50 text-red-300 rounded text-xs">Cancel run</button>
+                                {running && autoJob?.jobId && (
+                                    <div className="grid grid-cols-2 gap-2 mt-2">
+                                        <button onClick={() => pauseJob({ jobId: autoJob.jobId })}
+                                            title="Stop now but keep the checkpoint — Resume continues from where it stopped"
+                                            className="py-1.5 bg-slate-800 border border-slate-600 text-slate-200 rounded text-xs flex items-center justify-center gap-1">
+                                            <Pause className="w-3 h-3" /> Pause
+                                        </button>
+                                        <button onClick={cancelAuto} className="py-1.5 bg-red-900/20 border border-red-700/50 text-red-300 rounded text-xs">Cancel run</button>
+                                    </div>
                                 )}
                                 {autoState && (
                                     <div className="mt-3 text-xs">
@@ -1397,7 +1474,22 @@ export default function MultiLeg() {
                                                 ))}%`,
                                             }} />
                                         </div>
-                                        {['error', 'interrupted'].includes(autoState.status) && <div className="mt-2 text-red-300">{autoState.error}</div>}
+                                        {['error', 'interrupted'].includes(autoState.status) && (
+                                            <div className="mt-2 text-red-300">
+                                                {autoState.error}
+                                                {autoState.checkpoint?.stage
+                                                    ? <span className="block text-sky-300/80">Resumable from stage {autoState.checkpoint.stage} — the server retries this by itself; use Resume to do it now.</span>
+                                                    : <span className="block text-slate-500">No checkpoint yet — this run can only be started fresh.</span>}
+                                            </div>
+                                        )}
+                                        {autoState.status === 'paused' && (
+                                            <div className="mt-2 text-slate-300">
+                                                Paused by you — it will NOT auto-resume.
+                                                {autoState.checkpoint?.stage
+                                                    ? <span className="text-emerald-300/90"> Resume continues from stage {autoState.checkpoint.stage}.</span>
+                                                    : <span className="text-slate-500"> No checkpoint was written — only a fresh start is possible.</span>}
+                                            </div>
+                                        )}
                                         {autoState.status === 'done' && autoState.result?.stages && (
                                             <div className="mt-2 text-slate-500">
                                                 {autoState.result.stages.map(s => s.stage === 4
@@ -1414,19 +1506,37 @@ export default function MultiLeg() {
 
                     {autoJobs.length > 0 && (
                         <div className="bg-surface rounded-xl border border-slate-700 p-3 mb-4">
-                            <div className="text-xs font-semibold text-white mb-2">Recent runs (persisted — re-attach after a refresh)</div>
+                            <div className="flex items-center justify-between mb-2">
+                                <div className="text-xs font-semibold text-white">Recent runs (persisted — re-attach after a refresh)</div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[10px] text-slate-600 hidden sm:inline" title="A run that dies on its own (server restart or an error) is restarted from its last checkpoint. A run YOU pause is never restarted automatically.">
+                                        crash → auto-resume · paused → stays paused
+                                    </span>
+                                    {autoJobs.some(j => j.status !== 'running') && (
+                                        <button onClick={clearFinishedJobs} disabled={!!pending.deljobs}
+                                            className="px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-[10px] text-slate-400 hover:text-red-300 disabled:opacity-40">
+                                            Clear finished
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
                             <div className="space-y-1 text-[11px]">
-                                {autoJobs.map(j => (
+                                {autoJobs.map(j => {
+                                    const cp = j.checkpoint || {};
+                                    const canResume = !!cp.stage && j.status !== 'running' && j.status !== 'done';
+                                    return (
                                     <div key={j.jobId} className="flex items-center gap-2 border-b border-slate-800/60 pb-1">
-                                        <span className={`px-1.5 py-0.5 rounded border text-[10px] ${j.status === 'running' ? 'border-amber-600 text-amber-300' : j.status === 'done' ? 'border-emerald-700 text-emerald-300' : 'border-red-800 text-red-400'}`}>{j.status}</span>
+                                        <span className={`px-1.5 py-0.5 rounded border text-[10px] ${j.status === 'running' ? 'border-amber-600 text-amber-300' : j.status === 'done' ? 'border-emerald-700 text-emerald-300' : j.status === 'paused' ? 'border-slate-500 text-slate-300' : 'border-red-800 text-red-400'}`}>{j.status}</span>
                                         <span className="text-slate-500" title="IST">{istDateTime(j.startedAt)}</span>
                                         <span className="text-slate-400 flex-1 truncate">
                                             {(j.request?.symbols || []).map(shortSym).join('+')} · {j.request?.strategies ?? '?'} strategies · {j.request?.entry_style || 'both'}
                                             {j.status === 'running' && j.progress?.note ? ` — ${j.progress.note}` : ''}
-                                            {j.status === 'interrupted' && j.checkpoint?.stage ? (
-                                                j.checkpoint.phase === 'partial'
-                                                    ? ` — checkpoint mid-stage ${j.checkpoint.stage}${j.checkpoint.cursor ? ` (${j.checkpoint.cursor} done)` : ''}`
-                                                    : ` — checkpoint after stage ${j.checkpoint.stage}`) : ''}
+                                            {j.status !== 'running' && j.status !== 'done' && cp.stage ? (
+                                                cp.phase === 'partial'
+                                                    ? ` — checkpoint mid-stage ${cp.stage}${cp.cursor ? ` (${cp.cursor} done)` : ''}`
+                                                    : ` — checkpoint after stage ${cp.stage}`) : ''}
+                                            {j.status === 'paused' && <span className="text-slate-500"> · paused by you (no auto-resume)</span>}
+                                            {j.autoResumeCount > 0 && <span className="text-sky-400/80" title="Times the server restarted this run by itself"> · auto-resumed ×{j.autoResumeCount}</span>}
                                         </span>
                                         {autoJob?.jobId !== j.jobId && ['running', 'done'].includes(j.status) && (
                                             <button onClick={() => attachJob(j)}
@@ -1434,14 +1544,26 @@ export default function MultiLeg() {
                                                 {j.status === 'running' ? 'Attach' : 'View results'}
                                             </button>
                                         )}
-                                        {j.status === 'interrupted' && j.checkpoint?.stage && (
-                                            <button onClick={() => resumeJob(j)} title="Continue from the last checkpoint"
-                                                className="px-2 py-0.5 rounded border border-emerald-700/50 bg-emerald-900/20 text-emerald-300 hover:bg-emerald-900/40">
-                                                {j.checkpoint.phase === 'partial' ? `Resume ↻ S${j.checkpoint.stage}` : `Resume ▸ S${j.checkpoint.stage + 1}`}
+                                        {j.status === 'running' && (
+                                            <button onClick={() => pauseJob(j)} title="Stop now, keep the checkpoint — and don't auto-resume it"
+                                                className="px-2 py-0.5 rounded border border-slate-600 bg-slate-800 text-slate-300 hover:text-white flex items-center gap-1">
+                                                <Pause className="w-3 h-3" /> Pause
                                             </button>
                                         )}
+                                        {canResume && (
+                                            <button onClick={() => resumeJob(j)} title="Continue from the last checkpoint"
+                                                className="px-2 py-0.5 rounded border border-emerald-700/50 bg-emerald-900/20 text-emerald-300 hover:bg-emerald-900/40">
+                                                {cp.phase === 'partial' ? `Resume ↻ S${cp.stage}` : `Resume ▸ S${cp.stage + 1}`}
+                                            </button>
+                                        )}
+                                        <button onClick={() => deleteJob(j)} disabled={!!pending[`deljob:${j.jobId}`]}
+                                            title={j.status === 'running' ? 'Kill this run and delete the record' : 'Delete this record (checkpoint + results)'}
+                                            className="px-1.5 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-500 hover:text-red-300 hover:border-red-800 disabled:opacity-40">
+                                            <Trash2 className="w-3 h-3" />
+                                        </button>
                                     </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
                     )}
@@ -1885,11 +2007,27 @@ export default function MultiLeg() {
                                                 <div title={mtmStale
                                                     ? `Mark is STALE — last updated ${istTime(pos.lastMtmAt)} IST (market likely closed). Not a live P&L; option quotes are frozen at their last trade.`
                                                     : `NET = what actually lands in the account if you close now: gross premium difference MINUS estimated round-trip charges (brokerage + STT + exchange + GST + stamp).\n\ngross ₹${fmt(pos.lastMtmRupees ?? 0)}  −  charges ₹${fmt(pos.lastMtmChargesEst ?? 0)}  =  net ₹${fmt(pos.lastMtmNetRupees ?? 0)}\n\nYour broker's unrealised PnL usually excludes charges — compare it to GROSS, and your ledger to NET.`}>
-                                                    <Tile help="mtm-net" label={shownIsFresh ? 'MTM net (after charges)' : (mtmStale ? `⚠ MTM net · ${ageTxt}` : 'MTM net (after charges)')}
+                                                    {/* A STALE tile is not just old, it can be WRONG. The engine's
+                                                        final mark of the session is taken a second after the bell
+                                                        and can still carry pre-settlement prices (measured on prod:
+                                                        stamped 15:30:58, priced ~15:25, off by ₹179). Say so, and
+                                                        point at the one action that re-prices from the broker. */}
+                                                    <Tile help="mtm-net"
+                                                        title={shownIsFresh
+                                                            ? 'Re-priced from the broker just now.'
+                                                            : (mtmStale
+                                                                ? `Last marked ${ageTxt}. The market has been shut since, so this is the engine's final in-session mark — which can pre-date the closing prints. Open Details to re-price from the broker; that number is authoritative.`
+                                                                : 'Marked by the engine within the last few minutes.')}
+                                                        label={shownIsFresh ? 'MTM net (after charges)' : (mtmStale ? `⚠ MTM net · ${ageTxt}` : 'MTM net (after charges)')}
                                                         value={shownNet != null
                                                             ? `₹${fmt(shownNet)}`
                                                             : (pos.lastMtm != null ? `₹${fmt(pos.lastMtmRupees ?? 0)} gross` : '—')}
                                                         good={(shownIsFresh || !mtmStale) && shownNet > 0} bad={(shownIsFresh || !mtmStale) && shownNet < 0} />
+                                                    {!shownIsFresh && mtmStale && (
+                                                        <div className="text-[9px] text-amber-400/80 mt-0.5">
+                                                            may pre-date the close — open Details to re-price
+                                                        </div>
+                                                    )}
                                                     {shownNet != null && (
                                                         <div className="text-[9px] text-slate-500 mt-0.5 font-mono">
                                                             gross ₹{fmt(shownGross)} · chg ₹{fmt(shownChg)}
@@ -2770,9 +2908,9 @@ function Help({ k, className = '' }) {
     );
 }
 
-function Tile({ label, value, good, bad, small, help }) {
+function Tile({ label, value, good, bad, small, help, title }) {
     return (
-        <div className="bg-slate-800/60 border border-slate-700 rounded p-2">
+        <div className="bg-slate-800/60 border border-slate-700 rounded p-2" title={title}>
             <div className="text-[10px] text-slate-500">{label}{help ? <Help k={help} /> : null}</div>
             <div className={`${small ? 'text-[10px]' : 'text-sm font-semibold'} ${good ? 'text-emerald-300' : bad ? 'text-red-300' : 'text-slate-200'}`}>{value}</div>
         </div>
