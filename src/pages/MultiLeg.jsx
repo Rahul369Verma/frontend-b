@@ -90,6 +90,11 @@ export default function MultiLeg() {
     const [spot, setSpot] = useState(FALLBACK_SYMBOLS[0].spot);
     const [iv, setIv] = useState(0.14);
     const [params, setParams] = useState({});
+    // WHY the engine is halted, and whether it will clear itself. The banner used
+    // to say only THAT it was halted — which is how a daily-loss halt from 19-Aug
+    // sat unnoticed for seven days with no lever to lift it.
+    const [haltInfo, setHaltInfo] = useState(null);
+    const [resuming, setResuming] = useState(false);
     const [preview, setPreview] = useState(null);
     const [from, setFrom] = useState(isoDaysAgo(45));
     const [to, setTo] = useState(isoDaysAgo(0));
@@ -1037,6 +1042,26 @@ export default function MultiLeg() {
         </div>
     );
 
+    useEffect(() => {
+        if (!mlStatus?.halted) { setHaltInfo(null); return; }
+        let alive = true;
+        axios.get(`${API_URL}/engine/halt-status`)
+            .then(r => { if (alive) setHaltInfo(r.data || null); })
+            .catch(() => { if (alive) setHaltInfo(null); });
+        return () => { alive = false; };
+    }, [mlStatus?.halted]);
+
+    const resumeEngine = async () => {
+        setResuming(true);
+        try {
+            const r = await axios.post(`${API_URL}/engine/resume`, { actor: 'multileg-ui' });
+            pushToast(r.data?.message || 'Engine resumed', 'success', 6000);
+            setHaltInfo(null);
+        } catch (e) {
+            pushToast(`Resume failed: ${e.response?.data?.error || e.message}`, 'error', 8000);
+        } finally { setResuming(false); }
+    };
+
     const TABS = [
         { id: 'backtest', label: 'Backtest', icon: Play, desc: 'One structure, full detail — equity curve + every trade' },
         { id: 'sweep', label: 'Optimizer', icon: FlaskConical, desc: 'Grid-sweep this structure\'s params with OOS ranking + refine' },
@@ -1830,7 +1855,26 @@ export default function MultiLeg() {
                     {engineHealth && (
                         <div className={`rounded-xl border px-4 py-2.5 mb-4 flex items-center gap-2 text-sm font-semibold ${engineHealth.level === 'halt' ? 'border-red-600 bg-red-950/40 text-red-200' : engineHealth.level === 'stale' ? 'border-amber-500 bg-amber-950/40 text-amber-200' : 'border-slate-600 bg-slate-900 text-slate-300'}`} role="alert">
                             <span className="text-lg" aria-hidden="true">{engineHealth.level === 'halt' ? '⛔' : engineHealth.level === 'stale' ? '⚠️' : '📡'}</span>
-                            {engineHealth.msg}
+                            <span className="flex-1">
+                                {engineHealth.msg}
+                                {engineHealth.level === 'halt' && haltInfo && (
+                                    <span className="block font-normal text-[11px] mt-0.5 text-red-300/90">
+                                        {haltInfo.reason} · by {haltInfo.actor}
+                                        {haltInfo.ageMinutes != null && ` · ${haltInfo.ageMinutes < 60 ? `${haltInfo.ageMinutes}m` : `${(haltInfo.ageMinutes / 60).toFixed(1)}h`} ago`}
+                                        {' · '}
+                                        {haltInfo.selfClearing
+                                            ? 'automatic — clears itself on the next trading day'
+                                            : 'MANUAL — it will not clear on its own'}
+                                    </span>
+                                )}
+                            </span>
+                            {engineHealth.level === 'halt' && (
+                                <button onClick={resumeEngine} disabled={resuming}
+                                    title="Lift the halt now. Until this existed the only way to clear a halt was restarting the container."
+                                    className="shrink-0 px-2.5 py-1 rounded border border-red-500 bg-red-900/50 hover:bg-red-800 text-red-100 text-xs font-semibold disabled:opacity-50">
+                                    {resuming ? 'Resuming…' : 'Resume engine'}
+                                </button>
+                            )}
                         </div>
                     )}
 
