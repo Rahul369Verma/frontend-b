@@ -810,6 +810,7 @@ export default function MultiLeg() {
         <div className="bg-surface rounded-xl border border-slate-700 p-4">
             <div className="text-sm font-semibold text-white mb-3 flex items-center gap-2"><SlidersHorizontal className="w-4 h-4 text-primary" /> Setup — {tpl?.name || tplKey}</div>
             <MarketRead symbol={symbol} presets={presets} onApplyPreset={applyPreset} />
+            <BookCost symbol={symbol} />
             <div className="grid grid-cols-2 gap-2 text-xs">
                 <label className="text-slate-400">Symbol
                     <select value={symbol} onChange={e => { setSymbol(e.target.value); const s = instruments.find(x => x.v === e.target.value); if (s?.spot) setSpot(s.spot); }}
@@ -2957,6 +2958,63 @@ function Tile({ label, value, good, bad, small, help, title }) {
         <div className="bg-slate-800/60 border border-slate-700 rounded p-2" title={title}>
             <div className="text-[10px] text-slate-500">{label}{help ? <Help k={help} /> : null}</div>
             <div className={`${small ? 'text-[10px]' : 'text-sm font-semibold'} ${good ? 'text-emerald-300' : bad ? 'text-red-300' : 'text-slate-200'}`}>{value}</div>
+        </div>
+    );
+}
+
+// Book cost — the REAL bid/ask spread you pay on this symbol, measured from
+// 106k+ archived quotes rather than assumed. This exists because the backtester
+// used to price every symbol at a flat 0.50% half-spread: that flattered BANKEX
+// so badly (real ATM 2.78%, real 1-2% wing 17.54%) that a -₹739/trade strangle
+// backtested at +₹4,473. Loads automatically — an invisible cost is the whole
+// problem, so it must not be behind a button.
+const GRADE_STYLE = {
+    good: 'text-emerald-300 border-emerald-700/50 bg-emerald-950/20',
+    fair: 'text-sky-300 border-sky-700/50 bg-sky-950/20',
+    poor: 'text-amber-300 border-amber-700/50 bg-amber-950/10',
+    untradeable: 'text-red-300 border-red-700/50 bg-red-950/25',
+    unknown: 'text-slate-400 border-slate-600 bg-slate-800/40',
+};
+const GRADE_NOTE = {
+    good: 'tight book — spread costs are negligible here',
+    fair: 'workable, but wings cost real money',
+    poor: 'wide book — the spread eats a meaningful slice of every credit',
+    untradeable: 'the market maker takes more than the strategy makes — do not trade short premium here',
+    unknown: 'not measured yet — costs fall back to the old flat 0.50% assumption',
+};
+function BookCost({ symbol }) {
+    const [d, setD] = useState(null);
+    const [err, setErr] = useState(null);
+    useEffect(() => {
+        let dead = false;
+        setD(null); setErr(null);
+        axios.get(`${API_URL}/multileg/liquidity`, { params: { symbol, live: 1 } })
+            .then(r => { if (!dead) setD(r.data?.symbols?.[0] || null); })
+            .catch(e => { if (!dead) setErr(e.response?.data?.error || e.message); });
+        return () => { dead = true; };
+    }, [symbol]);
+    if (err || !d) return null;
+    const g = d.grade || 'unknown';
+    const bad = g === 'untradeable' || g === 'poor';
+    return (
+        <div className={`rounded-lg border p-2.5 mb-3 ${bad ? 'border-red-800/60 bg-red-950/15' : 'border-slate-700 bg-slate-800/30'}`}>
+            <div className="flex items-center justify-between flex-wrap gap-1">
+                <span className="text-xs font-semibold text-slate-200">
+                    💸 Book cost<Help k="book-cost" /> <span className="text-slate-500 font-normal">— what the market maker takes before you make anything</span>
+                </span>
+                <span className={`text-[10px] px-2 py-0.5 rounded border font-semibold uppercase ${GRADE_STYLE[g]}`}>{g}</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 text-[10px] mt-2">
+                <Tile label="Spread at ATM" value={`${d.atmPct?.toFixed(2)}%`} small good={d.atmPct <= 0.20} bad={d.atmPct > 1.5} />
+                <Tile label="Spread on wings" value={`${d.wingPct?.toFixed(2)}%`} small good={d.wingPct <= 0.35} bad={d.wingPct > 2} />
+                <Tile label="Round trip cost" value={`${d.roundTripPctOfPremium}% of premium`} small bad={d.roundTripPctOfPremium > 5} />
+                <Tile label="Live ATM now" value={d.live?.cePct != null ? `${d.live.cePct}% / ${d.live.pePct ?? '—'}%` : '—'} small />
+            </div>
+            <div className={`text-[10px] mt-1.5 ${bad ? 'text-red-300' : 'text-slate-500'}`}>
+                {bad ? '⚠ ' : ''}{GRADE_NOTE[g]}
+                {d.live?.ageSec != null && <span className="text-slate-600"> · live quote {Math.round(d.live.ageSec / 60)}m old</span>}
+            </div>
+            {!d.measured && <div className="text-[9px] text-slate-600 mt-1">No archived quotes for this symbol yet — backtests use the 0.50% fallback, which may be badly wrong in either direction.</div>}
         </div>
     );
 }

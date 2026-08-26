@@ -512,6 +512,18 @@ export const HELP = {
         detail: "The date range is split by day: the earlier portion trains, the last 20-40% is held back and used only for scoring. Rankings use the held-back numbers. When train results are far better than validation results, the parameters were fitted to noise. In the Auto tab this split is forced on and cannot be turned off.",
         gotcha: "Good validation numbers are necessary, not sufficient — with enough combinations tested, some will look good on the hold-out by luck.",
     },
+    "book-cost": {
+        label: "Book cost (bid/ask spread)",
+        short: "The gap between the buy price and the sell price — money you lose the instant you trade, before the market moves at all.",
+        detail: "Every option has two prices: what buyers will pay (the bid) and what sellers want (the ask). You always buy at the higher one and sell at the lower one, so the difference is a fee you pay to whoever is on the other side. Halve that gap and you get the cost of ONE trade; you pay it again to get out, so a round trip costs roughly twice the number shown. These figures are not assumed — they are measured from more than 100,000 real quotes per symbol collected over the last few weeks. NIFTY, BANKNIFTY and SENSEX are extremely tight (about 0.12% at the money, i.e. 12 paise on a Rs 100 option). BANKEX is not: 2.78% at the money and 17.54% one to two percent out of the money, meaning a round trip on those wings hands over about a THIRD of the premium before the position has done anything.",
+        gotcha: "Wings always cost more than the money. Structures that sell far-out-of-the-money options collect the smallest premiums and pay the widest spreads on them — the worst combination. Until this was measured, the backtester assumed a flat 0.50% for every symbol, which made BANKEX look like the best performer in the book when it is actually a loser.",
+    },
+    "max-half-spread-pct": {
+        label: "Max half-spread %",
+        short: "Refuse to open a structure when any leg's bid/ask gap is wider than this.",
+        detail: "Checked live against the most recent option-chain snapshot just before entry, falling back to the measured average for the symbol when no fresh quote is available. It is OFF by default (0 = no limit) so nothing is ever silently skipped — the cost is always reported in the event feed either way, and you decide whether to act on it. Setting it to around 1.0 would let NIFTY, BANKNIFTY, SENSEX and MIDCPNIFTY trade normally while blocking BANKEX entirely and stopping FINNIFTY on its worst days.",
+        gotcha: "This blocks the trade rather than repricing it. If you would rather still take the trade but see the true cost, leave it at 0 and read the LIQUIDITY line in the event feed.",
+    },
 };
 
 export default HELP;
