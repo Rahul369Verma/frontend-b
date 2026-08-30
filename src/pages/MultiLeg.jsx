@@ -5,9 +5,13 @@ import {
 } from 'recharts';
 import { Layers, Play, Pause, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp } from 'lucide-react';
 import StructureAttributionPanel from '../components/viz/StructureAttributionPanel';
+import StrategyBuilder from '../components/multileg/StrategyBuilder';
+import ZoomableChart from '../components/charts/ZoomableChart';
 import { HELP } from '../data/multilegHelp';
+import { useChartTheme } from '../theme/chartTheme.js';
+import { pollInterval } from '../hooks/usePolling.js';
+import { API_URL } from '../config/api.js';
 
-const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
 
 // Static fallback — replaced by /api/config/instruments (same source as Backtest).
 const FALLBACK_SYMBOLS = [
@@ -82,6 +86,16 @@ const isoDaysAgo = (d) => new Date(Date.now() - d * 864e5).toISOString().slice(0
 const shortSym = (s) => String(s).replace('NSE:', '').replace('BSE:', '').replace('-INDEX', '');
 
 export default function MultiLeg() {
+    // Five recharts charts live on this page and every one of them needs
+    // concrete colour strings — recharts writes them into SVG attributes and
+    // interpolates them, so var() is not an option. Roles, not hues:
+    //   mark.terminal    the payoff AT EXPIRY (the one curve that is not a forecast)
+    //   mark.live        "right now" — spot, the T+0 curve, the open structure
+    //   mark.projection  a modelled future state (next session's open)
+    //   mark.region      the ±1σ expected-move band
+    //   mark.equity      a cumulative-P&L path whose SIGN is on its dots
+    //   status.good/critical  the TP / SL levels the engine acts on
+    const ct = useChartTheme();
     const [templates, setTemplates] = useState([]);
     const [presets, setPresets] = useState([]);            // professional starting bundles
     const [instruments, setInstruments] = useState(FALLBACK_SYMBOLS);
@@ -101,7 +115,15 @@ export default function MultiLeg() {
     const [resolution, setResolution] = useState('5');
     const [running, setRunning] = useState(false);
     const [result, setResult] = useState(null);
-    const [mode, setMode] = useState('backtest'); // backtest | sweep | scan | auto — the active TAB
+    // Active TAB, remembered across reloads. A refresh used to drop you back on
+    // Backtest no matter where you were — painful when you are watching a
+    // deployment or mid-way through building a structure. Validated against the
+    // real tab list on read, so a renamed or removed tab can never leave the
+    // page blank with nothing rendered.
+    const [storedTab, setStoredTab] = useLocalStorage('ml.activeTab', 'builder');
+    const TAB_IDS = ['builder', 'backtest', 'sweep', 'scan', 'auto', 'deploy', 'results'];
+    const mode = TAB_IDS.includes(storedTab) ? storedTab : 'builder';
+    const setMode = setStoredTab;
     const [gridText, setGridText] = useState('');
     const [sweep, setSweep] = useState(null);
     const [metric, setMetric] = useState('netPnl');
@@ -342,8 +364,8 @@ export default function MultiLeg() {
     useEffect(() => {
         if (mode !== 'auto') return;
         refreshAutoJobs();
-        const t = setInterval(refreshAutoJobs, 15000);
-        return () => clearInterval(t);
+        const t = pollInterval(refreshAutoJobs, 15000);
+        return () => t?.();
     }, [mode, refreshAutoJobs]);
     const attachJob = (j) => {
         // restore the run's CONFIGURATION so the form describes what actually
@@ -427,7 +449,7 @@ export default function MultiLeg() {
     useEffect(() => {
         if (!autoJob?.jobId) return;
         let idleTicks = 0; // polls spent stopped — bounds how long we wait for an auto-resume
-        const t = setInterval(() => {
+        const t = pollInterval(() => {
             axios.get(`${API_URL}/multileg/optimize/${autoJob.jobId}`).then(r => {
                 const st = r.data.status;
                 setAutoState(r.data);
@@ -435,12 +457,12 @@ export default function MultiLeg() {
                 // paused/cancelled/done are final decisions. 'error' and
                 // 'interrupted' can come BACK by themselves (the server
                 // auto-resumes a run that died), so keep watching a while.
-                if (['done', 'cancelled', 'paused'].includes(st)) clearInterval(t);
+                if (['done', 'cancelled', 'paused'].includes(st)) t?.();
                 else if (st === 'running') idleTicks = 0;
-                else if (++idleTicks > 72) clearInterval(t); // ~3 min
+                else if (++idleTicks > 72) t?.(); // ~3 min
             }).catch(() => { /* transient poll failure — keep polling */ });
         }, 2500);
-        return () => clearInterval(t);
+        return () => t?.();
     }, [autoJob]);
 
     // Load a champion's FULL config into Setup + Backtest for hand inspection:
@@ -484,8 +506,8 @@ export default function MultiLeg() {
     useEffect(() => {
         if (mode !== 'deploy') return;
         refreshSaved(); refreshDeployments();
-        const t = setInterval(refreshDeployments, 5000);
-        return () => clearInterval(t);
+        const t = pollInterval(refreshDeployments, 5000);
+        return () => t?.();
     }, [mode, refreshSaved, refreshDeployments]);
 
     // Eligibility as a STABLE primitive — depending on mlDeps.deployments (a
@@ -507,8 +529,8 @@ export default function MultiLeg() {
             .then(r => { if (alive) setDepRecon({ id: depDetail, data: r.data }); })
             .catch(e => { if (alive) setDepRecon({ id: depDetail, data: { error: e.response?.data?.error || e.message } }); });
         pull();
-        const t = setInterval(pull, 15000);
-        return () => { alive = false; clearInterval(t); };
+        const t = pollInterval(pull, 15000);
+        return () => { alive = false; t?.(); };
     }, [depDetail, mode, reconEligible]);   // primitive dep: mlDeps.deployments is a NEW array every 5s poll, which would tear down + refetch on every poll instead of every 15s
 
     // Live risk-graph (expiry + T+0 curves) for the deployment whose chart is
@@ -520,8 +542,8 @@ export default function MultiLeg() {
             .then(r => { if (alive) setDepPayoff({ id: depChart, data: r.data }); })
             .catch(() => { if (alive) setDepPayoff({ id: depChart, data: { error: true } }); });
         pull();
-        const t = setInterval(pull, 5000);
-        return () => { alive = false; clearInterval(t); };
+        const t = pollInterval(pull, 5000);
+        return () => { alive = false; t?.(); };
     }, [depChart, mode]);
 
     // P&L Activity (equity curve of booked trades + live open MTM) for the
@@ -534,8 +556,8 @@ export default function MultiLeg() {
             .then(r => { if (alive) setActivityData({ id: depActivity, data: r.data }); })
             .catch(() => { if (alive) setActivityData({ id: depActivity, data: { error: true } }); });
         pull();
-        const t = setInterval(pull, 10000);
-        return () => { alive = false; clearInterval(t); };
+        const t = pollInterval(pull, 10000);
+        return () => { alive = false; t?.(); };
     }, [depActivity, mode]);
 
     // Results tab: pull the FULL structure-trade history (deployment list too,
@@ -551,8 +573,8 @@ export default function MultiLeg() {
     useEffect(() => {
         if (mode !== 'results') return;
         refreshResults();
-        const t = setInterval(refreshResults, 15000);
-        return () => clearInterval(t);
+        const t = pollInterval(refreshResults, 15000);
+        return () => t?.();
     }, [mode, refreshResults]);
 
     // Calibrate the backtest IV proxy to the LIVE chain ATM IV (level parity).
@@ -741,13 +763,13 @@ export default function MultiLeg() {
     const M = (m, key) => m ? (m[key] === Infinity ? '∞' : m[key]) : '—';
 
     // ── shared building blocks ───────────────────────────────────────────────
-    const inputCls = 'w-full mt-1 bg-slate-800 border border-slate-700 rounded p-1.5 text-slate-200';
+    const inputCls = 'w-full mt-1 bg-slate-800 border border-line rounded p-1.5 text-fg-2';
 
     const DateRangeInputs = (
         <>
-            <label className="text-slate-400">From<input type="date" value={from} onChange={e => setFrom(e.target.value)} className={inputCls} /></label>
-            <label className="text-slate-400">To<input type="date" value={to} onChange={e => setTo(e.target.value)} className={inputCls} /></label>
-            <label className="text-slate-400">Candles
+            <label className="text-fg-4">From<input type="date" value={from} onChange={e => setFrom(e.target.value)} className={inputCls} /></label>
+            <label className="text-fg-4">To<input type="date" value={to} onChange={e => setTo(e.target.value)} className={inputCls} /></label>
+            <label className="text-fg-4">Candles
                 <select value={resolution} onChange={e => setResolution(e.target.value)} className={inputCls}>
                     {RESOLUTIONS.map(r => <option key={r.v} value={r.v}>{r.label}</option>)}
                 </select>
@@ -757,19 +779,19 @@ export default function MultiLeg() {
 
     const RankingInputs = (
         <>
-            <label className="text-slate-400">Rank by
+            <label className="text-fg-4">Rank by
                 <select value={metric} onChange={e => setMetric(e.target.value)} className={inputCls}>
                     {METRICS.map(m => <option key={m.v} value={m.v}>{m.label}</option>)}
                 </select>
             </label>
-            <label className="text-slate-400">Validation (OOS){mode === 'auto' && <span className="text-[9px] text-emerald-400 ml-1">enforced</span>}
+            <label className="text-fg-4">Validation (OOS){mode === 'auto' && <span className="text-4xs text-emerald-400 ml-1">enforced</span>}
                 <select value={split} onChange={e => setSplit(Number(e.target.value))} className={inputCls}>
                     {mode !== 'auto' && <option value={0}>Off (full period)</option>}
                     <option value={0.2}>Hold out last 20%</option>
                     <option value={0.3}>Hold out last 30%</option>
                     <option value={0.4}>Hold out last 40%</option>
                 </select>
-                {mode === 'auto' && <span className="block text-[9px] text-slate-600 mt-0.5">Always on in Auto — you only choose how much to hold out.</span>}
+                {mode === 'auto' && <span className="block text-4xs text-fg-6 mt-0.5">Always on in Auto — you only choose how much to hold out.</span>}
             </label>
         </>
     );
@@ -784,20 +806,20 @@ export default function MultiLeg() {
                         <span className="font-semibold">⭐ Professional preset</span>
                         <select value={presetKey}
                             onChange={e => { setPresetKey(e.target.value); const p = presets.find(x => x.key === e.target.value); if (p) applyPreset(p); }}
-                            className="bg-slate-800 border border-slate-700 rounded p-1 text-slate-200 text-xs">
+                            className="bg-slate-800 border border-line rounded p-1 text-fg-2 text-xs">
                             <option value="">— pick a trader-grade starting bundle —</option>
                             {presets.map(p => <option key={p.key} value={p.key}>{p.name} · {p.tag}</option>)}
                         </select>
-                        {presetKey && <button onClick={() => setPresetKey('')} className="text-[10px] text-slate-500 hover:text-slate-300">clear</button>}
+                        {presetKey && <button onClick={() => setPresetKey('')} className="text-3xs text-fg-5 hover:text-fg-3">clear</button>}
                     </label>
-                    {activePreset && <div className="text-[11px] text-slate-400 mt-1.5 leading-snug">{activePreset.note}</div>}
-                    <div className="text-[10px] text-slate-600 mt-1">Loads the template + a full, self-consistent param set. Edit anything before deploying — the pre-deploy review will flag risks.</div>
+                    {activePreset && <div className="text-2xs text-fg-4 mt-1.5 leading-snug">{activePreset.note}</div>}
+                    <div className="text-3xs text-fg-6 mt-1">Loads the template + a full, self-consistent param set. Edit anything before deploying — the pre-deploy review will flag risks.</div>
                 </div>
             )}
             <div className="flex flex-wrap gap-2 mb-4">
                 {templates.map(t => (
                     <button key={t.key} onClick={() => { selectTemplate(t.key); setPresetKey(''); }}
-                        className={`px-3 py-1.5 rounded border text-xs ${t.key === tplKey ? 'bg-primary/20 border-primary text-primary' : `bg-slate-800 hover:bg-slate-700 ${OUTLOOK_COLORS[t.outlook] || 'text-slate-300 border-slate-700'}`}`}
+                        className={`px-3 py-1.5 rounded border text-xs ${t.key === tplKey ? 'bg-primary/20 border-primary text-primary-ink' : `bg-slate-800 hover:bg-slate-700 ${OUTLOOK_COLORS[t.outlook] || 'text-fg-3 border-line'}`}`}
                         title={t.notes}>
                         {t.name}
                     </button>
@@ -807,38 +829,38 @@ export default function MultiLeg() {
     );
 
     const SetupCard = (
-        <div className="bg-surface rounded-xl border border-slate-700 p-4">
-            <div className="text-sm font-semibold text-white mb-3 flex items-center gap-2"><SlidersHorizontal className="w-4 h-4 text-primary" /> Setup — {tpl?.name || tplKey}</div>
+        <div className="bg-surface rounded-xl border border-line p-4">
+            <div className="text-sm font-semibold text-fg mb-3 flex items-center gap-2"><SlidersHorizontal className="w-4 h-4 text-primary" /> Setup — {tpl?.name || tplKey}</div>
             <MarketRead symbol={symbol} presets={presets} onApplyPreset={applyPreset} />
             <BookCost symbol={symbol} />
             <div className="grid grid-cols-2 gap-2 text-xs">
-                <label className="text-slate-400">Symbol
+                <label className="text-fg-4">Symbol
                     <select value={symbol} onChange={e => { setSymbol(e.target.value); const s = instruments.find(x => x.v === e.target.value); if (s?.spot) setSpot(s.spot); }}
                         className={inputCls}>
                         {instruments.map(s => <option key={s.v} value={s.v}>{s.label}</option>)}
                     </select>
                 </label>
-                <label className="text-slate-400">Spot (preview)
+                <label className="text-fg-4">Spot (preview)
                     <input type="number" value={spot} onChange={e => setSpot(Number(e.target.value))} className={inputCls} />
                 </label>
-                <label className="text-slate-400">IV (preview)
+                <label className="text-fg-4">IV (preview)
                     <input type="number" step="0.01" value={iv} onChange={e => setIv(Number(e.target.value))} className={inputCls} />
                 </label>
-                <label className="text-slate-400">Lots
+                <label className="text-fg-4">Lots
                     <input type="number" value={params.lots || 1} onChange={e => setParams(p => ({ ...p, lots: Number(e.target.value) }))} className={inputCls} />
                 </label>
             </div>
 
-            <div className="text-xs text-slate-400 mt-3 mb-1 font-semibold">Entry trigger</div>
+            <div className="text-xs text-fg-4 mt-3 mb-1 font-semibold">Entry trigger</div>
             <div className="grid grid-cols-2 gap-2 text-xs">
-                <label className="text-slate-400">Mode
+                <label className="text-fg-4">Mode
                     <select value={entryMode} onChange={e => { setEntryMode(e.target.value); setSignalParams(null); }} className={inputCls}>
                         <option value="time">Time-based (entry_time)</option>
                         <option value="signal">Strategy signal</option>
                     </select>
                 </label>
                 {entryMode === 'signal' && (
-                    <label className="text-slate-400">Signal strategy
+                    <label className="text-fg-4">Signal strategy
                         <select value={signalStrategy} onChange={e => { setSignalStrategy(e.target.value); setSignalParams(null); }} className={inputCls}>
                             {(strategies.length ? strategies : [{ id: 'breakout_range', label: 'Breakout Range' }]).map(s => (
                                 <option key={s.id} value={s.id}>{s.label || s.id}</option>
@@ -850,173 +872,173 @@ export default function MultiLeg() {
             {entryMode === 'signal' && signalParams && (
                 <div className="mt-1 p-1.5 rounded bg-violet-900/15 border border-violet-800/40">
                     <div className="flex items-center justify-between">
-                        <span className="text-[10px] text-violet-300 font-semibold">TUNED signal params (from champion/save)</span>
-                        <button onClick={() => setSignalParams(null)} className="text-[10px] text-slate-500 hover:text-red-300" title="Discard tuned params — run the strategy at its defaults">✕ use defaults</button>
+                        <span className="text-3xs text-violet-300 font-semibold">TUNED signal params (from champion/save)</span>
+                        <button onClick={() => setSignalParams(null)} className="text-3xs text-fg-5 hover:text-red-300" title="Discard tuned params — run the strategy at its defaults">✕ use defaults</button>
                     </div>
-                    <div className="text-[10px] font-mono text-slate-500 break-all">{JSON.stringify(signalParams)}</div>
+                    <div className="text-3xs font-mono text-fg-5 break-all">{JSON.stringify(signalParams)}</div>
                 </div>
             )}
             {entryMode === 'signal' && (
                 <>
-                    <label className="flex items-center gap-2 mt-2 text-[11px] text-slate-300 cursor-pointer"
+                    <label className="flex items-center gap-2 mt-2 text-2xs text-fg-3 cursor-pointer"
                         title="Exit early when the strategy REVERSES (fires the opposite direction) or its own checkExit says the thesis broke — before the structure SL. Directional structures honor both; neutral ones (condor/fly) honor only a thesis-break (an opposite edge-fade inside a range is normal).">
                         <input type="checkbox" checked={useSignalExit} onChange={e => setUseSignalExit(e.target.checked)} className="accent-amber-500" />
-                        Strategy early exit <span className="text-slate-500">— close on reverse / thesis-break before SL</span>
+                        Strategy early exit <span className="text-fg-5">— close on reverse / thesis-break before SL</span>
                     </label>
-                    <div className="text-[10px] text-slate-600 mt-1">
+                    <div className="text-3xs text-fg-6 mt-1">
                         Entries fire only when {signalStrategy} signals — {String(tpl?.outlook || '').startsWith('bullish') ? 'CE signals only (bullish structure)' : String(tpl?.outlook || '').startsWith('bearish') ? 'PE signals only (bearish structure)' : 'any direction (neutral structure = volatility trigger)'} — still one entry/day.
                         {useSignalExit ? ' Early exit ON: TP still wins first, then a reverse/thesis-break closes before the structure SL.' : ''}
                     </div>
                 </>
             )}
 
-            <div className="text-xs text-slate-400 mt-4 mb-1 font-semibold">Deployment risk (engine underwriting — saved with the strategy)</div>
+            <div className="text-xs text-fg-4 mt-4 mb-1 font-semibold">Deployment risk (engine underwriting — saved with the strategy)</div>
             <div className="grid grid-cols-2 gap-2 text-xs">
-                <label className="text-slate-500">size_mode
+                <label className="text-fg-5">size_mode
                     <select value={params.size_mode || 'fixed'} onChange={e => setParams(p => ({ ...p, size_mode: e.target.value }))}
-                        className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200">
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2">
                         <option value="fixed">fixed (use Lots)</option>
                         <option value="risk">risk (₹ budget / worst case)</option>
                     </select>
                 </label>
                 {(params.size_mode === 'risk') && (
-                    <label className="text-slate-500" title="₹ risked per structure — lots = floor(budget ÷ worst-case loss per lot)">risk_per_trade ₹
+                    <label className="text-fg-5" title="₹ risked per structure — lots = floor(budget ÷ worst-case loss per lot)">risk_per_trade ₹
                         <input type="number" value={params.risk_per_trade ?? 10000} onChange={e => setParams(p => ({ ...p, risk_per_trade: Number(e.target.value) }))}
-                            className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                            className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                     </label>
                 )}
-                <label className="text-slate-500" title="hard ceiling on sized lots">max_lots
+                <label className="text-fg-5" title="hard ceiling on sized lots">max_lots
                     <input type="number" value={params.max_lots ?? 10} onChange={e => setParams(p => ({ ...p, max_lots: Number(e.target.value) }))}
-                        className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                 </label>
-                <label className="text-slate-500" title="deployment stops entering for the day after this realized loss">max_loss_per_day ₹
+                <label className="text-fg-5" title="deployment stops entering for the day after this realized loss">max_loss_per_day ₹
                     <input type="number" value={params.max_loss_per_day ?? ''} placeholder="off" onChange={e => setParams(p => ({ ...p, max_loss_per_day: e.target.value === '' ? undefined : Number(e.target.value) }))}
-                        className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                 </label>
-                <label className="text-slate-500" title="Refuse a structure whose SHORT-vol exposure exceeds this. ₹ lost per 1 IV point. Blank = off. Now enforced in BOTH the backtest and the live engine, so a backtest can no longer approve a structure production would reject.">max_entry_vega ₹/IVpt
+                <label className="text-fg-5" title="Refuse a structure whose SHORT-vol exposure exceeds this. ₹ lost per 1 IV point. Blank = off. Now enforced in BOTH the backtest and the live engine, so a backtest can no longer approve a structure production would reject.">max_entry_vega ₹/IVpt
                     <input type="number" value={params.max_entry_vega_rupees ?? ''} placeholder="off" onChange={e => setParams(p => ({ ...p, max_entry_vega_rupees: e.target.value === '' ? undefined : Number(e.target.value) }))}
-                        className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                 </label>
-                <label className="text-slate-500" title="Refuse a structure BORN directional: per-unit |delta| above this is rejected at entry. A neutral fly/condor sits near 0.01-0.02 when freshly struck. Blank = off. Mirrored in the live engine.">max_entry_|Δ|/unit
+                <label className="text-fg-5" title="Refuse a structure BORN directional: per-unit |delta| above this is rejected at entry. A neutral fly/condor sits near 0.01-0.02 when freshly struck. Blank = off. Mirrored in the live engine.">max_entry_|Δ|/unit
                     <input type="number" step="0.01" value={params.max_entry_abs_delta_units ?? ''} placeholder="off" onChange={e => setParams(p => ({ ...p, max_entry_abs_delta_units: e.target.value === '' ? undefined : Number(e.target.value) }))}
-                        className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                 </label>
-                <label className="text-slate-500" title="LIVE entries are limit orders capped this % from the quote — a gapping wing can't fill arbitrarily far away">entry_slippage_cap_pct
+                <label className="text-fg-5" title="LIVE entries are limit orders capped this % from the quote — a gapping wing can't fill arbitrarily far away">entry_slippage_cap_pct
                     <input type="number" step="0.1" value={params.entry_slippage_cap_pct ?? 1.5} onChange={e => setParams(p => ({ ...p, entry_slippage_cap_pct: Number(e.target.value) }))}
-                        className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                 </label>
             </div>
 
-            <div className="text-xs text-slate-400 mt-4 mb-1 font-semibold">Vol edge & realism (IV-percentile gate · greeks · spread model)</div>
+            <div className="text-xs text-fg-4 mt-4 mb-1 font-semibold">Vol edge & realism (IV-percentile gate · greeks · spread model)</div>
             <div className="grid grid-cols-3 gap-2 text-xs">
-                <label className="text-slate-500" title="sell premium ONLY when the symbol's realized-vol percentile ≥ this (0/blank = off). Same math in backtest and live.">min_ivp
+                <label className="text-fg-5" title="sell premium ONLY when the symbol's realized-vol percentile ≥ this (0/blank = off). Same math in backtest and live.">min_ivp
                     <input type="number" value={params.min_ivp ?? ''} placeholder="off" onChange={e => setParams(p => ({ ...p, min_ivp: e.target.value === '' ? undefined : Number(e.target.value) }))}
-                        className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                 </label>
-                <label className="text-slate-500" title="buy premium ONLY when the vol percentile ≤ this (blank = off)">max_ivp
+                <label className="text-fg-5" title="buy premium ONLY when the vol percentile ≤ this (blank = off)">max_ivp
                     <input type="number" value={params.max_ivp ?? ''} placeholder="off" onChange={e => setParams(p => ({ ...p, max_ivp: e.target.value === '' ? undefined : Number(e.target.value) }))}
-                        className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                 </label>
-                <label className="text-slate-500" title="trailing days the percentile ranks against">ivp_lookback
+                <label className="text-fg-5" title="trailing days the percentile ranks against">ivp_lookback
                     <input type="number" value={params.ivp_lookback ?? 120} onChange={e => setParams(p => ({ ...p, ivp_lookback: Number(e.target.value) }))}
-                        className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                 </label>
-                <label className="text-slate-500" title="LIVE alert when |structure delta per unit| exceeds this band — a neutral structure gone directional (blank = off)">delta_alert
+                <label className="text-fg-5" title="LIVE alert when |structure delta per unit| exceeds this band — a neutral structure gone directional (blank = off)">delta_alert
                     <input type="number" step="0.05" value={params.delta_alert ?? ''} placeholder="off" onChange={e => setParams(p => ({ ...p, delta_alert: e.target.value === '' ? undefined : Number(e.target.value) }))}
-                        className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                 </label>
-                <label className="text-slate-500" title="BACKTEST: minimum ₹ cost per side per leg (real spreads have an absolute floor — a ₹4 wing costs ~2.5%/side, not 0.5%)">spread_floor ₹
+                <label className="text-fg-5" title="BACKTEST: minimum ₹ cost per side per leg (real spreads have an absolute floor — a ₹4 wing costs ~2.5%/side, not 0.5%)">spread_floor ₹
                     <input type="number" step="0.05" value={params.spread_floor ?? 0.10} onChange={e => setParams(p => ({ ...p, spread_floor: Number(e.target.value) }))}
-                        className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                 </label>
-                <label className="text-slate-500" title="BACKTEST: spreads widen this % per strike-step away from ATM (books thin out off the money)">spread_step_pct
+                <label className="text-fg-5" title="BACKTEST: spreads widen this % per strike-step away from ATM (books thin out off the money)">spread_step_pct
                     <input type="number" step="1" value={params.spread_step_pct ?? 5} onChange={e => setParams(p => ({ ...p, spread_step_pct: Number(e.target.value) }))}
-                        className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                 </label>
             </div>
 
             {/* IV LEVEL calibration — the biggest backtest↔live parity lever. */}
-            <div className="mt-3 p-2 rounded border border-slate-800 bg-slate-900/40">
+            <div className="mt-3 p-2 rounded border border-line-0 bg-slate-900/40">
                 <div className="flex items-center gap-2 flex-wrap">
-                    <label className="text-[11px] text-slate-500" title="Backtest prices legs from realizedVol × iv_mult. 1.15 is a guess; calibrate it to the live chain so backtest premium LEVEL (and %-of-credit SL/TP) matches what the deployed engine sees.">iv_mult
+                    <label className="text-2xs text-fg-5" title="Backtest prices legs from realizedVol × iv_mult. 1.15 is a guess; calibrate it to the live chain so backtest premium LEVEL (and %-of-credit SL/TP) matches what the deployed engine sees.">iv_mult
                         <input type="number" step="0.01" value={params.iv_mult ?? 1.15} onChange={e => setParams(p => ({ ...p, iv_mult: Number(e.target.value) }))}
-                            className="w-20 ml-1 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                            className="w-20 ml-1 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                     </label>
                     <button onClick={calibrateIv} disabled={ivCalibBusy}
-                        className="px-2 py-1 rounded border border-cyan-700/50 bg-cyan-900/20 text-cyan-300 text-[11px] hover:bg-cyan-900/40 disabled:opacity-50 flex items-center gap-1">
+                        className="px-2 py-1 rounded border border-cyan-700/50 bg-cyan-900/20 text-cyan-300 text-2xs hover:bg-cyan-900/40 disabled:opacity-50 flex items-center gap-1">
                         <RefreshCw className={`w-3 h-3 ${ivCalibBusy ? 'animate-spin' : ''}`} /> Calibrate IV to live chain ({shortSym(symbol)})
                     </button>
                     {params.iv_mult != null && params.iv_mult !== 1.15 && (
-                        <button onClick={() => { setParams(p => { const { iv_mult, ...rest } = p; return rest; }); setIvCalib(null); }}
-                            className="text-[10px] text-slate-500 hover:text-red-300" title="Revert to the default 1.15">✕ reset</button>
+                        <button onClick={() => { setParams(p => { const { iv_mult: _iv_mult, ...rest } = p; return rest; }); setIvCalib(null); }}
+                            className="text-3xs text-fg-5 hover:text-red-300" title="Revert to the default 1.15">✕ reset</button>
                     )}
                 </div>
                 {ivCalib && (ivCalib.error
-                    ? <div className="text-[10px] text-red-400 mt-1">Calibration failed: {ivCalib.error} (needs live market hours + a valid option chain)</div>
-                    : <div className="text-[10px] text-slate-400 mt-1 font-mono">
+                    ? <div className="text-3xs text-red-400 mt-1">Calibration failed: {ivCalib.error} (needs live market hours + a valid option chain)</div>
+                    : <div className="text-3xs text-fg-4 mt-1 font-mono">
                         chain ATM IV <span className="text-cyan-300">{ivCalib.observedIvPct}%</span> vs realized {ivCalib.realizedVolPct}% → iv_mult <span className="text-cyan-300">{ivCalib.iv_mult}</span> (was 1.15) · ATM {ivCalib.atmStrike} {ivCalib.expiry} · CE ₹{ivCalib.atmCe} PE ₹{ivCalib.atmPe}
                     </div>)}
-                <div className="text-[10px] text-slate-600 mt-1">Aligns backtest premium LEVEL to the market. Skew / term-structure / microstructure still differ — paper-validate before LIVE.</div>
+                <div className="text-3xs text-fg-6 mt-1">Aligns backtest premium LEVEL to the market. Skew / term-structure / microstructure still differ — paper-validate before LIVE.</div>
             </div>
 
-            <div className="text-xs text-slate-400 mt-4 mb-1 font-semibold">Parameters (every one editable + sweepable)</div>
+            <div className="text-xs text-fg-4 mt-4 mb-1 font-semibold">Parameters (every one editable + sweepable)</div>
             <div className="grid grid-cols-2 gap-2 text-xs">
                 {Object.entries(params).filter(([k]) => !['lots', 'size_mode', 'risk_per_trade', 'max_lots', 'max_loss_per_day', 'entry_slippage_cap_pct', 'min_ivp', 'max_ivp', 'ivp_lookback', 'delta_alert', 'spread_floor', 'spread_step_pct', 'iv_mult'].includes(k)).map(([k, v]) => (
-                    <label key={k} className="text-slate-500">{k}
+                    <label key={k} className="text-fg-5">{k}
                         <input value={v ?? ''} onChange={e => {
                             const raw = e.target.value;
                             setParams(p => ({ ...p, [k]: raw === '' ? '' : (isNaN(Number(raw)) ? raw : Number(raw)) }));
-                        }} className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                        }} className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                     </label>
                 ))}
             </div>
 
             {preview?.legs && (
                 <div className="mt-4">
-                    <div className="text-xs text-slate-400 font-semibold mb-1">Legs @ spot {fmt(spot)}</div>
-                    <table className="w-full text-xs text-slate-300">
+                    <div className="text-xs text-fg-4 font-semibold mb-1">Legs @ spot {fmt(spot)}</div>
+                    <table className="w-full text-xs text-fg-3">
                         <tbody>
                             {preview.legs.map((l, i) => (
-                                <tr key={i} className="border-t border-slate-800">
+                                <tr key={i} className="border-t border-line-0">
                                     <td className={`py-1 ${l.action === 'BUY' ? 'text-emerald-300' : 'text-red-300'}`}>{l.action} {l.ratio > 1 ? `${l.ratio}×` : ''}</td>
                                     <td>{l.type} {fmt(l.strike)}</td>
-                                    <td className="text-slate-500">{l.expiry}</td>
+                                    <td className="text-fg-5">{l.expiry}</td>
                                     <td className="text-right">₹{l.premium}</td>
                                 </tr>
                             ))}
                         </tbody>
                     </table>
                     {a && (
-                        <div className="flex flex-wrap gap-2 mt-2 text-[11px]">
-                            <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700">net {a.netPremium >= 0 ? 'credit' : 'debit'} ₹{fmt(Math.abs(a.netPremium), 2)}</span>
+                        <div className="flex flex-wrap gap-2 mt-2 text-2xs">
+                            <span className="px-2 py-0.5 rounded bg-slate-800 border border-line">net {a.netPremium >= 0 ? 'credit' : 'debit'} ₹{fmt(Math.abs(a.netPremium), 2)}</span>
                             <span className="px-2 py-0.5 rounded bg-emerald-900/30 border border-emerald-700/50 text-emerald-300">max +₹{fmt(a.maxProfit, 0)}</span>
                             <span className="px-2 py-0.5 rounded bg-red-900/30 border border-red-700/50 text-red-300">max −₹{fmt(Math.abs(a.maxLoss === -Infinity ? Infinity : a.maxLoss), 0)}{a.maxLoss === -Infinity ? ' (unbounded)' : ''}</span>
-                            <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700">BE: {(a.breakevens || []).map(b => fmt(b)).join(' / ') || '—'}</span>
+                            <span className="px-2 py-0.5 rounded bg-slate-800 border border-line">BE: {(a.breakevens || []).map(b => fmt(b)).join(' / ') || '—'}</span>
                         </div>
                     )}
-                    <div className="text-[10px] text-slate-600 mt-2">{tpl?.notes}</div>
+                    <div className="text-3xs text-fg-6 mt-2">{tpl?.notes}</div>
                 </div>
             )}
         </div>
     );
 
     const PayoffCard = (
-        <div className="bg-surface rounded-xl border border-slate-700 p-4">
-            <div className="text-sm font-semibold text-white mb-2">Payoff at expiry (per unit)</div>
+        <div className="bg-surface rounded-xl border border-line p-4">
+            <div className="text-sm font-semibold text-fg mb-2">Payoff at expiry (per unit)</div>
             {preview?.curve ? (
-                <ResponsiveContainer width="100%" height={300}>
-                    <LineChart data={preview.curve}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                        <XAxis dataKey="S" tick={{ fill: '#64748b', fontSize: 10 }} domain={['dataMin', 'dataMax']} type="number" />
-                        <YAxis tick={{ fill: '#64748b', fontSize: 10 }} />
-                        <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155' }} labelFormatter={(v) => `Spot ${fmt(v)}`} />
-                        <ReferenceLine y={0} stroke="#475569" />
-                        <ReferenceLine x={spot} stroke="#6366f1" strokeDasharray="4 4" label={{ value: 'spot', fill: '#6366f1', fontSize: 10 }} />
-                        <Line type="monotone" dataKey="pnl" stroke="#22d3ee" dot={false} strokeWidth={2} />
+                <ZoomableChart data={preview.curve} height={300}>
+                    <LineChart >
+                        <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
+                        <XAxis dataKey="S" tick={{ fill: ct.text.secondary, fontSize: ct.type['3xs'] }} domain={['dataMin', 'dataMax']} type="number" />
+                        <YAxis tick={{ fill: ct.text.secondary, fontSize: ct.type['3xs'] }} />
+                        <Tooltip contentStyle={ct.tooltipStyle()} labelFormatter={(v) => `Spot ${fmt(v)}`} />
+                        <ReferenceLine y={0} stroke={ct.axis} />
+                        <ReferenceLine x={spot} stroke={ct.mark.live} strokeDasharray="4 4" label={{ value: 'spot', fill: ct.mark.live, fontSize: ct.type['3xs'] }} />
+                        <Line type="monotone" dataKey="pnl" stroke={ct.mark.terminal} dot={false} strokeWidth={2} />
                     </LineChart>
-                </ResponsiveContainer>
+                </ZoomableChart>
             ) : (
-                <div className="text-xs text-slate-500 py-12 text-center">{tpl?.multiExpiry ? 'Calendar: risk profile is computed at NEAR expiry (see numbers on the left).' : 'Loading…'}</div>
+                <div className="text-xs text-fg-5 py-12 text-center">{tpl?.multiExpiry ? 'Calendar: risk profile is computed at NEAR expiry (see numbers on the left).' : 'Loading…'}</div>
             )}
         </div>
     );
@@ -1025,7 +1047,7 @@ export default function MultiLeg() {
         <div className="flex gap-1 flex-wrap">
             {instruments.map(s => (
                 <button key={s.v} onClick={() => setScanSymbols(prev => prev.includes(s.v) ? prev.filter(x => x !== s.v) : prev.length < max ? [...prev, s.v] : prev)}
-                    className={`px-2 py-1 rounded border text-[11px] ${scanSymbols.includes(s.v) ? 'bg-primary/20 border-primary text-primary' : 'bg-slate-800 border-slate-700 text-slate-400'}`}>
+                    className={`px-2 py-1 rounded border text-2xs ${scanSymbols.includes(s.v) ? 'bg-primary/20 border-primary text-primary-ink' : 'bg-slate-800 border-line text-fg-4'}`}>
                     {s.label}
                 </button>
             ))}
@@ -1036,7 +1058,7 @@ export default function MultiLeg() {
         <div className="flex gap-1 flex-wrap">
             {['all', 'bullish', 'bearish', 'neutral', 'volatile'].map(o => (
                 <button key={o} onClick={() => setScanOutlook(o)}
-                    className={`px-2 py-1 rounded border text-[11px] ${scanOutlook === o ? 'bg-primary/20 border-primary text-primary' : 'bg-slate-800 border-slate-700 text-slate-400'}`}>
+                    className={`px-2 py-1 rounded border text-2xs ${scanOutlook === o ? 'bg-primary/20 border-primary text-primary-ink' : 'bg-slate-800 border-line text-fg-4'}`}>
                     {o === 'all' ? `All (${templates.length})` : o}
                 </button>
             ))}
@@ -1064,6 +1086,7 @@ export default function MultiLeg() {
     };
 
     const TABS = [
+        { id: 'builder', label: 'Builder', icon: Layers, desc: 'Draw ANY structure leg by leg — live payoff, greeks, POP, margin. No template.' },
         { id: 'backtest', label: 'Backtest', icon: Play, desc: 'One structure, full detail — equity curve + every trade' },
         { id: 'sweep', label: 'Optimizer', icon: FlaskConical, desc: 'Grid-sweep this structure\'s params with OOS ranking + refine' },
         { id: 'scan', label: 'Scan', icon: Radar, desc: 'Every structure × symbols at defaults — one leaderboard' },
@@ -1097,59 +1120,70 @@ export default function MultiLeg() {
     }, [mlStatus, lastPoll]);
 
     return (
-        <div className="p-6 max-w-[1600px] mx-auto">
+        <div className="p-6">
             <Toasts toasts={toasts} dismiss={dismissToast} />
             <ConfirmModal open={!!confirmState} {...(confirmState || {})}
                 onConfirm={() => { const c = confirmState; setConfirmState(null); c?.onConfirm?.(); }}
                 onCancel={() => setConfirmState(null)} />
             <PreviewModal preview={livePreview} deployLots={deployLots} onCancel={() => setLivePreview(null)}
                 onConfirm={() => { const s = livePreview.strategy; setLivePreview(null); doDeploy(s, 'LIVE'); }} />
-            <h1 className="text-2xl font-bold text-white flex items-center gap-3 mb-1">
+            <h1 className="text-2xl font-bold text-fg flex items-center gap-3 mb-1">
                 <Layers className="w-6 h-6 text-primary" /> Multi-Leg Structures
             </h1>
-            <div className="text-sm text-slate-500 mb-4">Spreads · butterflies · condors · straddles · ratio backspreads · calendars — backtest, optimize, scan, and auto-race across symbols before any deployment.</div>
+            <div className="text-sm text-fg-5 mb-4">Spreads · butterflies · condors · straddles · ratio backspreads · calendars — backtest, optimize, scan, and auto-race across symbols before any deployment.</div>
 
             {/* ── Tabs ── */}
-            <div className="flex gap-2 mb-1 border-b border-slate-800">
+            <div className="flex gap-2 mb-1 border-b border-line-0">
                 {TABS.map(t => (
                     <button key={t.id} onClick={() => setMode(t.id)}
                         className={`flex items-center gap-2 px-5 py-2.5 rounded-t-lg text-sm font-semibold border border-b-0 transition-colors ${mode === t.id
-                            ? (t.id === 'auto' ? 'bg-amber-500/15 border-amber-600/60 text-amber-300' : 'bg-primary/15 border-primary/60 text-primary')
-                            : 'bg-slate-900/60 border-slate-800 text-slate-500 hover:text-slate-300'}`}>
+                            ? (t.id === 'auto' ? 'bg-amber-500/15 border-amber-600/60 text-amber-300' : 'bg-primary/15 border-primary/60 text-primary-ink')
+                            : 'bg-slate-900/60 border-line-0 text-fg-5 hover:text-fg-3'}`}>
                         <t.icon className="w-4 h-4" /> {t.label}
                     </button>
                 ))}
             </div>
-            <div className="text-[11px] text-slate-600 mb-4 pl-1">{TABS.find(t => t.id === mode)?.desc}</div>
+            <div className="text-2xs text-fg-6 mb-4 pl-1">{TABS.find(t => t.id === mode)?.desc}</div>
 
             {error && <div className="mb-4 p-2 bg-red-900/20 border border-red-700/50 rounded text-red-300 text-xs">{error}</div>}
 
             {/* ═══════════════ BACKTEST TAB ═══════════════ */}
+            {mode === 'builder' && <StrategyBuilder />}
+
             {mode === 'backtest' && (
                 <>
                     {TemplatePicker}
                     <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                         {SetupCard}
                         {PayoffCard}
-                        <div className="bg-surface rounded-xl border border-slate-700 p-4">
-                            <div className="text-sm font-semibold text-white mb-3">Run</div>
+                        <div className="bg-surface rounded-xl border border-line p-4">
+                            <div className="text-sm font-semibold text-fg mb-3">Run</div>
                             <div className="grid grid-cols-3 gap-2 text-xs mb-3">{DateRangeInputs}</div>
+                            {/* text-primary-ink, not text-primary, on a `bg-primary/<alpha>`
+                                wash. `--color-primary` is the brand FILL — one colour, tuned
+                                to carry white — so painting it as ink on a 10-30% wash of
+                                itself is asking one hex to be both figure and ground: it
+                                measured 2.04-4.01:1 across the 12 themes (3.55 on midnight,
+                                i.e. the shipping UI failed this too). `--color-primary-ink`
+                                is the same hue solved AGAINST that wash; worst case 4.97,
+                                counting the heavier hover/30 state. Plain `text-primary` on
+                                a card is fine and is deliberately left alone. */}
                             <button onClick={() => runBacktest()} disabled={running}
-                                className="w-full py-2 bg-primary/20 hover:bg-primary/30 border border-primary/50 text-primary rounded font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50">
+                                className="w-full py-2 bg-primary/20 hover:bg-primary/30 border border-primary/50 text-primary-ink rounded font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50">
                                 {running ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                                 {running ? 'Running…' : 'Run Backtest'}
                             </button>
-                            <div className="mt-3 pt-3 border-t border-slate-800">
-                                <div className="text-xs text-slate-400 font-semibold mb-1 flex items-center gap-1"><Save className="w-3.5 h-3.5" /> Save this configuration</div>
+                            <div className="mt-3 pt-3 border-t border-line-0">
+                                <div className="text-xs text-fg-4 font-semibold mb-1 flex items-center gap-1"><Save className="w-3.5 h-3.5" /> Save this configuration</div>
                                 <div className="flex gap-2">
                                     <input value={saveName} onChange={e => setSaveName(e.target.value)} placeholder="strategy name"
-                                        className="flex-1 bg-slate-800 border border-slate-700 rounded p-1.5 text-xs text-slate-200" />
+                                        className="flex-1 bg-slate-800 border border-line rounded p-1.5 text-xs text-fg-2" />
                                     <button onClick={saveStrategy}
                                         className="px-3 py-1.5 bg-sky-900/30 hover:bg-sky-900/50 border border-sky-700/50 text-sky-300 rounded text-xs font-semibold">
                                         Save
                                     </button>
                                 </div>
-                                <div className="text-[10px] text-slate-600 mt-1">{saveMsg || 'Saves template + all params + entry trigger to the DB — load or deploy it from the Deploy tab.'}</div>
+                                <div className="text-3xs text-fg-6 mt-1">{saveMsg || 'Saves template + all params + entry trigger to the DB — load or deploy it from the Deploy tab.'}</div>
                             </div>
                             {result?.metrics && (
                                 <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
@@ -1188,38 +1222,38 @@ export default function MultiLeg() {
 
                     {result?.trades?.length > 0 && (
                         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
-                            <div className="bg-surface rounded-xl border border-slate-700 p-4">
-                                <div className="text-sm font-semibold text-white mb-2">Equity (net, ₹)</div>
-                                <ResponsiveContainer width="100%" height={300}>
-                                    <LineChart data={equity}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                                        <XAxis dataKey="i" tick={{ fill: '#64748b', fontSize: 10 }} />
-                                        <YAxis tick={{ fill: '#64748b', fontSize: 10 }} />
-                                        <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155' }} />
-                                        <ReferenceLine y={0} stroke="#475569" />
-                                        <Line type="monotone" dataKey="equity" stroke="#34d399" dot={false} strokeWidth={2} />
+                            <div className="bg-surface rounded-xl border border-line p-4">
+                                <div className="text-sm font-semibold text-fg mb-2">Equity (net, ₹)</div>
+                                <ZoomableChart data={equity} height={300}>
+                                    <LineChart >
+                                        <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
+                                        <XAxis dataKey="i" tick={{ fill: ct.text.secondary, fontSize: ct.type['3xs'] }} />
+                                        <YAxis tick={{ fill: ct.text.secondary, fontSize: ct.type['3xs'] }} />
+                                        <Tooltip contentStyle={ct.tooltipStyle()} />
+                                        <ReferenceLine y={0} stroke={ct.axis} />
+                                        <Line type="monotone" dataKey="equity" stroke={ct.categorical[0]} dot={false} strokeWidth={2} />
                                     </LineChart>
-                                </ResponsiveContainer>
+                                </ZoomableChart>
                             </div>
-                            <div className="bg-surface rounded-xl border border-slate-700 p-4 overflow-x-auto">
-                                <div className="text-sm font-semibold text-white mb-2">Trades ({result.trades.length})</div>
-                                <div className="max-h-[340px] overflow-y-auto">
-                                    <table className="w-full text-[11px] text-slate-300">
-                                        <thead className="sticky top-0 bg-surface"><tr className="text-slate-500 text-left"><th>Entry</th><th>Exit</th><th>Hold</th><th>Reason</th><th className="text-right">Spot in→out</th><th className="text-right">Credit</th><th className="text-right" title="Position size actually taken. 'risk' basis = sized to risk_per_trade, so it varies per trade.">Lots</th><th className="text-right" title="Worst per-unit delta the structure carried at ANY point in its life. A 'neutral' structure that reaches 0.5+ was not neutral. Exit-time delta hides this because exits cluster at DTE 0 where the reading is dominated by terminal gamma.">Worst Δ/u</th><th className="text-right">Margin</th><th className="text-right">Net ₹</th></tr></thead>
+                            <div className="bg-surface rounded-xl border border-line p-4 overflow-x-auto">
+                                <div className="text-sm font-semibold text-fg mb-2">Trades ({result.trades.length})</div>
+                                <div className="max-h-[21.25rem] overflow-y-auto">
+                                    <table className="w-full text-2xs text-fg-3">
+                                        <thead className="sticky top-0 bg-surface"><tr className="text-fg-5 text-left"><th>Entry</th><th>Exit</th><th>Hold</th><th>Reason</th><th className="text-right">Spot in→out</th><th className="text-right">Credit</th><th className="text-right" title="Position size actually taken. 'risk' basis = sized to risk_per_trade, so it varies per trade.">Lots</th><th className="text-right" title="Worst per-unit delta the structure carried at ANY point in its life. A 'neutral' structure that reaches 0.5+ was not neutral. Exit-time delta hides this because exits cluster at DTE 0 where the reading is dominated by terminal gamma.">Worst Δ/u</th><th className="text-right">Margin</th><th className="text-right">Net ₹</th></tr></thead>
                                         <tbody>
                                             {result.trades.slice().reverse().map((t, i) => (
-                                                <tr key={i} className="border-t border-slate-800">
+                                                <tr key={i} className="border-t border-line-0">
                                                     <td title="IST">{istDateTime(t.entryTime)}</td>
                                                     <td title="IST">{istDateTime(t.exitTime)}</td>
                                                     <td>{t.holdDays}d</td>
-                                                    <td className="text-slate-400">{t.reason}</td>
-                                                    <td className="text-right text-slate-400">{fmt(t.spotEntry)}→{fmt(t.spotExit)}</td>
+                                                    <td className="text-fg-4">{t.reason}</td>
+                                                    <td className="text-right text-fg-4">{fmt(t.spotEntry)}→{fmt(t.spotExit)}</td>
                                                     <td className="text-right">₹{fmt(t.credit, 1)}</td>
-                                                    <td className="text-right text-slate-400">{t.lots ?? '—'}{t.sizeBasis === 'risk' ? <span className="text-sky-400" title={`risk-sized (worst case ₹${fmt(t.perLotRisk)}/lot)`}>*</span> : null}</td>
-                                                    <td className={`text-right ${t.maxAbsDeltaUnits >= 0.5 ? 'text-amber-300 font-semibold' : 'text-slate-500'}`}
+                                                    <td className="text-right text-fg-4">{t.lots ?? '—'}{t.sizeBasis === 'risk' ? <span className="text-sky-400" title={`risk-sized (worst case ₹${fmt(t.perLotRisk)}/lot)`}>*</span> : null}</td>
+                                                    <td className={`text-right ${t.maxAbsDeltaUnits >= 0.5 ? 'text-amber-300 font-semibold' : 'text-fg-5'}`}
                                                         title={t.greeks ? `at exit: Δ₹${fmt(t.greeks.delta,1)}/pt · V₹${fmt(t.greeks.vega,1)}/IVpt · Θ₹${fmt(t.greeks.theta,1)}/day` : ''}>
                                                         {t.maxAbsDeltaUnits != null ? fmt(t.maxAbsDeltaUnits, 2) : '—'}</td>
-                                                    <td className="text-right text-slate-500">₹{fmt(t.margin)}</td>
+                                                    <td className="text-right text-fg-5">₹{fmt(t.margin)}</td>
                                                     <td className={`text-right font-semibold ${t.netPnl > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(t.netPnl)}</td>
                                                 </tr>
                                             ))}
@@ -1239,15 +1273,15 @@ export default function MultiLeg() {
                     <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                         {SetupCard}
                         {PayoffCard}
-                        <div className="bg-surface rounded-xl border border-slate-700 p-4">
-                            <div className="text-sm font-semibold text-white mb-3">Sweep configuration</div>
+                        <div className="bg-surface rounded-xl border border-line p-4">
+                            <div className="text-sm font-semibold text-fg mb-3">Sweep configuration</div>
                             <div className="grid grid-cols-3 gap-2 text-xs mb-3">{DateRangeInputs}</div>
                             <div className="grid grid-cols-2 gap-2 text-xs mb-3">{RankingInputs}</div>
                             <div className="grid grid-cols-2 gap-2 text-xs mb-3">
-                                <label className="text-slate-400">Max combos
+                                <label className="text-fg-4">Max combos
                                     <input type="number" value={sweepCap} min={10} max={1000} onChange={e => setSweepCap(Number(e.target.value) || 300)} className={inputCls} />
                                 </label>
-                                <label className="text-slate-400">Show top
+                                <label className="text-fg-4">Show top
                                     <select value={sweepTopN} onChange={e => setSweepTopN(Number(e.target.value))} className={inputCls}>
                                         <option value={25}>25 results</option>
                                         <option value={50}>50 results</option>
@@ -1255,16 +1289,16 @@ export default function MultiLeg() {
                                     </select>
                                 </label>
                             </div>
-                            <label className="flex items-center gap-2 text-xs text-slate-400 mb-2">
+                            <label className="flex items-center gap-2 text-xs text-fg-4 mb-2">
                                 <input type="checkbox" checked={refine} onChange={e => setRefine(e.target.checked)} />
                                 Round 2: refine around the leader (midpoint grid)
                             </label>
-                            <label className="text-xs text-slate-400 block mb-3">Grid (JSON — arrays expand; edited Setup params apply under every combo)
+                            <label className="text-xs text-fg-4 block mb-3">Grid (JSON — arrays expand; edited Setup params apply under every combo)
                                 <textarea value={gridText} onChange={e => setGridText(e.target.value)} rows={7}
-                                    className="w-full mt-1 bg-slate-800 border border-slate-700 rounded p-2 font-mono text-[11px] text-slate-200" />
+                                    className="w-full mt-1 bg-slate-800 border border-line rounded p-2 font-mono text-2xs text-fg-2" />
                             </label>
                             <button onClick={runSweep} disabled={running}
-                                className="w-full py-2 bg-primary/20 hover:bg-primary/30 border border-primary/50 text-primary rounded font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50">
+                                className="w-full py-2 bg-primary/20 hover:bg-primary/30 border border-primary/50 text-primary-ink rounded font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50">
                                 {running ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FlaskConical className="w-4 h-4" />}
                                 {running ? 'Running…' : 'Run Sweep'}
                             </button>
@@ -1272,13 +1306,13 @@ export default function MultiLeg() {
                     </div>
 
                     {sweep?.top && (
-                        <div className="bg-surface rounded-xl border border-slate-700 p-4 mt-4 overflow-x-auto">
-                            <div className="text-sm font-semibold text-white mb-1">
+                        <div className="bg-surface rounded-xl border border-line p-4 mt-4 overflow-x-auto">
+                            <div className="text-sm font-semibold text-fg mb-1">
                                 Sweep — {sweep.combos} combos over {sweep.rounds} round{sweep.rounds > 1 ? 's' : ''} ({(sweep.combosPerRound || []).join(' + ')}), ranked by {sweep.split > 0 ? 'VALIDATION' : 'full-period'} {METRICS.find(m => m.v === sweep.metric)?.label}
                             </div>
-                            {sweep.window && <div className="text-[11px] text-slate-500 mb-2">Train {sweep.window.trainDays}d → validate on the last {sweep.window.valDays}d (out-of-sample). Distrust combos whose train ≫ validation.</div>}
-                            <table className="w-full text-[11px] text-slate-300">
-                                <thead><tr className="text-slate-500 text-left">
+                            {sweep.window && <div className="text-2xs text-fg-5 mb-2">Train {sweep.window.trainDays}d → validate on the last {sweep.window.valDays}d (out-of-sample). Distrust combos whose train ≫ validation.</div>}
+                            <table className="w-full text-2xs text-fg-3">
+                                <thead><tr className="text-fg-5 text-left">
                                     <th>#</th><th>Params (grid part)</th>
                                     {sweep.split > 0 ? (<><th className="text-right">Val n</th><th className="text-right">Val win%</th><th className="text-right">Val net ₹</th><th className="text-right">Val PF</th><th className="text-right">Val Sharpe</th><th className="text-right">Val ROI%</th><th className="text-right">Train net ₹</th></>)
                                         : (<><th className="text-right">n</th><th className="text-right">Win%</th><th className="text-right">Net ₹</th><th className="text-right">PF</th><th className="text-right">Sharpe</th><th className="text-right">ROI%</th><th className="text-right">MaxDD</th></>)}
@@ -1288,9 +1322,9 @@ export default function MultiLeg() {
                                     {sweep.top.map((r, i) => {
                                         const v = r.val || r.metrics, tr = r.train;
                                         return (
-                                            <tr key={i} className="border-t border-slate-800 hover:bg-slate-800/40">
-                                                <td className="text-slate-500">{i + 1}</td>
-                                                <td className="font-mono text-[10px] text-slate-400">{JSON.stringify(r.params)}</td>
+                                            <tr key={i} className="border-t border-line-0 hover:bg-slate-800/40">
+                                                <td className="text-fg-5">{i + 1}</td>
+                                                <td className="font-mono text-3xs text-fg-4">{JSON.stringify(r.params)}</td>
                                                 <td className="text-right">{M(v, 'n')}</td>
                                                 <td className="text-right">{M(v, 'winRate')}</td>
                                                 <td className={`text-right font-semibold ${(v?.netPnl ?? 0) > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(v?.netPnl)}</td>
@@ -1318,20 +1352,20 @@ export default function MultiLeg() {
             {/* ═══════════════ SCAN TAB ═══════════════ */}
             {mode === 'scan' && (
                 <>
-                    <div className="bg-surface rounded-xl border border-slate-700 p-4 mb-4">
-                        <div className="text-sm font-semibold text-white mb-3">Scan configuration — every structure at its defaults, one leaderboard</div>
+                    <div className="bg-surface rounded-xl border border-line p-4 mb-4">
+                        <div className="text-sm font-semibold text-fg mb-3">Scan configuration — every structure at its defaults, one leaderboard</div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                             <div>
-                                <div className="text-slate-400 mb-1">Structures</div>
+                                <div className="text-fg-4 mb-1">Structures</div>
                                 {OutlookChips}
-                                <div className="text-slate-400 mb-1 mt-3">Symbols (≤6)</div>
+                                <div className="text-fg-4 mb-1 mt-3">Symbols (≤6)</div>
                                 {SymbolChips(6)}
                             </div>
                             <div>
                                 <div className="grid grid-cols-3 gap-2 mb-2">{DateRangeInputs}</div>
                                 <div className="grid grid-cols-2 gap-2 mb-3">{RankingInputs}</div>
                                 <button onClick={runScan} disabled={running}
-                                    className="w-full py-2 bg-primary/20 hover:bg-primary/30 border border-primary/50 text-primary rounded font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50">
+                                    className="w-full py-2 bg-primary/20 hover:bg-primary/30 border border-primary/50 text-primary-ink rounded font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50">
                                     {running ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Radar className="w-4 h-4" />}
                                     {running ? 'Running…' : `Scan ${scanOutlook === 'all' ? templates.length : scanOutlook} × ${scanSymbols.length} symbols`}
                                 </button>
@@ -1340,13 +1374,13 @@ export default function MultiLeg() {
                     </div>
 
                     {scan?.rows && (
-                        <div className="bg-surface rounded-xl border border-slate-700 p-4 overflow-x-auto">
-                            <div className="text-sm font-semibold text-white mb-1">
+                        <div className="bg-surface rounded-xl border border-line p-4 overflow-x-auto">
+                            <div className="text-sm font-semibold text-fg mb-1">
                                 Scan — {scan.templatesScanned} structures × {scan.symbolsScanned} symbols, ranked by {scan.split > 0 ? 'VALIDATION' : 'full-period'} {METRICS.find(m => m.v === scan.metric)?.label}
                             </div>
-                            <div className="text-[11px] text-slate-500 mb-2">All at template defaults — ▶ Test runs the full backtest, ⚙ Tune opens it in the Optimizer.</div>
-                            <table className="w-full text-[11px] text-slate-300">
-                                <thead><tr className="text-slate-500 text-left">
+                            <div className="text-2xs text-fg-5 mb-2">All at template defaults — ▶ Test runs the full backtest, ⚙ Tune opens it in the Optimizer.</div>
+                            <table className="w-full text-2xs text-fg-3">
+                                <thead><tr className="text-fg-5 text-left">
                                     <th>#</th><th>Structure</th><th>Outlook</th><th>Symbol</th>
                                     <th className="text-right">{scan.split > 0 ? 'Val n' : 'n'}</th>
                                     <th className="text-right">Win%</th><th className="text-right">Net ₹</th><th className="text-right">PF</th>
@@ -1358,8 +1392,8 @@ export default function MultiLeg() {
                                     {scan.rows.filter(r => !r.error).slice(0, 60).map((r, i) => {
                                         const v = r.val || r.metrics;
                                         return (
-                                            <tr key={i} className="border-t border-slate-800 hover:bg-slate-800/40">
-                                                <td className="text-slate-500">{i + 1}</td>
+                                            <tr key={i} className="border-t border-line-0 hover:bg-slate-800/40">
+                                                <td className="text-fg-5">{i + 1}</td>
                                                 <td>{r.name || r.template}</td>
                                                 <td className={`${(OUTLOOK_COLORS[r.outlook] || '').split(' ')[0]}`}>{r.outlook}</td>
                                                 <td>{shortSym(r.symbol)}</td>
@@ -1368,7 +1402,7 @@ export default function MultiLeg() {
                                                 <td className={`text-right font-semibold ${(v?.netPnl ?? 0) > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(v?.netPnl)}</td>
                                                 <td className="text-right">{M(v, 'profitFactor')}</td>
                                                 <td className="text-right">{v?.roiOnMarginPct != null ? `${v.roiOnMarginPct}%` : '—'}</td>
-                                                {scan.split > 0 && <td className="text-right text-slate-400">₹{fmt(r.train?.netPnl)}</td>}
+                                                {scan.split > 0 && <td className="text-right text-fg-4">₹{fmt(r.train?.netPnl)}</td>}
                                                 <td className="text-right whitespace-nowrap">
                                                     <button onClick={() => runBacktestFor(r.template, r.symbol)} disabled={running}
                                                         className="px-2 py-0.5 mr-1 rounded border border-emerald-700/50 bg-emerald-900/20 text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-40"
@@ -1396,24 +1430,24 @@ export default function MultiLeg() {
                 <>
                     <div className="bg-surface rounded-xl border border-amber-700/30 p-4 mb-4">
                         <div className="text-sm font-semibold text-amber-300 mb-1 flex items-center gap-2"><Zap className="w-4 h-4" /> Auto-Optimize — the full race</div>
-                        <div className="text-xs text-slate-400 mb-3">Every selected strategy (own params, random-searched) × {scanOutlook === 'all' ? 'all' : scanOutlook} structures × symbols → structure sweep + refine → OOS-ranked champions{autoAi ? ' → AI-validated' : ''}. Runs on all CPU cores.</div>
+                        <div className="text-xs text-fg-4 mb-3">Every selected strategy (own params, random-searched) × {scanOutlook === 'all' ? 'all' : scanOutlook} structures × symbols → structure sweep + refine → OOS-ranked champions{autoAi ? ' → AI-validated' : ''}. Runs on all CPU cores.</div>
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 text-xs">
                             <div>
-                                <div className="text-slate-400 mb-1 font-semibold">Structures</div>
+                                <div className="text-fg-4 mb-1 font-semibold">Structures</div>
                                 {OutlookChips}
-                                <div className="text-slate-400 mb-1 mt-3 font-semibold">Symbols (≤4)</div>
+                                <div className="text-fg-4 mb-1 mt-3 font-semibold">Symbols (≤4)</div>
                                 {SymbolChips(4)}
-                                <div className="text-slate-400 mb-1 mt-3 font-semibold">Signal strategies ({autoStrategies.length ? `${autoStrategies.length} selected` : 'all optimizable'})</div>
+                                <div className="text-fg-4 mb-1 mt-3 font-semibold">Signal strategies ({autoStrategies.length ? `${autoStrategies.length} selected` : 'all optimizable'})</div>
                                 <div className="flex gap-1 flex-wrap max-h-28 overflow-y-auto">
                                     <button onClick={() => setAutoStrategies([])}
-                                        className={`px-2 py-1 rounded border text-[11px] ${!autoStrategies.length ? 'bg-primary/20 border-primary text-primary' : 'bg-slate-800 border-slate-700 text-slate-400'}`}>
+                                        className={`px-2 py-1 rounded border text-2xs ${!autoStrategies.length ? 'bg-primary/20 border-primary text-primary-ink' : 'bg-slate-800 border-line text-fg-4'}`}>
                                         All
                                     </button>
                                     {strategies.map(s => (
                                         <button key={s.id}
                                             onClick={() => setAutoStrategies(prev => prev.includes(s.id) ? prev.filter(x => x !== s.id) : [...prev, s.id])}
                                             title={s.reason || s.label}
-                                            className={`px-2 py-1 rounded border text-[11px] ${autoStrategies.includes(s.id) ? 'bg-primary/20 border-primary text-primary' : 'bg-slate-800 border-slate-700 text-slate-400'}`}>
+                                            className={`px-2 py-1 rounded border text-2xs ${autoStrategies.includes(s.id) ? 'bg-primary/20 border-primary text-primary-ink' : 'bg-slate-800 border-line text-fg-4'}`}>
                                             {s.label || s.id}
                                         </button>
                                     ))}
@@ -1423,7 +1457,7 @@ export default function MultiLeg() {
                                 <div className="grid grid-cols-3 gap-2 mb-2">{DateRangeInputs}</div>
                                 <div className="grid grid-cols-2 gap-2 mb-2">{RankingInputs}</div>
                                 <div className="grid grid-cols-2 gap-2">
-                                    <label className="text-slate-400">Budget level
+                                    <label className="text-fg-4">Budget level
                                         <select value={budgetLevel} onChange={e => { setBudgetLevel(Number(e.target.value)); setBudgetCustom({}); }} className={inputCls}>
                                             {Array.from({ length: 20 }, (_, i) => i + 1).map(L => (
                                                 <option key={L} value={L}>
@@ -1432,39 +1466,39 @@ export default function MultiLeg() {
                                             ))}
                                         </select>
                                     </label>
-                                    <label className="text-slate-400">Entries
+                                    <label className="text-fg-4">Entries
                                         <select value={autoEntryStyle} onChange={e => setAutoEntryStyle(e.target.value)} className={inputCls}>
                                             <option value="both">Signals + time-based neutrals</option>
                                             <option value="signal-only">Strategy signals ONLY</option>
                                         </select>
                                     </label>
                                 </div>
-                                <div className="mt-2 text-[11px] text-slate-500">
+                                <div className="mt-2 text-2xs text-fg-5">
                                     ≈ {fmt(autoEstimate.total)} backtests · est. {autoEstimate.dur}
                                     {budgetLevel >= 15 && <span className="text-amber-400"> · survives refresh (re-attach below); a server redeploy interrupts it</span>}
                                 </div>
-                                <button onClick={() => setBudgetAdv(v => !v)} className="mt-1 text-[11px] text-sky-400 hover:text-sky-300">
+                                <button onClick={() => setBudgetAdv(v => !v)} className="mt-1 text-2xs text-sky-400 hover:text-sky-300">
                                     {budgetAdv ? '▾ Hide advanced budget' : '▸ Advanced budget (edit every number)'}
                                 </button>
                                 {budgetAdv && (
                                     <div className="grid grid-cols-2 gap-2 mt-2">
                                         {Object.keys(effBudget).map(k => (
-                                            <label key={k} className="text-slate-500" title={BUDGET_HELP[k] || k}>{k}
+                                            <label key={k} className="text-fg-5" title={BUDGET_HELP[k] || k}>{k}
                                                 <input type="number" value={effBudget[k]}
                                                     onChange={e => setBudgetCustom(c => ({ ...c, [k]: Number(e.target.value) || 0 }))}
-                                                    className="w-full mt-0.5 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                                                    className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                                             </label>
                                         ))}
                                     </div>
                                 )}
                             </div>
                             <div>
-                                <label className="text-slate-400 flex items-center gap-2 mb-2">
+                                <label className="text-fg-4 flex items-center gap-2 mb-2">
                                     <input type="checkbox" checked={autoAi} onChange={e => setAutoAi(e.target.checked)} />
                                     AI-validate champions (replays each entry through the AI confirm gate)
                                 </label>
                                 {autoAi && (
-                                    <label className="text-slate-400 block mb-2">AI confidence threshold
+                                    <label className="text-fg-4 block mb-2">AI confidence threshold
                                         <input type="number" step="0.05" min="0.3" max="0.9" value={aiThreshold}
                                             onChange={e => setAiThreshold(Number(e.target.value) || 0.6)} className={inputCls} />
                                     </label>
@@ -1478,7 +1512,7 @@ export default function MultiLeg() {
                                     <div className="grid grid-cols-2 gap-2 mt-2">
                                         <button onClick={() => pauseJob({ jobId: autoJob.jobId })}
                                             title="Stop now but keep the checkpoint — Resume continues from where it stopped"
-                                            className="py-1.5 bg-slate-800 border border-slate-600 text-slate-200 rounded text-xs flex items-center justify-center gap-1">
+                                            className="py-1.5 bg-slate-800 border border-line-2 text-fg-2 rounded text-xs flex items-center justify-center gap-1">
                                             <Pause className="w-3 h-3" /> Pause
                                         </button>
                                         <button onClick={cancelAuto} className="py-1.5 bg-red-900/20 border border-red-700/50 text-red-300 rounded text-xs">Cancel run</button>
@@ -1486,7 +1520,7 @@ export default function MultiLeg() {
                                 )}
                                 {autoState && (
                                     <div className="mt-3 text-xs">
-                                        <div className="flex justify-between text-slate-400 mb-1">
+                                        <div className="flex justify-between text-fg-4 mb-1">
                                             <span>Stage {autoState.progress?.stage || 0}/4 — {autoState.progress?.note || autoState.status}</span>
                                             <span>{autoState.workers ? `${autoState.workers} cores · ` : ''}{autoState.progress?.pct ?? 0}%</span>
                                         </div>
@@ -1505,19 +1539,19 @@ export default function MultiLeg() {
                                                 {autoState.error}
                                                 {autoState.checkpoint?.stage
                                                     ? <span className="block text-sky-300/80">Resumable from stage {autoState.checkpoint.stage} — the server retries this by itself; use Resume to do it now.</span>
-                                                    : <span className="block text-slate-500">No checkpoint yet — this run can only be started fresh.</span>}
+                                                    : <span className="block text-fg-5">No checkpoint yet — this run can only be started fresh.</span>}
                                             </div>
                                         )}
                                         {autoState.status === 'paused' && (
-                                            <div className="mt-2 text-slate-300">
+                                            <div className="mt-2 text-fg-3">
                                                 Paused by you — it will NOT auto-resume.
                                                 {autoState.checkpoint?.stage
                                                     ? <span className="text-emerald-300/90"> Resume continues from stage {autoState.checkpoint.stage}.</span>
-                                                    : <span className="text-slate-500"> No checkpoint was written — only a fresh start is possible.</span>}
+                                                    : <span className="text-fg-5"> No checkpoint was written — only a fresh start is possible.</span>}
                                             </div>
                                         )}
                                         {autoState.status === 'done' && autoState.result?.stages && (
-                                            <div className="mt-2 text-slate-500">
+                                            <div className="mt-2 text-fg-5">
                                                 {autoState.result.stages.map(s => s.stage === 4
                                                     ? `S4 ${s.name}: ${s.combos ?? 0} champions full-tested${s.aiCalls ? ` · ${s.aiCalls} AI calls` : ''}`
                                                     : `S${s.stage} ${s.name}: ${s.combos ?? 0} combos → kept ${s.kept ?? 0}`).join(' · ')}
@@ -1531,37 +1565,37 @@ export default function MultiLeg() {
                     </div>
 
                     {autoJobs.length > 0 && (
-                        <div className="bg-surface rounded-xl border border-slate-700 p-3 mb-4">
+                        <div className="bg-surface rounded-xl border border-line p-3 mb-4">
                             <div className="flex items-center justify-between mb-2">
-                                <div className="text-xs font-semibold text-white">Recent runs (persisted — re-attach after a refresh)</div>
+                                <div className="text-xs font-semibold text-fg">Recent runs (persisted — re-attach after a refresh)</div>
                                 <div className="flex items-center gap-2">
-                                    <span className="text-[10px] text-slate-600 hidden sm:inline" title="A run that dies on its own (server restart or an error) is restarted from its last checkpoint. A run YOU pause is never restarted automatically.">
+                                    <span className="text-3xs text-fg-6 hidden sm:inline" title="A run that dies on its own (server restart or an error) is restarted from its last checkpoint. A run YOU pause is never restarted automatically.">
                                         crash → auto-resume · paused → stays paused
                                     </span>
                                     {autoJobs.some(j => j.status !== 'running') && (
                                         <button onClick={clearFinishedJobs} disabled={!!pending.deljobs}
-                                            className="px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-[10px] text-slate-400 hover:text-red-300 disabled:opacity-40">
+                                            className="px-2 py-0.5 rounded border border-line bg-slate-800 text-3xs text-fg-4 hover:text-red-300 disabled:opacity-40">
                                             Clear finished
                                         </button>
                                     )}
                                 </div>
                             </div>
-                            <div className="space-y-1 text-[11px]">
+                            <div className="space-y-1 text-2xs">
                                 {autoJobs.map(j => {
                                     const cp = j.checkpoint || {};
                                     const canResume = !!cp.stage && j.status !== 'running' && j.status !== 'done';
                                     return (
-                                    <div key={j.jobId} className="flex items-center gap-2 border-b border-slate-800/60 pb-1">
-                                        <span className={`px-1.5 py-0.5 rounded border text-[10px] ${j.status === 'running' ? 'border-amber-600 text-amber-300' : j.status === 'done' ? 'border-emerald-700 text-emerald-300' : j.status === 'paused' ? 'border-slate-500 text-slate-300' : 'border-red-800 text-red-400'}`}>{j.status}</span>
-                                        <span className="text-slate-500" title="IST">{istDateTime(j.startedAt)}</span>
-                                        <span className="text-slate-400 flex-1 truncate">
+                                    <div key={j.jobId} className="flex items-center gap-2 border-b border-line-0/60 pb-1">
+                                        <span className={`px-1.5 py-0.5 rounded border text-3xs ${j.status === 'running' ? 'border-amber-600 text-amber-300' : j.status === 'done' ? 'border-emerald-700 text-emerald-300' : j.status === 'paused' ? 'border-line-3 text-fg-3' : 'border-red-800 text-red-400'}`}>{j.status}</span>
+                                        <span className="text-fg-5" title="IST">{istDateTime(j.startedAt)}</span>
+                                        <span className="text-fg-4 flex-1 truncate">
                                             {(j.request?.symbols || []).map(shortSym).join('+')} · {j.request?.strategies ?? '?'} strategies · {j.request?.entry_style || 'both'}
                                             {j.status === 'running' && j.progress?.note ? ` — ${j.progress.note}` : ''}
                                             {j.status !== 'running' && j.status !== 'done' && cp.stage ? (
                                                 cp.phase === 'partial'
                                                     ? ` — checkpoint mid-stage ${cp.stage}${cp.cursor ? ` (${cp.cursor} done)` : ''}`
                                                     : ` — checkpoint after stage ${cp.stage}`) : ''}
-                                            {j.status === 'paused' && <span className="text-slate-500"> · paused by you (no auto-resume)</span>}
+                                            {j.status === 'paused' && <span className="text-fg-5"> · paused by you (no auto-resume)</span>}
                                             {j.autoResumeCount > 0 && <span className="text-sky-400/80" title="Times the server restarted this run by itself"> · auto-resumed ×{j.autoResumeCount}</span>}
                                         </span>
                                         {autoJob?.jobId !== j.jobId && ['running', 'done'].includes(j.status) && (
@@ -1572,7 +1606,7 @@ export default function MultiLeg() {
                                         )}
                                         {j.status === 'running' && (
                                             <button onClick={() => pauseJob(j)} title="Stop now, keep the checkpoint — and don't auto-resume it"
-                                                className="px-2 py-0.5 rounded border border-slate-600 bg-slate-800 text-slate-300 hover:text-white flex items-center gap-1">
+                                                className="px-2 py-0.5 rounded border border-line-2 bg-slate-800 text-fg-3 hover:text-fg flex items-center gap-1">
                                                 <Pause className="w-3 h-3" /> Pause
                                             </button>
                                         )}
@@ -1584,7 +1618,7 @@ export default function MultiLeg() {
                                         )}
                                         <button onClick={() => deleteJob(j)} disabled={!!pending[`deljob:${j.jobId}`]}
                                             title={j.status === 'running' ? 'Kill this run and delete the record' : 'Delete this record (checkpoint + results)'}
-                                            className="px-1.5 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-500 hover:text-red-300 hover:border-red-800 disabled:opacity-40">
+                                            className="px-1.5 py-0.5 rounded border border-line bg-slate-800 text-fg-5 hover:text-red-300 hover:border-red-800 disabled:opacity-40">
                                             <Trash2 className="w-3 h-3" />
                                         </button>
                                     </div>
@@ -1598,22 +1632,22 @@ export default function MultiLeg() {
                         <div>
                             <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                                 {autoState.result.champions.map((ch, i) => (
-                                    <div key={i} className={`bg-surface rounded-xl border p-4 ${i === 0 ? 'border-amber-500/60' : 'border-slate-700'}`}>
+                                    <div key={i} className={`bg-surface rounded-xl border p-4 ${i === 0 ? 'border-amber-500/60' : 'border-line'}`}>
                                         <div className="flex items-center justify-between mb-1">
-                                            <div className="text-sm font-semibold text-white">{i === 0 ? '🏆 ' : `#${i + 1} `}{ch.name}</div>
-                                            <span className={`text-[10px] px-2 py-0.5 rounded border ${OUTLOOK_COLORS[ch.outlook] || 'border-slate-700 text-slate-400'}`}>{ch.outlook}</span>
+                                            <div className="text-sm font-semibold text-fg">{i === 0 ? '🏆 ' : `#${i + 1} `}{ch.name}</div>
+                                            <span className={`text-3xs px-2 py-0.5 rounded border ${OUTLOOK_COLORS[ch.outlook] || 'border-line text-fg-4'}`}>{ch.outlook}</span>
                                         </div>
-                                        <div className="text-xs text-slate-400 mb-2">
+                                        <div className="text-xs text-fg-4 mb-2">
                                             {shortSym(ch.symbol)} · {ch.signal_strategy ? `signal: ${ch.signal_strategy}` : 'time-based entries'}
                                         </div>
                                         {ch.robustness && (
-                                            <div className={`text-[11px] mb-2 px-2 py-1 rounded border ${ch.robustness.robust === true ? 'text-emerald-300 border-emerald-800/50 bg-emerald-950/20' : ch.robustness.robust === false ? 'text-red-300 border-red-800/50 bg-red-950/20' : 'text-slate-400 border-slate-700 bg-slate-800/30'}`}
+                                            <div className={`text-2xs mb-2 px-2 py-1 rounded border ${ch.robustness.robust === true ? 'text-emerald-300 border-emerald-800/50 bg-emerald-950/20' : ch.robustness.robust === false ? 'text-red-300 border-red-800/50 bg-red-950/20' : 'text-fg-4 border-line bg-slate-800/30'}`}
                                                 title="Automatic out-of-sample check: how the validation-window metric held up vs the train window.">
                                                 {ch.robustness.robust === true ? '✓ Holds OOS' : ch.robustness.robust === false ? '⚠ Overfit risk' : 'OOS unknown'}
                                                 {ch.robustness.ratio != null ? ` · val/train ${ch.robustness.ratio}` : ''} — {ch.robustness.note}
                                             </div>
                                         )}
-                                        <div className="grid grid-cols-3 gap-1 text-[11px] mb-2">
+                                        <div className="grid grid-cols-3 gap-1 text-2xs mb-2">
                                             <Tile label="Val net" help="oos-validation" value={`₹${fmt(ch.val?.netPnl)}`} good={ch.val?.netPnl > 0} bad={ch.val?.netPnl < 0} />
                                             <Tile label="Train net" value={`₹${fmt(ch.train?.netPnl)}`} good={ch.train?.netPnl > 0} bad={ch.train?.netPnl < 0} />
                                             <Tile label="Full net" value={`₹${fmt(ch.full?.netPnl)}`} good={ch.full?.netPnl > 0} bad={ch.full?.netPnl < 0} />
@@ -1622,38 +1656,38 @@ export default function MultiLeg() {
                                             <Tile label="ROI/margin" help="roi-on-margin" value={ch.full?.roiOnMarginPct != null ? `${ch.full.roiOnMarginPct}%` : '—'} />
                                         </div>
                                         {ch.withAi && (
-                                            <div className="text-[11px] mb-2 p-2 rounded bg-violet-900/20 border border-violet-700/40 text-violet-200">
+                                            <div className="text-2xs mb-2 p-2 rounded bg-violet-900/20 border border-violet-700/40 text-violet-200">
                                                 🧠 With AI gate: net ₹{fmt(ch.withAi.netPnl)} over {ch.withAi.n} trades
                                                 ({ch.aiStats?.permitted}/{ch.aiStats?.candidates} entries permitted, {ch.aiStats?.calls} calls)
                                                 {ch.full && ch.withAi.netPnl > ch.full.netPnl ? ' — AI improved it' : ' — AI filtered it down'}
                                             </div>
                                         )}
-                                        {ch.signal_params && <div className="text-[10px] font-mono text-slate-500 break-all mb-1">signal: {JSON.stringify(ch.signal_params)}</div>}
-                                        {ch.structure_params && <div className="text-[10px] font-mono text-slate-500 break-all mb-2">structure: {JSON.stringify(ch.structure_params)}</div>}
+                                        {ch.signal_params && <div className="text-3xs font-mono text-fg-5 break-all mb-1">signal: {JSON.stringify(ch.signal_params)}</div>}
+                                        {ch.structure_params && <div className="text-3xs font-mono text-fg-5 break-all mb-2">structure: {JSON.stringify(ch.structure_params)}</div>}
                                         <button onClick={() => loadChampion(ch)}
-                                            className="w-full py-1.5 bg-primary/15 hover:bg-primary/25 border border-primary/40 text-primary rounded text-xs font-semibold">
+                                            className="w-full py-1.5 bg-primary/15 hover:bg-primary/25 border border-primary/40 text-primary-ink rounded text-xs font-semibold">
                                             Load config → Backtest
                                         </button>
                                     </div>
                                 ))}
                             </div>
                             {autoState.result.leaderboard?.length > 0 && (
-                                <div className="bg-surface rounded-xl border border-slate-700 p-4 mt-4 overflow-x-auto">
-                                    <div className="text-sm font-semibold text-white mb-2">Full leaderboard (stage-3 survivors)</div>
-                                    <table className="w-full text-[11px] text-slate-300">
-                                        <thead><tr className="text-slate-500 text-left"><th>#</th><th>Structure</th><th>Symbol</th><th>Signal</th><th className="text-right">Val net ₹</th><th className="text-right">Val PF</th><th className="text-right">Val win%</th><th className="text-right">Train net ₹</th><th className="text-right">OOS</th></tr></thead>
+                                <div className="bg-surface rounded-xl border border-line p-4 mt-4 overflow-x-auto">
+                                    <div className="text-sm font-semibold text-fg mb-2">Full leaderboard (stage-3 survivors)</div>
+                                    <table className="w-full text-2xs text-fg-3">
+                                        <thead><tr className="text-fg-5 text-left"><th>#</th><th>Structure</th><th>Symbol</th><th>Signal</th><th className="text-right">Val net ₹</th><th className="text-right">Val PF</th><th className="text-right">Val win%</th><th className="text-right">Train net ₹</th><th className="text-right">OOS</th></tr></thead>
                                         <tbody>
                                             {autoState.result.leaderboard.map((r, i) => (
-                                                <tr key={i} className="border-t border-slate-800">
-                                                    <td className="text-slate-500">{i + 1}</td>
+                                                <tr key={i} className="border-t border-line-0">
+                                                    <td className="text-fg-5">{i + 1}</td>
                                                     <td>{r.name || r.template}</td>
                                                     <td>{shortSym(r.symbol)}</td>
-                                                    <td className="text-slate-400">{r.signal_strategy || 'time'}</td>
+                                                    <td className="text-fg-4">{r.signal_strategy || 'time'}</td>
                                                     <td className={`text-right font-semibold ${(r.val?.netPnl ?? 0) > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(r.val?.netPnl)}</td>
                                                     <td className="text-right">{r.val?.profitFactor === Infinity ? '∞' : r.val?.profitFactor ?? '—'}</td>
                                                     <td className="text-right">{r.val?.winRate ?? '—'}</td>
-                                                    <td className="text-right text-slate-400">₹{fmt(r.train?.netPnl)}</td>
-                                                    <td className="text-right" title={r.robustness?.note || ''}>{r.robustness?.robust === true ? <span className="text-emerald-400">✓</span> : r.robustness?.robust === false ? <span className="text-red-400">⚠</span> : <span className="text-slate-600">—</span>}</td>
+                                                    <td className="text-right text-fg-4">₹{fmt(r.train?.netPnl)}</td>
+                                                    <td className="text-right" title={r.robustness?.note || ''}>{r.robustness?.robust === true ? <span className="text-emerald-400">✓</span> : r.robustness?.robust === false ? <span className="text-red-400">⚠</span> : <span className="text-fg-6">—</span>}</td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -1668,20 +1702,20 @@ export default function MultiLeg() {
             {/* ═══════════════ DEPLOY TAB ═══════════════ */}
             {mode === 'deploy' && (
                 <>
-                    <div className="bg-surface rounded-xl border border-slate-700 p-4 mb-4">
+                    <div className="bg-surface rounded-xl border border-line p-4 mb-4">
                         <div className="flex items-center justify-between mb-2">
-                            <div className="text-sm font-semibold text-white flex items-center gap-2"><Save className="w-4 h-4 text-sky-400" /> Saved strategies ({savedList.length})</div>
-                            <label className="text-xs text-slate-400 flex items-center gap-2">Deploy lots
+                            <div className="text-sm font-semibold text-fg flex items-center gap-2"><Save className="w-4 h-4 text-sky-400" /> Saved strategies ({savedList.length})</div>
+                            <label className="text-xs text-fg-4 flex items-center gap-2">Deploy lots
                                 <input type="number" min={1} value={deployLots} onChange={e => setDeployLots(Math.max(1, Number(e.target.value) || 1))}
-                                    className="w-16 bg-slate-800 border border-slate-700 rounded p-1 text-slate-200" />
+                                    className="w-16 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                             </label>
                         </div>
                         {savedList.length === 0 ? (
-                            <div className="text-xs text-slate-500 py-4 text-center">Nothing saved yet — run a backtest on the Backtest tab and hit Save.</div>
+                            <div className="text-xs text-fg-5 py-4 text-center">Nothing saved yet — run a backtest on the Backtest tab and hit Save.</div>
                         ) : (
                             <div className="overflow-x-auto">
-                                <table className="w-full text-[11px] text-slate-300">
-                                    <thead><tr className="text-slate-500 text-left">
+                                <table className="w-full text-2xs text-fg-3">
+                                    <thead><tr className="text-fg-5 text-left">
                                         <th>Name</th><th>Structure</th><th>Symbol</th><th>Entry</th>
                                         <th className="text-right">BT net ₹</th><th className="text-right">BT win%</th><th className="text-right">BT PF</th><th className="text-right">BT n</th>
                                         <th className="text-right">Actions</th>
@@ -1692,18 +1726,18 @@ export default function MultiLeg() {
                                             const isOpen = savedDetail === s._id;
                                             return (
                                             <React.Fragment key={s._id}>
-                                            <tr className="border-t border-slate-800 hover:bg-slate-800/40">
-                                                <td className="font-semibold text-slate-200">{s.name}</td>
+                                            <tr className="border-t border-line-0 hover:bg-slate-800/40">
+                                                <td className="font-semibold text-fg-2">{s.name}</td>
                                                 <td>{templates.find(t => t.key === s.template)?.name || s.template}</td>
                                                 <td>{shortSym(s.symbol)}</td>
-                                                <td className="text-slate-400">{s.entry_mode === 'signal' ? `signal: ${s.signal_strategy}${(s.params||{}).use_signal_exit ? ' +exit' : ''}` : 'time'}</td>
+                                                <td className="text-fg-4">{s.entry_mode === 'signal' ? `signal: ${s.signal_strategy}${(s.params||{}).use_signal_exit ? ' +exit' : ''}` : 'time'}</td>
                                                 <td className={`text-right font-semibold ${(m.netPnl ?? 0) > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(m.netPnl)}</td>
                                                 <td className="text-right">{m.winRate != null ? `${m.winRate}%` : '—'}</td>
                                                 <td className="text-right">{m.profitFactor != null ? (m.profitFactor === null ? '∞' : fmt(m.profitFactor, 2)) : '—'}</td>
                                                 <td className="text-right">{m.n ?? '—'}</td>
                                                 <td className="text-right whitespace-nowrap">
                                                     <button onClick={() => setSavedDetail(isOpen ? null : s._id)}
-                                                        className={`px-2 py-0.5 mr-1 rounded border ${isOpen ? 'border-amber-600 bg-amber-900/25 text-amber-300' : 'border-slate-600 bg-slate-800 text-slate-300'} hover:bg-slate-700`} title="Show backtest results + params saved with this strategy">
+                                                        className={`px-2 py-0.5 mr-1 rounded border ${isOpen ? 'border-amber-600 bg-amber-900/25 text-amber-300' : 'border-line-2 bg-slate-800 text-fg-3'} hover:bg-slate-700`} title="Show backtest results + params saved with this strategy">
                                                         {isOpen ? '▲ Hide' : '▾ Details'}
                                                     </button>
                                                     <button onClick={() => loadSaved(s)}
@@ -1719,7 +1753,7 @@ export default function MultiLeg() {
                                                         🔴 LIVE
                                                     </button>
                                                     <button onClick={() => deleteSaved(s)}
-                                                        className="px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-400 hover:text-red-300" title="Delete saved strategy">
+                                                        className="px-2 py-0.5 rounded border border-line bg-slate-800 text-fg-4 hover:text-red-300" title="Delete saved strategy">
                                                         <Trash2 className="w-3 h-3 inline" />
                                                     </button>
                                                 </td>
@@ -1729,8 +1763,8 @@ export default function MultiLeg() {
                                                     <td colSpan={9} className="p-3">
                                                         {s.backtest?.metrics ? (
                                                             <div className="space-y-2">
-                                                                <div className="text-[11px] text-slate-400">
-                                                                    Backtest window <span className="text-slate-300">{s.backtest.from} → {s.backtest.to}</span> · {s.backtest.resolution || '5'}m
+                                                                <div className="text-2xs text-fg-4">
+                                                                    Backtest window <span className="text-fg-3">{s.backtest.from} → {s.backtest.to}</span> · {s.backtest.resolution || '5'}m
                                                                     {m.exitReasons && <span> · exits: {Object.entries(m.exitReasons).map(([k, v]) => `${k}×${v}`).join(', ')}</span>}
                                                                 </div>
                                                                 <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
@@ -1748,13 +1782,13 @@ export default function MultiLeg() {
                                                                     <Tile label="Wins" value={`${m.wins ?? '—'}`} />
                                                                 </div>
                                                                 <div>
-                                                                    <div className="text-[10px] text-slate-500 mb-0.5">Structure params</div>
-                                                                    <div className="text-[10px] font-mono text-slate-400 break-all">{JSON.stringify(s.params || {})}</div>
-                                                                    {s.signal_params && <><div className="text-[10px] text-violet-400 mt-1 mb-0.5">Tuned signal params</div><div className="text-[10px] font-mono text-slate-400 break-all">{JSON.stringify(s.signal_params)}</div></>}
+                                                                    <div className="text-3xs text-fg-5 mb-0.5">Structure params</div>
+                                                                    <div className="text-3xs font-mono text-fg-4 break-all">{JSON.stringify(s.params || {})}</div>
+                                                                    {s.signal_params && <><div className="text-3xs text-violet-400 mt-1 mb-0.5">Tuned signal params</div><div className="text-3xs font-mono text-fg-4 break-all">{JSON.stringify(s.signal_params)}</div></>}
                                                                 </div>
                                                             </div>
                                                         ) : (
-                                                            <div className="text-[11px] text-slate-500">No backtest snapshot saved with this strategy. Load it → run a backtest → re-save to attach results.</div>
+                                                            <div className="text-2xs text-fg-5">No backtest snapshot saved with this strategy. Load it → run a backtest → re-save to attach results.</div>
                                                         )}
                                                     </td>
                                                 </tr>
@@ -1781,8 +1815,8 @@ export default function MultiLeg() {
                         const brk = Object.entries(mlStatus.templateBreakdown || {});
                         const tickAgeS = mlStatus.lastTickAt ? Math.round((Date.now() - new Date(mlStatus.lastTickAt).getTime()) / 1000) : null;
                         const Card = ({ label, children, tone }) => (
-                            <div className={`rounded-xl border p-3 ${tone || 'border-slate-700 bg-slate-900/40'}`}>
-                                <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">{label}</div>
+                            <div className={`rounded-xl border p-3 ${tone || 'border-line bg-slate-900/40'}`}>
+                                <div className="text-3xs uppercase tracking-wide text-fg-5 mb-1">{label}</div>
                                 {children}
                             </div>
                         );
@@ -1790,25 +1824,25 @@ export default function MultiLeg() {
                             <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
                                 <Card label="Combined PnL (all books)" tone={combined < 0 ? 'border-rose-800/50 bg-rose-950/10' : 'border-emerald-800/50 bg-emerald-950/10'}>
                                     <div className={`text-xl font-mono font-bold ${combined < 0 ? 'text-rose-300' : 'text-emerald-300'}`}>₹{fmt(combined)}</div>
-                                    <div className="text-[10px] text-slate-500">Realized ₹{fmt(realized)} · Open {open >= 0 ? '+' : ''}₹{fmt(open)}</div>
+                                    <div className="text-3xs text-fg-5">Realized ₹{fmt(realized)} · Open {open >= 0 ? '+' : ''}₹{fmt(open)}</div>
                                 </Card>
                                 <Card label="Structures closed today">
-                                    <div className="text-xl font-mono font-bold text-slate-200">{mlStatus.tradesToday || 0}</div>
-                                    <div className="text-[10px] text-slate-500" title="Deployments that have used their one-per-day entry slot (including a structure carried in from a prior day).">{mlStatus.entriesUsed || 0}/{mlStatus.active || 0} used today’s entry slot</div>
+                                    <div className="text-xl font-mono font-bold text-fg-2">{mlStatus.tradesToday || 0}</div>
+                                    <div className="text-3xs text-fg-5" title="Deployments that have used their one-per-day entry slot (including a structure carried in from a prior day).">{mlStatus.entriesUsed || 0}/{mlStatus.active || 0} used today’s entry slot</div>
                                 </Card>
                                 <Card label="Daily Loss Used" tone={lossPct >= 80 ? 'border-rose-800/50 bg-rose-950/10' : undefined}>
                                     {cap > 0 ? (
                                         <>
-                                            <div className={`text-xl font-mono font-bold ${lossPct >= 80 ? 'text-rose-300' : 'text-slate-200'}`}>{lossPct}%</div>
-                                            <div className="text-[10px] text-slate-500">of ₹{fmt(cap)} cap (per book)</div>
+                                            <div className={`text-xl font-mono font-bold ${lossPct >= 80 ? 'text-rose-300' : 'text-fg-2'}`}>{lossPct}%</div>
+                                            <div className="text-3xs text-fg-5">of ₹{fmt(cap)} cap (per book)</div>
                                         </>
                                     ) : (
-                                        <><div className="text-sm font-mono text-slate-400">no cap set</div><div className="text-[10px] text-slate-600">MULTILEG_DAILY_LOSS_LIMIT</div></>
+                                        <><div className="text-sm font-mono text-fg-4">no cap set</div><div className="text-3xs text-fg-6">MULTILEG_DAILY_LOSS_LIMIT</div></>
                                     )}
                                 </Card>
                                 <Card label="Engine Status" tone={engState === 'HALTED' ? 'border-rose-800/50 bg-rose-950/10' : undefined}>
-                                    <div className={`text-lg font-bold ${engState === 'RUNNING' ? 'text-emerald-300' : engState === 'HALTED' ? 'text-rose-300' : 'text-slate-400'}`}>{engState}</div>
-                                    <div className="text-[10px] text-slate-500 truncate" title={brk.map(([k, v]) => `${k} × ${v}`).join(' · ')}>
+                                    <div className={`text-lg font-bold ${engState === 'RUNNING' ? 'text-emerald-300' : engState === 'HALTED' ? 'text-rose-300' : 'text-fg-4'}`}>{engState}</div>
+                                    <div className="text-3xs text-fg-5 truncate" title={brk.map(([k, v]) => `${k} × ${v}`).join(' · ')}>
                                         {mlStatus.openStructures || 0} open{brk.length ? ' · ' + brk.map(([k, v]) => `${k} × ${v}`).join(' · ') : ''}
                                         {tickAgeS != null && tickAgeS > 30 ? ` · ⚠ loop ${tickAgeS}s ago` : ''}
                                     </div>
@@ -1819,26 +1853,33 @@ export default function MultiLeg() {
 
                     {/* ── Signal Status Timeline (per deployment) ────────────────── */}
                     {mlDeps.signalStatus && Object.keys(mlDeps.signalStatus).length > 0 && (
-                        <div className="bg-surface rounded-xl border border-slate-700 p-4 mb-4">
+                        <div className="bg-surface rounded-xl border border-line p-4 mb-4">
                             <div className="flex items-center justify-between mb-2">
-                                <div className="text-sm font-semibold text-white flex items-center gap-2"><Activity className="w-4 h-4 text-amber-400" /> Signal Status Timeline</div>
-                                <span className="text-[10px] text-slate-500">newest → · 🟢 entry · ⚪ neutral · 🔵 ready · 🟡 waiting</span>
+                                <div className="text-sm font-semibold text-fg flex items-center gap-2"><Activity className="w-4 h-4 text-amber-400" /> Signal Status Timeline</div>
+                                <span className="text-3xs text-fg-5">newest → · 🟢 entry · ⚪ neutral · 🔵 ready · 🟡 waiting</span>
                             </div>
                             <div className="space-y-1.5">
                                 {mlDeps.deployments.filter(d => mlDeps.signalStatus[d._id]).map(d => {
                                     const info = mlDeps.signalStatus[d._id];
                                     const cur = info?.current;
                                     const hist = info?.history || [];
-                                    const colorFor = (a) => a === 'ENTRY' ? 'bg-emerald-500' : a === 'READY' ? 'bg-blue-500/70' : a === 'WAIT' ? 'bg-amber-500/70' : a === 'DONE' ? 'bg-slate-500' : 'bg-slate-700';
+                                    // The two neutral states are DOTS, i.e. ink-as-shape, so they belong on
+                                    // the fg ramp and not on the surface ramp: neutral-500/700 are surface
+                                    // shades that only happen to be visible in dark mode (on a light theme
+                                    // they are L 0.70 / L 0.93 — a 2.5:1 dot and a 1.2:1 invisible one).
+                                    // fg-5 is neutral-500's dark value so midnight's DONE dot is unchanged;
+                                    // both now stay legible on light (5.0:1 / 3.5:1) and fg-5 > fg-6 keeps
+                                    // DONE louder than "no signal", as before.
+                                    const colorFor = (a) => a === 'ENTRY' ? 'bg-emerald-500' : a === 'READY' ? 'bg-blue-500/70' : a === 'WAIT' ? 'bg-amber-500/70' : a === 'DONE' ? 'bg-fg-5' : 'bg-fg-6';
                                     return (
                                         <div key={d._id} className="flex items-center gap-3 text-xs">
-                                            <div className="w-40 truncate text-slate-300" title={d.name}>{d.name}</div>
+                                            <div className="w-40 truncate text-fg-3" title={d.name}>{d.name}</div>
                                             <div className="flex items-center gap-1.5 w-24">
                                                 <span className={`w-2 h-2 rounded-full ${colorFor(cur?.action)}`} />
-                                                <span className={`uppercase text-[10px] font-bold ${cur?.action === 'ENTRY' ? 'text-emerald-300' : cur?.action === 'READY' ? 'text-blue-300' : cur?.action === 'WAIT' ? 'text-amber-300' : 'text-slate-400'}`}>{cur?.action || '—'}</span>
-                                                {cur?.type && <span className="text-[10px] text-slate-500">{cur.type}</span>}
+                                                <span className={`uppercase text-3xs font-bold ${cur?.action === 'ENTRY' ? 'text-emerald-300' : cur?.action === 'READY' ? 'text-blue-300' : cur?.action === 'WAIT' ? 'text-amber-300' : 'text-fg-4'}`}>{cur?.action || '—'}</span>
+                                                {cur?.type && <span className="text-3xs text-fg-5">{cur.type}</span>}
                                             </div>
-                                            <div className="flex-1 truncate text-[11px] text-slate-500 italic" title={cur?.reason || ''}>{cur?.reason || '—'}</div>
+                                            <div className="flex-1 truncate text-2xs text-fg-5 italic" title={cur?.reason || ''}>{cur?.reason || '—'}</div>
                                             <div className="flex items-center gap-0.5 flex-shrink-0">
                                                 {hist.map((h, i) => (
                                                     <span key={i} className={`w-1.5 h-3 rounded-sm ${colorFor(h.action)}`}
@@ -1854,12 +1895,12 @@ export default function MultiLeg() {
 
                     {/* Engine-health banner — a halted engine or stale loop means open structures may be unmanaged */}
                     {engineHealth && (
-                        <div className={`rounded-xl border px-4 py-2.5 mb-4 flex items-center gap-2 text-sm font-semibold ${engineHealth.level === 'halt' ? 'border-red-600 bg-red-950/40 text-red-200' : engineHealth.level === 'stale' ? 'border-amber-500 bg-amber-950/40 text-amber-200' : 'border-slate-600 bg-slate-900 text-slate-300'}`} role="alert">
+                        <div className={`rounded-xl border px-4 py-2.5 mb-4 flex items-center gap-2 text-sm font-semibold ${engineHealth.level === 'halt' ? 'border-red-600 bg-red-950/40 text-red-200' : engineHealth.level === 'stale' ? 'border-amber-500 bg-amber-950/40 text-amber-200' : 'border-line-2 bg-slate-900 text-fg-3'}`} role="alert">
                             <span className="text-lg" aria-hidden="true">{engineHealth.level === 'halt' ? '⛔' : engineHealth.level === 'stale' ? '⚠️' : '📡'}</span>
                             <span className="flex-1">
                                 {engineHealth.msg}
                                 {engineHealth.level === 'halt' && haltInfo && (
-                                    <span className="block font-normal text-[11px] mt-0.5 text-red-300/90">
+                                    <span className="block font-normal text-2xs mt-0.5 text-red-300/90">
                                         {haltInfo.reason} · by {haltInfo.actor}
                                         {haltInfo.ageMinutes != null && ` · ${haltInfo.ageMinutes < 60 ? `${haltInfo.ageMinutes}m` : `${(haltInfo.ageMinutes / 60).toFixed(1)}h`} ago`}
                                         {' · '}
@@ -1879,19 +1920,19 @@ export default function MultiLeg() {
                         </div>
                     )}
 
-                    <div className="bg-surface rounded-xl border border-slate-700 p-4 mb-4">
+                    <div className="bg-surface rounded-xl border border-line p-4 mb-4">
                         <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                            <div className="text-sm font-semibold text-white flex items-center gap-2"><Rocket className="w-4 h-4 text-amber-400" /> Deployments ({visibleDeps.length}{visibleDeps.length !== (mlDeps.deployments || []).length ? `/${(mlDeps.deployments || []).length}` : ''})</div>
-                            <div className="flex items-center gap-2 text-[11px]">
+                            <div className="text-sm font-semibold text-fg flex items-center gap-2"><Rocket className="w-4 h-4 text-amber-400" /> Deployments ({visibleDeps.length}{visibleDeps.length !== (mlDeps.deployments || []).length ? `/${(mlDeps.deployments || []).length}` : ''})</div>
+                            <div className="flex items-center gap-2 text-2xs">
                                 {/* freshness / connection */}
-                                <span className={`flex items-center gap-1 ${!lastPoll.ok ? 'text-red-400' : 'text-slate-500'}`} title="Auto-refreshes every 5s">
+                                <span className={`flex items-center gap-1 ${!lastPoll.ok ? 'text-red-400' : 'text-fg-5'}`} title="Auto-refreshes every 5s">
                                     <span className={`w-1.5 h-1.5 rounded-full ${!lastPoll.ok ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`} />
                                     {lastPoll.at ? `updated ${istTime(lastPoll.at)}` : '…'}{!lastPoll.ok ? ' (offline)' : ''}
                                 </span>
-                                <select value={depFilter} onChange={e => setDepFilter(e.target.value)} className="bg-slate-800 border border-slate-700 rounded p-1 text-slate-300" aria-label="Filter deployments">
+                                <select value={depFilter} onChange={e => setDepFilter(e.target.value)} className="bg-slate-800 border border-line rounded p-1 text-fg-3" aria-label="Filter deployments">
                                     <option value="all">All books</option><option value="LIVE">LIVE</option><option value="PAPER">PAPER</option><option value="open">Open only</option>
                                 </select>
-                                <select value={depSort} onChange={e => setDepSort(e.target.value)} className="bg-slate-800 border border-slate-700 rounded p-1 text-slate-300" aria-label="Sort deployments">
+                                <select value={depSort} onChange={e => setDepSort(e.target.value)} className="bg-slate-800 border border-line rounded p-1 text-fg-3" aria-label="Sort deployments">
                                     <option value="state">Sort: state</option><option value="mtm">Sort: MTM</option><option value="pnl">Sort: total PnL</option><option value="name">Sort: name</option>
                                 </select>
                                 <button onClick={() => bulkAction('stop-all')} disabled={pending.bulk} className="px-2 py-1 rounded border border-amber-700/50 bg-amber-900/20 text-amber-300 hover:bg-amber-900/40 disabled:opacity-40">Stop all</button>
@@ -1899,23 +1940,23 @@ export default function MultiLeg() {
                             </div>
                         </div>
                         {mlStatus && (
-                            <div className="flex flex-wrap gap-3 text-[11px] font-mono mb-3 px-2 py-1.5 rounded border border-slate-800 bg-slate-900/40"
+                            <div className="flex flex-wrap gap-3 text-2xs font-mono mb-3 px-2 py-1.5 rounded border border-line-0 bg-slate-900/40"
                                 title="Whole-book exposure vs engine limits. Greeks: Δ ₹/spot-pt · V ₹/IV-pt · Θ ₹/day. Short vega is what the vega cap gates on.">
-                                <span className="text-slate-400">book:</span>
+                                <span className="text-fg-4">book:</span>
                                 <span className={mlStatus.openMtmRupees < 0 ? 'text-red-300' : 'text-emerald-300'}>MTM ₹{fmt(mlStatus.openMtmRupees)}</span>
-                                <span className="text-slate-300">margin ₹{fmt(mlStatus.openMarginRupees)}{mlStatus.limits?.maxMargin > 0 ? `/${fmt(mlStatus.limits.maxMargin)}` : ''}</span>
-                                <span className="text-slate-300">short-prem ₹{fmt(mlStatus.openShortPremiumRupees)}</span>
-                                <span className={mlStatus.openShortVegaRupees > 0 ? 'text-amber-300' : 'text-slate-500'}>short-vega ₹{fmt(mlStatus.openShortVegaRupees)}/IVpt{mlStatus.limits?.maxVega > 0 ? `/${fmt(mlStatus.limits.maxVega)}` : ''}</span>
+                                <span className="text-fg-3">margin ₹{fmt(mlStatus.openMarginRupees)}{mlStatus.limits?.maxMargin > 0 ? `/${fmt(mlStatus.limits.maxMargin)}` : ''}</span>
+                                <span className="text-fg-3">short-prem ₹{fmt(mlStatus.openShortPremiumRupees)}</span>
+                                <span className={mlStatus.openShortVegaRupees > 0 ? 'text-amber-300' : 'text-fg-5'}>short-vega ₹{fmt(mlStatus.openShortVegaRupees)}/IVpt{mlStatus.limits?.maxVega > 0 ? `/${fmt(mlStatus.limits.maxVega)}` : ''}</span>
                                 {mlStatus.bookGreeks && (mlStatus.bookGreeks.delta !== 0 || mlStatus.bookGreeks.vega !== 0) && (
                                     <span className="text-sky-300">Δ₹{fmt(mlStatus.bookGreeks.delta, 1)} V₹{fmt(mlStatus.bookGreeks.vega, 1)} Θ₹{fmt(mlStatus.bookGreeks.theta, 1)}</span>
                                 )}
-                                <span className="text-slate-500">LIVE day ₹{fmt(mlStatus.dayPnl?.LIVE)} · PAPER day ₹{fmt(mlStatus.dayPnl?.PAPER)}</span>
+                                <span className="text-fg-5">LIVE day ₹{fmt(mlStatus.dayPnl?.LIVE)} · PAPER day ₹{fmt(mlStatus.dayPnl?.PAPER)}</span>
                             </div>
                         )}
                         {mlDeps.deployments.length === 0 ? (
-                            <div className="text-xs text-slate-500 py-4 text-center">No structure runners yet — deploy a saved strategy above (Paper first, always).</div>
+                            <div className="text-xs text-fg-5 py-4 text-center">No structure runners yet — deploy a saved strategy above (Paper first, always).</div>
                         ) : visibleDeps.length === 0 ? (
-                            <div className="text-xs text-slate-500 py-4 text-center">No deployments match this filter.</div>
+                            <div className="text-xs text-fg-5 py-4 text-center">No deployments match this filter.</div>
                         ) : (
                             <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                                 {visibleDeps.map(d => {
@@ -1975,7 +2016,16 @@ export default function MultiLeg() {
                                     const chartStrikes = pg ? pg.strikes : [...new Set((pos.legs || []).map(l => l.strike).filter(Boolean))];
                                     const chartSpot = pg ? pg.spot : curSpot;
                                     const chartNowPnl = pg ? pg.currentMtm : (pos.lastMtmRupees ?? null);
-                                    const chartMaxP = pg ? pg.maxProfit : (curve ? Math.max(...curve.points.map(p => p.pnl)) : null);
+                                    // Use curveMaxProfit, NOT maxProfit. The plotted expiry curve
+                                    // starts from pos.realizedLegPnl (server.js: `let expU = realized`),
+                                    // so on a structure with a leg already stopped out it INCLUDES that
+                                    // realized loss — while pg.maxProfit comes from payoff.analyze()
+                                    // over the still-open legs and does not. Reading maxProfit made the
+                                    // caption contradict the curve directly above it (₹5,636 printed
+                                    // over a curve topping out at ₹4,518).
+                                    const chartMaxP = pg ? (pg.curveMaxProfit ?? pg.maxProfit) : (curve ? Math.max(...curve.points.map(p => p.pnl)) : null);
+                                    const chartNetPnl = pg && pg.currentMtmNet != null ? pg.currentMtmNet : (pos.lastMtmNetRupees ?? null);
+                                    const chartCharges = pg && pg.currentMtmCharges != null ? pg.currentMtmCharges : null;
                                     // TRUE tail, not the plot window. `pg.maxLoss` is now the
                                     // analyzer's verdict and is NULL when the tail is undefined —
                                     // an uncovered short must never render a comforting finite
@@ -1985,6 +2035,21 @@ export default function MultiLeg() {
                                     const chartMaxL = pg ? pg.maxLoss : (curve ? Math.min(...curve.points.map(p => p.pnl)) : null);
                                     const tpRupee = (tpUnit != null && unitToRupee) ? Math.round(tpUnit * unitToRupee) : null;
                                     const slRupee = (slUnit != null && unitToRupee) ? Math.round(slUnit * unitToRupee) : null;
+                                    // Y-DOMAIN. Left to auto-scale, an unbounded short leg drags the
+                                    // axis to the worst SAMPLED spot (-45k on a NIFTY strangle) and
+                                    // crushes the decision region — TP/SL land ~9px and ~22px from the
+                                    // zero line, i.e. visually on top of it. Frame what the operator
+                                    // acts on (SL..TP..max profit, padded) and let the tail run off
+                                    // chart; the footer already calls it UNBOUNDED in red, which
+                                    // communicates the tail better than an unreadable axis.
+                                    const chartYDomain = (() => {
+                                        const cand = [0, tpRupee, slRupee, chartMaxP, chartNowPnl, chartNetPnl]
+                                            .filter(v => Number.isFinite(v));
+                                        if (cand.length < 2) return ['auto', 'auto'];
+                                        const lo = Math.min(...cand), hi = Math.max(...cand);
+                                        const pad = Math.max((hi - lo) * 0.25, 500);
+                                        return [Math.round(lo - pad), Math.round(hi + pad)];
+                                    })();
                                     const mtmHist = mlDeps.mtmHistory?.[d._id] || null;    // intraday sparkline
                                     const feed = d._feed || null;                          // signal-feed health (IDLE deployments)
                                     const isLive = d.trade_mode === 'LIVE';
@@ -2017,35 +2082,35 @@ export default function MultiLeg() {
                                     const shownIsFresh = freshRecon ? true : !mtmStale;
                                     const ageTxt = mtmAgeMs == null ? '' : mtmAgeMs < 90 * 60000 ? `${Math.round(mtmAgeMs / 60000)}m old` : `${(mtmAgeMs / 3600000).toFixed(1)}h old`;
                                     return (
-                                        <div key={d._id} className={`rounded-lg border p-3 relative ${isLive ? 'border-red-600 bg-red-950/20 ring-1 ring-red-800/40' : 'border-slate-700 bg-slate-900/40'} ${busy ? 'opacity-70' : ''}`}>
-                                            {isLive && <div className="absolute -top-2 left-3 text-[8px] font-bold px-1.5 py-0.5 rounded bg-red-700 text-white tracking-wider">● REAL MONEY</div>}
+                                        <div key={d._id} className={`rounded-lg border p-3 relative ${isLive ? 'border-red-600 bg-red-950/20 ring-1 ring-red-800/40' : 'border-line bg-slate-900/40'} ${busy ? 'opacity-70' : ''}`}>
+                                            {isLive && <div className="absolute -top-2 left-3 text-5xs font-bold px-1.5 py-0.5 rounded bg-red-700 text-white tracking-wider">● REAL MONEY</div>}
                                             <div className="flex items-center justify-between mb-1">
-                                                <div className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">{d.name}{busy && <RefreshCw className="w-3 h-3 animate-spin text-slate-400" />}</div>
+                                                <div className="text-xs font-semibold text-fg-2 flex items-center gap-1.5">{d.name}{busy && <RefreshCw className="w-3 h-3 animate-spin text-fg-4" />}</div>
                                                 <div className="flex gap-1">
-                                                    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${d.trade_mode === 'LIVE' ? 'border-red-700 text-red-300' : 'border-sky-700 text-sky-300'}`}>{d.trade_mode}</span>
-                                                    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${d.status === 'ACTIVE' ? 'border-emerald-700 text-emerald-300' : 'border-slate-600 text-slate-400'}`}>{d.status}</span>
-                                                    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${open ? 'border-amber-600 text-amber-300' : 'border-slate-700 text-slate-500'}`}>{st}</span>
+                                                    <span className={`text-3xs px-1.5 py-0.5 rounded border ${d.trade_mode === 'LIVE' ? 'border-red-700 text-red-300' : 'border-sky-700 text-sky-300'}`}>{d.trade_mode}</span>
+                                                    <span className={`text-3xs px-1.5 py-0.5 rounded border ${d.status === 'ACTIVE' ? 'border-emerald-700 text-emerald-300' : 'border-line-2 text-fg-4'}`}>{d.status}</span>
+                                                    <span className={`text-3xs px-1.5 py-0.5 rounded border ${open ? 'border-amber-600 text-amber-300' : 'border-line text-fg-5'}`}>{st}</span>
                                                     {open && <button onClick={() => setDepChart(depChart === d._id ? null : d._id)}
-                                                        className={`text-[10px] px-1.5 py-0.5 rounded border ${depChart === d._id ? 'border-sky-600 text-sky-300' : 'border-slate-600 text-slate-400'} hover:text-white`}
+                                                        className={`text-3xs px-1.5 py-0.5 rounded border ${depChart === d._id ? 'border-sky-600 text-sky-300' : 'border-line-2 text-fg-4'} hover:text-fg`}
                                                         title="Live payoff diagram — the spread's P&L-at-expiry curve with a 'you are here' marker at the current spot">📈 chart</button>}
                                                     {(d.totals?.trades > 0 || open) && <button onClick={() => setDepActivity(depActivity === d._id ? null : d._id)}
-                                                        className={`text-[10px] px-1.5 py-0.5 rounded border ${depActivity === d._id ? 'border-violet-600 text-violet-300' : 'border-slate-600 text-slate-400'} hover:text-white`}
+                                                        className={`text-3xs px-1.5 py-0.5 rounded border ${depActivity === d._id ? 'border-violet-600 text-violet-300' : 'border-line-2 text-fg-4'} hover:text-fg`}
                                                         title="P&L activity — the cumulative equity curve of every booked trade, plus the live unrealized MTM of the current open structure">📊 activity</button>}
                                                     <button onClick={() => setDepDetail(detailOpen ? null : d._id)}
-                                                        className={`text-[10px] px-1.5 py-0.5 rounded border ${detailOpen ? 'border-amber-600 text-amber-300' : 'border-slate-600 text-slate-400'} hover:text-white`}
+                                                        className={`text-3xs px-1.5 py-0.5 rounded border ${detailOpen ? 'border-amber-600 text-amber-300' : 'border-line-2 text-fg-4'} hover:text-fg`}
                                                         title="Full order detail — legs, prices, SL/TP levels, exit deadlines">{detailOpen ? '▲' : '▾'} details</button>
                                                 </div>
                                             </div>
-                                            <div className="text-[11px] text-slate-400 mb-1 flex flex-wrap items-center gap-x-1">
+                                            <div className="text-2xs text-fg-4 mb-1 flex flex-wrap items-center gap-x-1">
                                                 <span>{templates.find(t => t.key === d.template)?.name || d.template} · {shortSym(d.symbol)} · {d.lots} lot(s)
                                                     {d.entry_mode === 'signal' ? ` · signal: ${d.signal_strategy}` : ' · time entry'}</span>
                                                 {feed && d.entry_mode === 'signal' && !open && (
-                                                    <span className={`ml-1 ${feed.ok ? 'text-emerald-500' : 'text-amber-400'}`} title={`Feed: ${feed.note}${feed.bars != null ? ` · ${feed.bars} bars` : ''} · last check ${istTimeSec(feed.at)} IST`}>
+                                                    <span className={`ml-1 ${feed.ok ? 'text-emerald-400' : 'text-amber-400'}`} title={`Feed: ${feed.note}${feed.bars != null ? ` · ${feed.bars} bars` : ''} · last check ${istTimeSec(feed.at)} IST`}>
                                                         ● {feed.ok ? 'feed ok' : feed.note}
                                                     </span>
                                                 )}
                                             </div>
-                                            <div className="grid grid-cols-3 gap-1 text-[11px] mb-2">
+                                            <div className="grid grid-cols-3 gap-1 text-2xs mb-2">
                                                 {/* NET is the headline number: gross premium difference flatters a
                                                     multi-leg structure by the whole round-trip cost (~₹230 on a 4-leg
                                                     index fly), which is often larger than the MTM itself. */}
@@ -2069,15 +2134,17 @@ export default function MultiLeg() {
                                                             : (pos.lastMtm != null ? `₹${fmt(pos.lastMtmRupees ?? 0)} gross` : '—')}
                                                         good={(shownIsFresh || !mtmStale) && shownNet > 0} bad={(shownIsFresh || !mtmStale) && shownNet < 0} />
                                                     {!shownIsFresh && mtmStale && (
-                                                        <div className="text-[9px] text-amber-400/80 mt-0.5">
+                                                        <div className="text-4xs text-amber-400/80 mt-0.5">
                                                             may pre-date the close — open Details to re-price
                                                         </div>
                                                     )}
                                                     {shownNet != null && (
-                                                        <div className="text-[9px] text-slate-500 mt-0.5 font-mono">
+                                                        <div className="text-4xs text-fg-5 mt-0.5 font-mono">
                                                             gross ₹{fmt(shownGross)} · chg ₹{fmt(shownChg)}
-                                                            {shownIsFresh ? <span className="text-emerald-600"> · live</span>
-                                                                          : <span className="text-amber-500"> · {ageTxt}</span>}
+                                                            {/* emerald-400, not -600: 600 is a solid-bg/border shade and
+                                                                as ink it was already under 3:1 on the dark themes. */}
+                                                            {shownIsFresh ? <span className="text-emerald-400"> · live</span>
+                                                                          : <span className="text-amber-400"> · {ageTxt}</span>}
                                                         </div>
                                                     )}
                                                 </div>
@@ -2085,62 +2152,68 @@ export default function MultiLeg() {
                                                 <Tile label={`Total (${d.totals?.trades || 0})`} value={`₹${fmt(d.totals?.netPnl)}`} good={d.totals?.netPnl > 0} bad={d.totals?.netPnl < 0} />
                                             </div>
                                             {open && mtmHist && mtmHist.length > 1 && (
-                                                <div className="flex items-center gap-2 mb-2 text-[9px] text-slate-500" title="Intraday MTM path (₹) since the engine started tracking">
+                                                <div className="flex items-center gap-2 mb-2 text-4xs text-fg-5" title="Intraday MTM path (₹) since the engine started tracking">
                                                     <span>MTM today</span><Sparkline data={mtmHist} />
                                                     <span className={mtmHist[mtmHist.length - 1].pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}>₹{fmt(mtmHist[mtmHist.length - 1].pnl)}</span>
                                                 </div>
                                             )}
                                             {open && d.position?.greeks && (
-                                                <div className="text-[10px] font-mono mb-2 flex gap-3"
+                                                <div className="text-3xs font-mono mb-2 flex gap-3"
                                                     title="Live book greeks — Δ: ₹ per 1pt spot move · V: ₹ per 1 IV point · Θ: ₹ per day. IVP = vol percentile at entry.">
                                                     <span className={d.position.greeks.delta < 0 ? 'text-red-300' : 'text-emerald-300'}>Δ ₹{fmt(d.position.greeks.delta, 1)}/pt</span>
-                                                    <span className={d.position.greeks.vega < 0 ? 'text-amber-300' : 'text-sky-300'}>V ₹{fmt(d.position.greeks.vega, 1)}/IVpt</span>
+                                                    <span className={d.position.greeks.vega < 0 ? 'text-amber-300' : 'text-sky-300'} title="Live vega of the legs still OPEN, per 1 IV point. A leg closed by its leg-SL drops out of this, so it can differ from vega@in — which is a frozen snapshot over ALL legs at entry.">V ₹{fmt(d.position.greeks.vega, 1)}/IVpt<span className="text-fg-6"> open</span></span>
                                                     <span className={d.position.greeks.theta > 0 ? 'text-emerald-300' : 'text-red-300'}>Θ ₹{fmt(d.position.greeks.theta, 1)}/day</span>
-                                                    {d.position.ivpAtEntry != null && <span className="text-slate-500">IVP@in {fmt(d.position.ivpAtEntry, 0)}</span>}
+                                                    {d.position.ivpAtEntry != null && <span className="text-fg-5">IVP@in {fmt(d.position.ivpAtEntry, 0)}</span>}
                                                 </div>
                                             )}
                                             {/* Live RISK GRAPH — expiry payoff + current T+0 MTM curve, every level marked */}
                                             {chartOpen && chartData.length > 0 && (
-                                                <div className="mb-2 border-t border-slate-800 pt-2">
-                                                    <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1 flex-wrap gap-x-3">
+                                                <div className="mb-2 border-t border-line-0 pt-2">
+                                                    <div className="flex items-center justify-between text-3xs text-fg-4 mb-1 flex-wrap gap-x-3">
                                                         <span className="flex items-center gap-2">
                                                             <span className="text-emerald-300">━ expiry</span>
                                                             {pg && <span className="text-sky-300">┅ now (T+0)</span>}
                                                             {pg && <span className="text-violet-300/70">▨ ±1σ move</span>}
                                                             <span className="text-sky-300 font-semibold">spot {fmt(chartSpot)}</span>
-                                                            <span className="text-slate-500">entry {fmt(pos.entrySpot)}</span>
-                                                            {pg && <span className="text-slate-500">IV {pg.ivAvgPct}% · {pg.dte}DTE</span>}
+                                                            <span className="text-fg-5">entry {fmt(pos.entrySpot)}</span>
+                                                            {pg && <span className="text-fg-5">IV {pg.ivAvgPct}% · {pg.dte}DTE</span>}
                                                             {pg && pg.pop != null && <span className={pg.pop >= 50 ? 'text-emerald-300' : 'text-amber-300'} title="Probability of finishing profitable (lognormal, from IV)">POP {pg.pop}%</span>}
                                                         </span>
                                                         <span title="break-even spot levels">BE {chartBEs.length ? chartBEs.map(b => fmt(b)).join(' / ') : '—'}</span>
                                                     </div>
-                                                    <ResponsiveContainer width="100%" height={230}>
-                                                        <LineChart data={chartData} margin={{ top: 8, right: 10, bottom: 2, left: 8 }}>
-                                                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                                                            {pg && pg.expectedMove > 0 && <ReferenceArea x1={pg.spot - pg.expectedMove} x2={pg.spot + pg.expectedMove} fill="#8b5cf6" fillOpacity={0.08} stroke="#8b5cf6" strokeOpacity={0.25} />}
-                                                            <XAxis dataKey="spot" type="number" domain={['dataMin', 'dataMax']} tick={{ fontSize: 9, fill: '#64748b' }}
+                                                    <ZoomableChart data={chartData} height={230}>
+                                                        <LineChart margin={{ top: 8, right: 62, bottom: 2, left: 8 }}>
+                                                            <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
+                                                            {pg && pg.expectedMove > 0 && <ReferenceArea x1={pg.spot - pg.expectedMove} x2={pg.spot + pg.expectedMove} fill={ct.mark.region} fillOpacity={0.08} stroke={ct.mark.region} strokeOpacity={0.25} />}
+                                                            <XAxis dataKey="spot" type="number" domain={['dataMin', 'dataMax']} tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }}
                                                                 ticks={[...new Set([...chartStrikes, ...(pos.entrySpot ? [Math.round(pos.entrySpot)] : []), ...(chartSpot ? [Math.round(chartSpot)] : [])])].sort((a, b) => a - b)} />
-                                                            <YAxis tick={{ fontSize: 9, fill: '#64748b' }} width={54} tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} />
-                                                            <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', fontSize: 11 }} cursor={{ stroke: '#38bdf8', strokeDasharray: '3 3' }}
+                                                            <YAxis tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} width={54} domain={chartYDomain} allowDataOverflow tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} />
+                                                            <Tooltip contentStyle={ct.tooltipStyle({ fontSize: ct.type['2xs'] })} cursor={{ stroke: ct.mark.live, strokeDasharray: '3 3' }}
                                                                 formatter={(v, n) => [`₹${fmt(v)}`, n === 'now' ? 'P&L now' : 'P&L @ expiry']} labelFormatter={(l) => `spot ${fmt(l)}`} />
-                                                            <Legend wrapperStyle={{ fontSize: 9 }} />
-                                                            <ReferenceLine y={0} stroke="#64748b" />
-                                                            {tpRupee != null && <ReferenceLine y={tpRupee} stroke="#34d399" strokeDasharray="5 4" label={{ value: `TP ₹${fmt(tpRupee)}`, fontSize: 8, fill: '#34d399', position: 'right' }} />}
-                                                            {slRupee != null && <ReferenceLine y={slRupee} stroke="#f87171" strokeDasharray="5 4" label={{ value: `SL ₹${fmt(slRupee)}`, fontSize: 8, fill: '#f87171', position: 'right' }} />}
-                                                            {chartStrikes.map(k => <ReferenceLine key={k} x={k} stroke="#334155" strokeDasharray="2 2" label={{ value: k, fontSize: 8, fill: '#475569', position: 'insideBottom' }} />)}
-                                                            {pos.entrySpot && <ReferenceLine x={Math.round(pos.entrySpot)} stroke="#94a3b8" strokeDasharray="4 3" label={{ value: 'entry', fontSize: 8, fill: '#94a3b8', position: 'insideTopLeft' }} />}
-                                                            {chartSpot && <ReferenceLine x={Math.round(chartSpot)} stroke="#38bdf8" strokeWidth={2} label={{ value: 'now', fontSize: 9, fill: '#38bdf8', position: 'top' }} />}
-                                                            <Line type="monotone" name="expiry" dataKey="expiry" stroke="#34d399" dot={false} strokeWidth={2} />
-                                                            {pg && <Line type="monotone" name="now" dataKey="now" stroke="#38bdf8" dot={false} strokeWidth={1.5} strokeDasharray="5 3" />}
-                                                            {pg?.tPlus && <Line type="monotone" name="next open" dataKey="tPlus" stroke="#c084fc" dot={false} strokeWidth={1.5} strokeDasharray="2 3" />}
-                                                            {pg && chartSpot && chartNowPnl != null && <ReferenceDot x={Math.round(chartSpot)} y={pg.currentNowRupees} r={4} fill="#38bdf8" stroke="#0f172a" />}
+                                                            <Legend wrapperStyle={{ fontSize: ct.type['4xs'] }} />
+                                                            <ReferenceLine y={0} stroke={ct.axis} />
+                                                            {tpRupee != null && <ReferenceLine y={tpRupee} stroke={ct.status.good} strokeDasharray="5 4" ifOverflow="extendDomain" label={{ value: `TP ₹${fmt(tpRupee)}`, fontSize: ct.type['5xs'], fill: ct.status.good, position: 'right' }} />}
+                                                            {slRupee != null && <ReferenceLine y={slRupee} stroke={ct.status.critical} strokeDasharray="5 4" ifOverflow="extendDomain" label={{ value: `SL ₹${fmt(slRupee)}`, fontSize: ct.type['5xs'], fill: ct.status.critical, position: 'right' }} />}
+                                                            {chartStrikes.map(k => <ReferenceLine key={k} x={k} stroke={ct.grid} strokeDasharray="2 2" label={{ value: k, fontSize: ct.type['5xs'], fill: ct.text.muted, position: 'insideBottom' }} />)}
+                                                            {pos.entrySpot && <ReferenceLine x={Math.round(pos.entrySpot)} stroke={ct.text.secondary} strokeDasharray="4 3" label={{ value: 'entry', fontSize: ct.type['5xs'], fill: ct.text.secondary, position: 'insideTopLeft' }} />}
+                                                            {chartSpot && <ReferenceLine x={Math.round(chartSpot)} stroke={ct.mark.live} strokeWidth={2} label={{ value: 'now', fontSize: ct.type['4xs'], fill: ct.mark.live, position: 'top' }} />}
+                                                            <Line type="monotone" name="expiry" dataKey="expiry" stroke={ct.mark.terminal} dot={false} strokeWidth={2} />
+                                                            {pg && <Line type="monotone" name="now" dataKey="now" stroke={ct.mark.live} dot={false} strokeWidth={1.5} strokeDasharray="5 3" />}
+                                                            {pg?.tPlus && <Line type="monotone" name="next open" dataKey="tPlus" stroke={ct.mark.projection} dot={false} strokeWidth={1.5} strokeDasharray="2 3" />}
+                                                            {pg && chartSpot && chartNowPnl != null && <ReferenceDot x={Math.round(chartSpot)} y={pg.currentNowRupees} r={4} fill={ct.mark.live} stroke={ct.background} />}
                                                         </LineChart>
-                                                    </ResponsiveContainer>
-                                                    <div className="text-[10px] text-slate-500 mt-0.5">
-                                                        {pg ? '● dot = your P&L right now. ' : ''}MTM now <span className={!mtmStale && pos.lastMtm > 0 ? 'text-emerald-300' : !mtmStale && pos.lastMtm < 0 ? 'text-red-300' : ''}>₹{fmt(chartNowPnl ?? 0)}</span> · max profit ₹{fmt(chartMaxP)} · max loss {chartUnbounded || chartMaxL == null
+                                                    </ZoomableChart>
+                                                    <div className="text-3xs text-fg-5 mt-0.5">
+                                                        {pg ? '● dot = your P&L right now. ' : ''}MTM now <span className={!mtmStale && pos.lastMtm > 0 ? 'text-emerald-300' : !mtmStale && pos.lastMtm < 0 ? 'text-red-300' : ''}>₹{fmt(chartNowPnl ?? 0)}</span>
+                                                        {/* Every number on this chart is GROSS — say so, and put the net
+                                                            beside it. The headline tile above shows NET, so an unlabelled
+                                                            gross figure here reads as a contradiction. */}
+                                                        <span className="text-fg-6"> gross</span>
+                                                        {chartNetPnl != null && <> · net <span className={chartNetPnl > 0 ? 'text-emerald-300' : chartNetPnl < 0 ? 'text-red-300' : ''}>₹{fmt(chartNetPnl)}</span>{chartCharges != null ? <span className="text-fg-6"> (chg ₹{fmt(chartCharges)})</span> : null}</>}
+                                                        {' · '}max profit ₹{fmt(chartMaxP)}<span className="text-fg-6"> gross</span> · max loss {chartUnbounded || chartMaxL == null
                                                             ? <span className="text-red-400 font-bold">UNBOUNDED</span>
                                                             : <>₹{fmt(chartMaxL)}</>}
-                                                        {!pg && <span className="text-slate-600"> · loading live T+0 curve…</span>}
+                                                        {!pg && <span className="text-fg-6"> · loading live T+0 curve…</span>}
                                                         {pg && pg.stale && <span className="text-amber-400"> · ⚠ mark {pg.mtmAgeMin}m old (market closed — quotes frozen, not live)</span>}
                                                     </div>
                                                     {/* ── NEXT-OPEN DECAY PROJECTION ────────────────────────
@@ -2149,25 +2222,25 @@ export default function MultiLeg() {
                                                         IV point outweighs a full day of decay, so a theta
                                                         projection printed alone is a misleading number. */}
                                                     {pg?.tPlus && (
-                                                        <div className="mt-1 rounded border border-purple-800/40 bg-purple-950/20 p-1.5 text-[10px] leading-relaxed">
+                                                        <div className="mt-1 rounded border border-purple-800/40 bg-purple-950/20 p-1.5 text-3xs leading-relaxed">
                                                             <div className="text-purple-200">
                                                                 <span className="font-semibold">If nothing moves</span>, at the next open
-                                                                (<span className="text-slate-300">{pg.tPlus.dayKey}</span>
-                                                                {pg.tPlus.skipped?.length ? <span className="text-slate-500"> · skips {pg.tPlus.skipped.map(x => x.why).join(' + ')}</span> : null})
+                                                                (<span className="text-fg-3">{pg.tPlus.dayKey}</span>
+                                                                {pg.tPlus.skipped?.length ? <span className="text-fg-5"> · skips {pg.tPlus.skipped.map(x => x.why).join(' + ')}</span> : null})
                                                                 {' → '}
                                                                 <span className={pg.tPlus.decayRupees >= 0 ? 'text-emerald-300 font-semibold' : 'text-red-300 font-semibold'}>
                                                                     {pg.tPlus.decayRupees >= 0 ? '+' : '−'}₹{fmt(Math.abs(pg.tPlus.decayRupees))}
                                                                 </span>
-                                                                <span className="text-slate-500"> from time decay alone</span>
+                                                                <span className="text-fg-5"> from time decay alone</span>
                                                             </div>
-                                                            <div className="text-slate-400">
-                                                                But a <span className="text-amber-300">1-point IV move is worth ₹{fmt(Math.abs(pg.tPlus.bookVegaRupeesPerIvPt))}</span>
+                                                            <div className="text-fg-4">
+                                                                But a <span className="text-amber-300" title="Vega of the still-open legs repriced AT THE NEXT TRADING OPEN, so it is smaller than the live vega shown on the card above — an option has less time value left after the gap. Same legs, same scale, different moment.">1-point IV move is worth ₹{fmt(Math.abs(pg.tPlus.bookVegaRupeesPerIvPt))} <span className="text-fg-6">at that open</span></span>
                                                                 {Math.abs(pg.tPlus.bookVegaRupeesPerIvPt) > Math.abs(pg.tPlus.decayRupees)
                                                                     ? <span className="text-amber-300"> — more than this whole projection.</span>
                                                                     : '.'}
                                                                 {' '}Overnight the index typically moves ±{fmt(pg.tPlus.sigmaOvernight)} pts, which this number ignores.
                                                             </div>
-                                                            <div className="text-slate-600">
+                                                            <div className="text-fg-6">
                                                                 Decay counted as {pg.tPlus.businessDaysEquivalent} trading-days-equivalent, not {pg.tPlus.calendarDaysAhead} calendar days
                                                                 (weekends decay slower than the clock). Gross, before charges. Only true at today&apos;s spot — the dotted purple line shows every other spot.
                                                                 {pg.tPlus.multiExpiry && <span className="text-amber-400"> ⚠ multi-expiry structure: legs decay at different rates.</span>}
@@ -2179,105 +2252,105 @@ export default function MultiLeg() {
                                             )}
                                             {/* P&L ACTIVITY — cumulative equity curve of every booked trade + live open MTM */}
                                             {activityOpen && (
-                                                <div className="mb-2 border-t border-slate-800 pt-2">
+                                                <div className="mb-2 border-t border-line-0 pt-2">
                                                     {!act ? (
-                                                        <div className="text-[10px] text-slate-500 py-3 text-center">{activityData?.data?.error ? 'could not load activity' : 'loading activity…'}</div>
+                                                        <div className="text-3xs text-fg-5 py-3 text-center">{activityData?.data?.error ? 'could not load activity' : 'loading activity…'}</div>
                                                     ) : actSeries.length === 0 ? (
-                                                        <div className="text-[10px] text-slate-500 py-3 text-center">No booked trades yet — the equity curve appears after the first exit.</div>
+                                                        <div className="text-3xs text-fg-5 py-3 text-center">No booked trades yet — the equity curve appears after the first exit.</div>
                                                     ) : (<>
-                                                        <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1 flex-wrap gap-x-3">
+                                                        <div className="flex items-center justify-between text-3xs text-fg-4 mb-1 flex-wrap gap-x-3">
                                                             <span className="flex items-center gap-2">
                                                                 <span className="text-violet-300">━ cumulative P&L</span>
-                                                                <span className="text-slate-500">{act.summary.trades} trades · {act.summary.winRate}% win</span>
+                                                                <span className="text-fg-5">{act.summary.trades} trades · {act.summary.winRate}% win</span>
                                                                 <span className={act.summary.realized >= 0 ? 'text-emerald-300' : 'text-red-300'}>realized ₹{fmt(act.summary.realized)}</span>
                                                                 {act.summary.openMtm != null && <span className={act.summary.openMtm >= 0 ? 'text-emerald-300' : 'text-red-300'}>+ open ₹{fmt(act.summary.openMtm)} → ₹{fmt(act.summary.withOpen)}</span>}
                                                             </span>
-                                                            <span className="text-slate-500">best ₹{fmt(act.summary.best)} · worst ₹{fmt(act.summary.worst)}</span>
+                                                            <span className="text-fg-5">best ₹{fmt(act.summary.best)} · worst ₹{fmt(act.summary.worst)}</span>
                                                         </div>
-                                                        <ResponsiveContainer width="100%" height={230}>
-                                                            <LineChart data={actSeries} margin={{ top: 8, right: 12, bottom: 2, left: 8 }}>
-                                                                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                                                                <XAxis dataKey="i" type="number" domain={['dataMin', 'dataMax']} tick={{ fontSize: 9, fill: '#64748b' }} tickFormatter={(v) => `#${v}`} />
-                                                                <YAxis tick={{ fontSize: 9, fill: '#64748b' }} width={54} tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} />
-                                                                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', fontSize: 11 }} cursor={{ stroke: '#a78bfa', strokeDasharray: '3 3' }}
-                                                                    formatter={(v, n, p) => [`₹${fmt(v)}`, 'cumulative']}
+                                                        <ZoomableChart data={actSeries} height={230}>
+                                                            <LineChart margin={{ top: 8, right: 12, bottom: 2, left: 8 }}>
+                                                                <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
+                                                                <XAxis dataKey="i" type="number" domain={['dataMin', 'dataMax']} tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} tickFormatter={(v) => `#${v}`} />
+                                                                <YAxis tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} width={54} tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} />
+                                                                <Tooltip contentStyle={ct.tooltipStyle({ fontSize: ct.type['2xs'] })} cursor={{ stroke: ct.mark.equity, strokeDasharray: '3 3' }}
+                                                                    formatter={(v, _n, _p) => [`₹${fmt(v)}`, 'cumulative']}
                                                                     labelFormatter={(l, pl) => { const pt = pl && pl[0] && pl[0].payload; return pt ? `trade #${pt.i} · ${istStr(pt.t, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${pt.open ? 'OPEN' : pt.reason} · this ₹${fmt(pt.net)}` : `#${l}`; }} />
-                                                                <ReferenceLine y={0} stroke="#64748b" />
-                                                                <Line type="monotone" dataKey="cum" stroke="#a78bfa" strokeWidth={2}
-                                                                    dot={(props) => { const { cx, cy, payload } = props; const col = payload.open ? '#38bdf8' : (payload.net >= 0 ? '#34d399' : '#f87171'); return <circle key={payload.i} cx={cx} cy={cy} r={payload.open ? 4 : 3} fill={col} stroke="#0f172a" strokeWidth={1} />; }} />
+                                                                <ReferenceLine y={0} stroke={ct.axis} />
+                                                                <Line type="monotone" dataKey="cum" stroke={ct.mark.equity} strokeWidth={2}
+                                                                    dot={(props) => { const { cx, cy, payload } = props; const col = payload.open ? ct.mark.live : (payload.net >= 0 ? ct.diverging.positive : ct.diverging.negative); return <circle key={payload.i} cx={cx} cy={cy} r={payload.open ? 4 : 3} fill={col} stroke={ct.background} strokeWidth={1} />; }} />
                                                             </LineChart>
-                                                        </ResponsiveContainer>
-                                                        <div className="text-[10px] text-slate-500 mt-0.5">Each dot = one booked structure (green win / red loss); the line is running net P&L. {act.openPoint ? <span className="text-sky-300">Blue dot = current open structure’s unrealized MTM.</span> : ''}</div>
+                                                        </ZoomableChart>
+                                                        <div className="text-3xs text-fg-5 mt-0.5">Each dot = one booked structure (green win / red loss); the line is running net P&L. {act.openPoint ? <span className="text-sky-300">Blue dot = current open structure’s unrealized MTM.</span> : ''}</div>
                                                     </>)}
                                                 </div>
                                             )}
                                             {/* Entry timing + position detail (the trade's story) */}
                                             {open && pos.entryAt && (
-                                                <div className="text-[10px] font-mono text-slate-400 mb-2 space-y-0.5 border-t border-slate-800 pt-1.5">
+                                                <div className="text-3xs font-mono text-fg-4 mb-2 space-y-0.5 border-t border-line-0 pt-1.5">
                                                     <div title={heldSessions != null ? `held = CALENDAR elapsed since entry (what the hold_days cap counts). ${heldSessions} trading session(s) touched — weekends/holidays age the position without a single tick.` : undefined}>
-                                                        ⏱ <span className="text-slate-300">Entered {fmtClock(pos.entryAt)}</span> · held {fmtDur(pos.entryAt)}
-                                                        {heldSessions != null && <span className="text-slate-500"> ({heldSessions} sess)</span>}
+                                                        ⏱ <span className="text-fg-3">Entered {fmtClock(pos.entryAt)}</span> · held {fmtDur(pos.entryAt)}
+                                                        {heldSessions != null && <span className="text-fg-5"> ({heldSessions} sess)</span>}
                                                         {pos.entryDir ? ` · dir ${pos.entryDir}` : ''}
                                                     </div>
                                                     <div>
                                                         spot@in {fmt(pos.entrySpot)}
-                                                        {pos.origCredit != null && <> · net {pos.origCredit > 0 ? 'credit' : 'debit'} <span className="text-slate-300">₹{fmt(Math.abs(pos.origCredit), 1)}/u</span></>}
+                                                        {pos.origCredit != null && <> · net {pos.origCredit > 0 ? 'credit' : 'debit'} <span className="text-fg-3">₹{fmt(Math.abs(pos.origCredit), 1)}/u</span></>}
                                                         {Number.isFinite(pos.maxProfit) && pos.maxProfit != null && <> · maxP ₹{fmt(pos.maxProfit, 1)}/u</>}
                                                         {pos.marginEst > 0 && <> · margin ₹{fmt(pos.marginEst)}</>}
                                                     </div>
-                                                    {expiry && <div>expiry {expiry}{dte != null ? ` · ${dte} DTE` : ''} · {pos.lots || d.lots} lot(s){pos.vegaEst != null ? ` · vega@in ₹${fmt(pos.vegaEst, 0)}` : ''}</div>}
-                                                    {exitBits.length > 0 && <div className="text-slate-500">manages to: {exitBits.join(' · ')}</div>}
+                                                    {expiry && <div>expiry {expiry}{dte != null ? ` · ${dte} DTE` : ''} · {pos.lots || d.lots} lot(s){pos.vegaEst != null ? ` · vega@in ₹${fmt(pos.vegaEst, 0)} (all legs, frozen)` : ''}</div>}
+                                                    {exitBits.length > 0 && <div className="text-fg-5">manages to: {exitBits.join(' · ')}</div>}
                                                 </div>
                                             )}
                                             {st === 'OPEN' && d.position?.legs?.length > 0 && (
-                                                <div className="text-[10px] font-mono text-slate-500 mb-2">
+                                                <div className="text-3xs font-mono text-fg-5 mb-2">
                                                     {d.position.legs.map((l, i) => <div key={i}>{l.action} {l.symbol?.split(':')[1]} @ ₹{l.entryPrice}{l.exitPrice ? ` → ₹${l.exitPrice}` : ''}</div>)}
                                                 </div>
                                             )}
                                             {/* IDLE deployments: show what it's waiting for + config summary */}
                                             {!open && d.status === 'ACTIVE' && (
-                                                <div className="text-[10px] font-mono text-slate-500 mb-2 border-t border-slate-800 pt-1.5">
+                                                <div className="text-3xs font-mono text-fg-5 mb-2 border-t border-line-0 pt-1.5">
                                                     flat — waiting for {d.entry_mode === 'signal' ? `a ${d.signal_strategy} signal` : `the ${P.entry_time || '09:20'} entry`}
                                                     {d.daily?.entered ? ' · already entered today' : ''}{exitBits.length ? ` · exits: ${exitBits.slice(0, 3).join(' · ')}` : ''}
                                                 </div>
                                             )}
                                             {/* ── Full order detail (professional view) ── */}
                                             {detailOpen && (
-                                                <div className="text-[10px] mb-2 border-t border-slate-800 pt-2 space-y-2">
-                                                    <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 font-mono text-slate-400">
-                                                        <div>Deployment <span className="text-slate-300">{d.name}</span></div>
-                                                        <div>Created <span className="text-slate-300">{istDateTime(d.createdAt)}</span></div>
+                                                <div className="text-3xs mb-2 border-t border-line-0 pt-2 space-y-2">
+                                                    <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 font-mono text-fg-4">
+                                                        <div>Deployment <span className="text-fg-3">{d.name}</span></div>
+                                                        <div>Created <span className="text-fg-3">{istDateTime(d.createdAt)}</span></div>
                                                         <div>Mode <span className={d.trade_mode === 'LIVE' ? 'text-red-300' : 'text-sky-300'}>{d.trade_mode}</span> · {d.status}</div>
-                                                        <div>Entry <span className="text-slate-300">{d.entry_mode === 'signal' ? `${d.signal_strategy}${P.use_signal_exit ? ' +exit' : ''}` : `time ${P.entry_time || '09:20'}`}</span></div>
-                                                        {open && <><div>Entered <span className="text-slate-300">{istDateTime(pos.entryAt)}</span> · held {fmtDur(pos.entryAt)}{heldSessions != null ? ` (${heldSessions} sess)` : ''}</div>
-                                                        <div>Entry spot <span className="text-slate-300">{fmt(pos.entrySpot)}</span>{pos.entryDir ? ` · dir ${pos.entryDir}` : ''}</div></>}
+                                                        <div>Entry <span className="text-fg-3">{d.entry_mode === 'signal' ? `${d.signal_strategy}${P.use_signal_exit ? ' +exit' : ''}` : `time ${P.entry_time || '09:20'}`}</span></div>
+                                                        {open && <><div>Entered <span className="text-fg-3">{istDateTime(pos.entryAt)}</span> · held {fmtDur(pos.entryAt)}{heldSessions != null ? ` (${heldSessions} sess)` : ''}</div>
+                                                        <div>Entry spot <span className="text-fg-3">{fmt(pos.entrySpot)}</span>{pos.entryDir ? ` · dir ${pos.entryDir}` : ''}</div></>}
                                                     </div>
                                                     {open && pos.legs?.length > 0 && (
                                                         <div className="overflow-x-auto">
-                                                            <table className="w-full font-mono text-slate-300">
-                                                                <thead><tr className="text-slate-500 text-left"><th>Leg</th><th>Strike</th><th className="text-right">Qty</th><th className="text-right">Entry ₹</th><th className="text-right">Now/Exit</th><th>Filled</th><th>Status</th>{d.trade_mode === 'LIVE' && <th>OrderId</th>}</tr></thead>
+                                                            <table className="w-full font-mono text-fg-3">
+                                                                <thead><tr className="text-fg-5 text-left"><th>Leg</th><th>Strike</th><th className="text-right">Qty</th><th className="text-right">Entry ₹</th><th className="text-right">Now/Exit</th><th>Filled</th><th>Status</th>{d.trade_mode === 'LIVE' && <th>OrderId</th>}</tr></thead>
                                                                 <tbody>
                                                                     {pos.legs.map((l, i) => (
-                                                                        <tr key={i} className="border-t border-slate-800/60">
+                                                                        <tr key={i} className="border-t border-line-0/60">
                                                                             <td className={l.action === 'BUY' ? 'text-emerald-300' : 'text-red-300'}>{l.action} {l.type}</td>
                                                                             <td>{l.strike}{l.ratio > 1 ? ` ×${l.ratio}` : ''}</td>
                                                                             <td className="text-right">{l.qty}</td>
                                                                             <td className="text-right">{fmt(l.entryPrice, 2)}</td>
-                                                                            <td className="text-right text-slate-500">{l.exitPrice ? fmt(l.exitPrice, 2) : '—'}</td>
-                                                                            <td className="text-slate-600 whitespace-nowrap" title={l.filledAt ? `${istDateTimeSec(l.filledAt)} IST` : ''}>{l.filledAt ? istSmartSec(l.filledAt, pos.entryAt) : '—'}</td>
-                                                                            <td className="text-slate-500">{l.status}</td>
-                                                                            {d.trade_mode === 'LIVE' && <td className="text-slate-600 truncate max-w-[90px]" title={l.orderId}>{l.orderId || '—'}</td>}
+                                                                            <td className="text-right text-fg-5">{l.exitPrice ? fmt(l.exitPrice, 2) : '—'}</td>
+                                                                            <td className="text-fg-6 whitespace-nowrap" title={l.filledAt ? `${istDateTimeSec(l.filledAt)} IST` : ''}>{l.filledAt ? istSmartSec(l.filledAt, pos.entryAt) : '—'}</td>
+                                                                            <td className="text-fg-5">{l.status}</td>
+                                                                            {d.trade_mode === 'LIVE' && <td className="text-fg-6 truncate max-w-[5.625rem]" title={l.orderId}>{l.orderId || '—'}</td>}
                                                                         </tr>
                                                                     ))}
                                                                     {pos.closedLegs?.map((l, i) => (
-                                                                        <tr key={`c${i}`} className="border-t border-slate-800/60 opacity-60">
+                                                                        <tr key={`c${i}`} className="border-t border-line-0/60 opacity-60">
                                                                             <td className={l.action === 'BUY' ? 'text-emerald-300' : 'text-red-300'}>{l.action} {l.type}</td>
                                                                             <td>{l.strike}</td><td className="text-right">{l.qty}</td>
                                                                             <td className="text-right">{fmt(l.entryPrice, 2)}</td>
                                                                             <td className="text-right">{fmt(l.exitPrice, 2)}</td>
-                                                                            <td className="text-slate-600 whitespace-nowrap" title={l.filledAt ? `${istDateTimeSec(l.filledAt)} IST` : ''}>{l.filledAt ? istSmartSec(l.filledAt, pos.entryAt) : '—'}</td>
-                                                                            <td className="text-slate-500">{l.closeReason || l.status}</td>
-                                                                            {d.trade_mode === 'LIVE' && <td className="text-slate-600">closed</td>}
+                                                                            <td className="text-fg-6 whitespace-nowrap" title={l.filledAt ? `${istDateTimeSec(l.filledAt)} IST` : ''}>{l.filledAt ? istSmartSec(l.filledAt, pos.entryAt) : '—'}</td>
+                                                                            <td className="text-fg-5">{l.closeReason || l.status}</td>
+                                                                            {d.trade_mode === 'LIVE' && <td className="text-fg-6">closed</td>}
                                                                         </tr>
                                                                     ))}
                                                                 </tbody>
@@ -2285,34 +2358,34 @@ export default function MultiLeg() {
                                                         </div>
                                                     )}
                                                     {open && (
-                                                        <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-0.5 font-mono text-slate-400">
-                                                            <div>Net {isCredit ? 'credit' : 'debit'}<Help k="net-credit-debit" /> <span className="text-slate-300">₹{fmt(Math.abs(pos.origCredit), 1)}/u</span>{unitToRupee ? ` (₹${fmt(Math.abs(pos.origCredit) * unitToRupee)})` : ''}</div>
+                                                        <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-0.5 font-mono text-fg-4">
+                                                            <div>Net {isCredit ? 'credit' : 'debit'}<Help k="net-credit-debit" /> <span className="text-fg-3">₹{fmt(Math.abs(pos.origCredit), 1)}/u</span>{unitToRupee ? ` (₹${fmt(Math.abs(pos.origCredit) * unitToRupee)})` : ''}</div>
                                                             {Number.isFinite(pos.maxProfit) && <div>Max profit ₹{fmt(pos.maxProfit, 1)}/u{unitToRupee ? ` (₹${fmt(pos.maxProfit * unitToRupee)})` : ''}</div>}
-                                                            <div>Margin<Help k="margin" /> <span className="text-slate-300">₹{fmt(pos.marginEst || 0)}</span></div>
+                                                            <div>Margin<Help k="margin" /> <span className="text-fg-3">₹{fmt(pos.marginEst || 0)}</span></div>
                                                             <div className="text-emerald-300">TP level<Help k="tp-level" /> {rup(tpUnit)}{tpUnit != null && unitToRupee ? ` (${fmt(tpUnit,1)}/u)` : ''}</div>
                                                             <div className="text-red-300">SL level<Help k="sl-level" /> {rup(slUnit)}{slUnit != null && unitToRupee ? ` (${fmt(slUnit,1)}/u)` : ''}</div>
                                                             {P.leg_sl_x > 0 && <div className="text-amber-300">leg-SL<Help k="leg-sl" /> @ entry ×{P.leg_sl_x}</div>}
-                                                            <div>MTM now <span className={pos.lastMtm > 0 ? 'text-emerald-300' : pos.lastMtm < 0 ? 'text-red-300' : 'text-slate-300'}>₹{fmt(pos.lastMtmRupees ?? 0)}</span></div>
+                                                            <div>MTM now <span className={pos.lastMtm > 0 ? 'text-emerald-300' : pos.lastMtm < 0 ? 'text-red-300' : 'text-fg-3'}>₹{fmt(pos.lastMtmRupees ?? 0)}</span></div>
                                                             {expiry && <div>Expiry {expiry} · {dte} DTE<Help k="dte" /></div>}
                                                             {proj ? (
-                                                                <div className={`col-span-2 md:col-span-3 ${proj.overdue ? 'text-amber-300' : 'text-slate-400'}`}
+                                                                <div className={`col-span-2 md:col-span-3 ${proj.overdue ? 'text-amber-300' : 'text-fg-4'}`}
                                                                     title={`Time-based close if price does nothing. Binding rule: ${proj.rule} (${proj.why}), due ${istDateTime(new Date(proj.at).toISOString())}.`
                                                                         + (proj.fires !== proj.at ? ` The engine only acts on a tick, so it fires at the next session open: ${istDateTime(new Date(proj.fires).toISOString())}.` : '')
                                                                         + (proj.others.length ? ` Then: ${proj.others.map(o => `${o.why} ${istDateTime(new Date(o.at).toISOString())}`).join(' · ')}.` : '')
                                                                         + ' TP/SL/early-exit can close it sooner.'}>
-                                                                    Closes<Help k="projected-close" /> <span className={proj.overdue ? 'text-amber-200 font-semibold' : 'text-slate-300'}>{istDateTime(new Date(proj.fires).toISOString())}</span>
-                                                                    <span className="text-slate-500"> · {proj.why}</span>
+                                                                    Closes<Help k="projected-close" /> <span className={proj.overdue ? 'text-amber-200 font-semibold' : 'text-fg-3'}>{istDateTime(new Date(proj.fires).toISOString())}</span>
+                                                                    <span className="text-fg-5"> · {proj.why}</span>
                                                                     {proj.overdue
                                                                         ? <span className="text-amber-300"> · already tripped — closes at the next tick</span>
-                                                                        : <span className="text-slate-500"> · in {fmtDurTo(proj.fires)}</span>}
-                                                                    {proj.others.length > 0 && <span className="text-slate-600"> · then {proj.others[0].why}</span>}
+                                                                        : <span className="text-fg-5"> · in {fmtDurTo(proj.fires)}</span>}
+                                                                    {proj.others.length > 0 && <span className="text-fg-6"> · then {proj.others[0].why}</span>}
                                                                 </div>
                                                             ) : (
-                                                                <div className="text-slate-500">Exit by: no time-based rule — TP/SL only</div>
+                                                                <div className="text-fg-5">Exit by: no time-based rule — TP/SL only</div>
                                                             )}
                                                         </div>
                                                     )}
-                                                    {!open && <div className="font-mono text-slate-500">Flat. Last daily PnL ₹{fmt(d.daily?.pnlToday)} · lifetime {d.totals?.trades || 0} trades ₹{fmt(d.totals?.netPnl)}. Config → {exitBits.join(' · ') || 'defaults'}.</div>}
+                                                    {!open && <div className="font-mono text-fg-5">Flat. Last daily PnL ₹{fmt(d.daily?.pnlToday)} · lifetime {d.totals?.trades || 0} trades ₹{fmt(d.totals?.netPnl)}. Config → {exitBits.join(' · ') || 'defaults'}.</div>}
 
                                                     {/* ── BROKER RECONCILIATION (LIVE only) ───────────────────
                                                         Does our book match the broker's? Per-leg: our recorded fill
@@ -2321,57 +2394,57 @@ export default function MultiLeg() {
                                                         charges (what the ledger shows). */}
                                                     {isLive && open && depRecon?.id === d._id && (() => {
                                                         const R = depRecon.data || {};
-                                                        if (R.error) return <div className="text-[10px] text-red-400 border-t border-slate-800 pt-1.5">Reconcile failed: {R.error}</div>;
+                                                        if (R.error) return <div className="text-3xs text-red-400 border-t border-line-0 pt-1.5">Reconcile failed: {R.error}</div>;
                                                         if (R.notApplicable || R.empty) return null;
                                                         return (
-                                                            <div className="border-t border-slate-800 pt-2 space-y-1">
+                                                            <div className="border-t border-line-0 pt-2 space-y-1">
                                                                 <div className="flex items-center gap-2 flex-wrap">
-                                                                    <span className="text-[10px] font-semibold text-slate-300">Broker reconciliation</span>
+                                                                    <span className="text-3xs font-semibold text-fg-3">Broker reconciliation</span>
                                                                     {R.priceReconciled
-                                                                        ? <span className="text-[9px] px-1.5 py-0.5 rounded border border-emerald-700 text-emerald-300">✓ fills match broker</span>
-                                                                        : <span className="text-[9px] px-1.5 py-0.5 rounded border border-amber-600 text-amber-300">⚠ {R.mismatches || 0} leg(s) differ</span>}
-                                                                    {R.mtmAgeMinutes != null && R.mtmAgeMinutes > 5 && <span className="text-[9px] text-slate-500">mark {R.mtmAgeMinutes}m old</span>}
+                                                                        ? <span className="text-4xs px-1.5 py-0.5 rounded border border-emerald-700 text-emerald-300">✓ fills match broker</span>
+                                                                        : <span className="text-4xs px-1.5 py-0.5 rounded border border-amber-600 text-amber-300">⚠ {R.mismatches || 0} leg(s) differ</span>}
+                                                                    {R.mtmAgeMinutes != null && R.mtmAgeMinutes > 5 && <span className="text-4xs text-fg-5">mark {R.mtmAgeMinutes}m old</span>}
                                                                 </div>
                                                                 <div className="overflow-x-auto">
-                                                                    <table className="w-full text-[9px] font-mono text-slate-300">
-                                                                        <thead><tr className="text-slate-500 text-left"><th>Leg</th><th className="text-right">Ours</th><th className="text-right">Broker VWAP</th><th className="text-right">Pos avg</th><th className="text-right">Drift</th><th>Source</th></tr></thead>
+                                                                    <table className="w-full text-4xs font-mono text-fg-3">
+                                                                        <thead><tr className="text-fg-5 text-left"><th>Leg</th><th className="text-right">Ours</th><th className="text-right">Broker VWAP</th><th className="text-right">Pos avg</th><th className="text-right">Drift</th><th>Source</th></tr></thead>
                                                                         <tbody>
                                                                             {(R.legs || []).map((l, i) => (
-                                                                                <tr key={i} className="border-t border-slate-800/60">
+                                                                                <tr key={i} className="border-t border-line-0/60">
                                                                                     <td className={l.action === 'BUY' ? 'text-emerald-300' : 'text-red-300'}>{l.action} {l.strike}</td>
                                                                                     <td className="text-right">{fmt(l.ourEntryPrice, 2)}</td>
                                                                                     <td className="text-right">{l.brokerVwap != null ? fmt(l.brokerVwap, 2) : '—'}</td>
-                                                                                    <td className="text-right text-slate-500">{l.brokerAvgPrice != null ? fmt(l.brokerAvgPrice, 2) : '—'}</td>
-                                                                                    <td className={`text-right ${l.material ? 'text-amber-300 font-bold' : 'text-slate-500'}`}>{l.drift != null ? `${l.drift > 0 ? '+' : ''}${fmt(l.drift, 2)}` : '—'}</td>
-                                                                                    <td className={l.priceSource === 'broker_vwap' ? 'text-emerald-500' : 'text-amber-400'} title={l.qtyMatch === false ? `qty/direction mismatch: broker net ${l.brokerNetQty}, expected ${l.action === 'BUY' ? '+' : '−'}${l.qty}` : ''}>{l.priceSource === 'broker_vwap' ? 'broker' : l.priceSource}{l.qtyMatch === false ? ' ⚠qty' : ''}</td>
+                                                                                    <td className="text-right text-fg-5">{l.brokerAvgPrice != null ? fmt(l.brokerAvgPrice, 2) : '—'}</td>
+                                                                                    <td className={`text-right ${l.material ? 'text-amber-300 font-bold' : 'text-fg-5'}`}>{l.drift != null ? `${l.drift > 0 ? '+' : ''}${fmt(l.drift, 2)}` : '—'}</td>
+                                                                                    <td className={l.priceSource === 'broker_vwap' ? 'text-emerald-400' : 'text-amber-400'} title={l.qtyMatch === false ? `qty/direction mismatch: broker net ${l.brokerNetQty}, expected ${l.action === 'BUY' ? '+' : '−'}${l.qty}` : ''}>{l.priceSource === 'broker_vwap' ? 'broker' : l.priceSource}{l.qtyMatch === false ? ' ⚠qty' : ''}</td>
                                                                                 </tr>
                                                                             ))}
                                                                         </tbody>
                                                                     </table>
                                                                 </div>
-                                                                <div className="font-mono text-slate-400">
+                                                                <div className="font-mono text-fg-4">
                                                                     {R.netRupees == null ? (
                                                                         <span className="text-amber-400">PnL restatement unavailable — no live marks for every leg (₹0 would read as “flat”, so nothing is shown).</span>
                                                                     ) : (<>
-                                                                        PnL at our prices: gross <span className={R.grossRupees > 0 ? 'text-emerald-300' : R.grossRupees < 0 ? 'text-red-300' : 'text-slate-300'}>₹{fmt(R.grossRupees)}</span>
-                                                                        {' '}− charges ₹{fmt(R.chargesRupees)} = net <span className={R.netRupees > 0 ? 'text-emerald-300' : R.netRupees < 0 ? 'text-red-300' : 'text-slate-300'}>₹{fmt(R.netRupees)}</span>
-                                                                        {R.realizedLegRupees_informational ? <span className="text-slate-500" title="Realized P&L of legs already closed (e.g. a leg stop-loss). Shown for context — it is ALREADY inside the gross figure, not added to it.">{' '}(incl. ₹{fmt(R.realizedLegRupees_informational)} booked legs)</span> : null}
+                                                                        PnL at our prices: gross <span className={R.grossRupees > 0 ? 'text-emerald-300' : R.grossRupees < 0 ? 'text-red-300' : 'text-fg-3'}>₹{fmt(R.grossRupees)}</span>
+                                                                        {' '}− charges ₹{fmt(R.chargesRupees)} = net <span className={R.netRupees > 0 ? 'text-emerald-300' : R.netRupees < 0 ? 'text-red-300' : 'text-fg-3'}>₹{fmt(R.netRupees)}</span>
+                                                                        {R.realizedLegRupees_informational ? <span className="text-fg-5" title="Realized P&L of legs already closed (e.g. a leg stop-loss). Shown for context — it is ALREADY inside the gross figure, not added to it.">{' '}(incl. ₹{fmt(R.realizedLegRupees_informational)} booked legs)</span> : null}
                                                                     </>)}
                                                                 </div>
-                                                                <div className="text-[9px] text-slate-600">Broker unrealised P&L excludes charges → compare it to <span className="text-slate-400">gross</span>; compare your ledger to <span className="text-slate-400">net</span>.</div>
-                                                                {(R.warnings || []).map((w, i) => <div key={i} className="text-[9px] text-amber-400">⚠ {w}</div>)}
+                                                                <div className="text-4xs text-fg-6">Broker unrealised P&L excludes charges → compare it to <span className="text-fg-4">gross</span>; compare your ledger to <span className="text-fg-4">net</span>.</div>
+                                                                {(R.warnings || []).map((w, i) => <div key={i} className="text-4xs text-amber-400">⚠ {w}</div>)}
                                                             </div>
                                                         );
                                                     })()}
                                                 </div>
                                             )}
-                                            {d.lastError && <div className="text-[10px] text-red-400 mb-2">⚠ {d.lastError}</div>}
+                                            {d.lastError && <div className="text-3xs text-red-400 mb-2">⚠ {d.lastError}</div>}
                                             <div className="flex gap-1 flex-wrap">
                                                 {d.status === 'ACTIVE'
-                                                    ? <button onClick={() => depAction(d, open ? 'stop-close' : 'stop')} disabled={busy} aria-label={open ? `Stop and close ${d.name}` : `Stop ${d.name}`} className="px-2 py-0.5 rounded border border-amber-700/50 bg-amber-900/20 text-amber-300 text-[11px] hover:bg-amber-900/40 disabled:opacity-40"><StopCircle className="w-3 h-3 inline mr-0.5" />{open ? 'Stop + close' : 'Stop'}</button>
-                                                    : <button onClick={() => depAction(d, 'start')} disabled={busy} aria-label={`Resume ${d.name}`} className="px-2 py-0.5 rounded border border-emerald-700/50 bg-emerald-900/20 text-emerald-300 text-[11px] hover:bg-emerald-900/40 disabled:opacity-40"><Play className="w-3 h-3 inline mr-0.5" />Resume</button>}
-                                                {st === 'OPEN' && <button onClick={() => depAction(d, 'close')} disabled={busy} aria-label={`Close ${d.name} now`} className="px-2 py-0.5 rounded border border-red-700/50 bg-red-900/20 text-red-300 text-[11px] hover:bg-red-900/40 disabled:opacity-40"><Square className="w-3 h-3 inline mr-0.5" />Close now</button>}
-                                                {!open && <button onClick={() => depAction(d, 'delete')} disabled={busy} aria-label={`Delete ${d.name}`} className="px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-400 text-[11px] hover:text-red-300 disabled:opacity-40"><Trash2 className="w-3 h-3 inline mr-0.5" />Delete</button>}
+                                                    ? <button onClick={() => depAction(d, open ? 'stop-close' : 'stop')} disabled={busy} aria-label={open ? `Stop and close ${d.name}` : `Stop ${d.name}`} className="px-2 py-0.5 rounded border border-amber-700/50 bg-amber-900/20 text-amber-300 text-2xs hover:bg-amber-900/40 disabled:opacity-40"><StopCircle className="w-3 h-3 inline mr-0.5" />{open ? 'Stop + close' : 'Stop'}</button>
+                                                    : <button onClick={() => depAction(d, 'start')} disabled={busy} aria-label={`Resume ${d.name}`} className="px-2 py-0.5 rounded border border-emerald-700/50 bg-emerald-900/20 text-emerald-300 text-2xs hover:bg-emerald-900/40 disabled:opacity-40"><Play className="w-3 h-3 inline mr-0.5" />Resume</button>}
+                                                {st === 'OPEN' && <button onClick={() => depAction(d, 'close')} disabled={busy} aria-label={`Close ${d.name} now`} className="px-2 py-0.5 rounded border border-red-700/50 bg-red-900/20 text-red-300 text-2xs hover:bg-red-900/40 disabled:opacity-40"><Square className="w-3 h-3 inline mr-0.5" />Close now</button>}
+                                                {!open && <button onClick={() => depAction(d, 'delete')} disabled={busy} aria-label={`Delete ${d.name}`} className="px-2 py-0.5 rounded border border-line bg-slate-800 text-fg-4 text-2xs hover:text-red-300 disabled:opacity-40"><Trash2 className="w-3 h-3 inline mr-0.5" />Delete</button>}
                                             </div>
                                         </div>
                                     );
@@ -2380,43 +2453,65 @@ export default function MultiLeg() {
                         )}
                     </div>
 
-                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                        <div className="bg-surface rounded-xl border border-slate-700 p-4">
-                            <div className="text-sm font-semibold text-white mb-2">Engine events</div>
-                            {mlDeps.events.length === 0 ? <div className="text-xs text-slate-500">No events yet.</div> : (
-                                <div className="max-h-[300px] overflow-y-auto text-[11px] space-y-1">
+                    {/*
+                      Both cards are flex columns that FILL their grid cell, and the
+                      scrolling region inside each is `flex-1 min-h-0`.
+
+                      Before: the grid stretched both cards to the taller one (default
+                      align-items: stretch), but the events list was capped at a fixed
+                      300px, so it could not grow into the space it had been given —
+                      leaving a large dead gap under it whenever the trades table was
+                      long. The table meanwhile had no cap at all, so it set the row
+                      height: 23 trades made it ~800px, and 200 would have made the page
+                      unusable.
+
+                      `min-h-0` is the load-bearing part — a flex item defaults to
+                      min-height:auto, which floors it at content height and defeats
+                      overflow. The cap is in `rem`, not px, so it scales with the Text
+                      Size axis instead of clipping more rows as text grows.
+                    */}
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-stretch">
+                        <div className="bg-surface rounded-xl border border-line p-4 flex flex-col max-h-[32rem]">
+                            <div className="text-sm font-semibold text-fg mb-2">Engine events</div>
+                            {mlDeps.events.length === 0 ? <div className="text-xs text-fg-5">No events yet.</div> : (
+                                <div className="flex-1 min-h-0 overflow-y-auto text-2xs space-y-1">
                                     {mlDeps.events.map((e, i) => (
-                                        <div key={i} className="flex gap-2 border-b border-slate-800/60 pb-1">
-                                            <span className="text-slate-600 whitespace-nowrap" title={istDateTimeSec(e.at) + ' IST'}>
-                                                <span className="text-slate-700">{istDate(e.at)}</span> {istTimeSec(e.at)}
+                                        <div key={i} className="flex gap-2 border-b border-line-0/60 pb-1">
+                                            <span className="text-fg-6 whitespace-nowrap" title={istDateTimeSec(e.at) + ' IST'}>
+                                                <span className="text-fg-6">{istDate(e.at)}</span> {istTimeSec(e.at)}
                                             </span>
                                             <span className={`font-semibold whitespace-nowrap ${/FAIL|ERROR|SKIP/.test(e.type) ? 'text-red-300' : /ENTRY|EXIT/.test(e.type) ? 'text-emerald-300' : 'text-sky-300'}`}>{e.type}</span>
-                                            <span className="text-slate-400">{e.name ? `[${e.name}] ` : ''}{e.message}</span>
+                                            <span className="text-fg-4">{e.name ? `[${e.name}] ` : ''}{e.message}</span>
                                         </div>
                                     ))}
                                 </div>
                             )}
                         </div>
-                        <div className="bg-surface rounded-xl border border-slate-700 p-4 overflow-x-auto">
-                            <div className="text-sm font-semibold text-white mb-2">Structure trades ({mlTrades.length})</div>
-                            {mlTrades.length === 0 ? <div className="text-xs text-slate-500">No completed structure round-trips yet.</div> : (
-                                <table className="w-full text-[11px] text-slate-300">
-                                    <thead><tr className="text-slate-500 text-left"><th>Entry</th><th>Exit</th><th>Name</th><th>Mode</th><th>Reason</th><th className="text-right">Gross ₹</th><th className="text-right">Charges</th><th className="text-right">Net ₹</th></tr></thead>
+                        <div className="bg-surface rounded-xl border border-line p-4 flex flex-col max-h-[32rem]">
+                            <div className="text-sm font-semibold text-fg mb-2">Structure trades ({mlTrades.length})</div>
+                            {mlTrades.length === 0 ? <div className="text-xs text-fg-5">No completed structure round-trips yet.</div> : (
+                              <div className="flex-1 min-h-0 overflow-auto">
+                                <table className="w-full text-2xs text-fg-3">
+                                    {/* The header sticks now that the body scrolls — a
+                                        column of bare rupee figures with the labels
+                                        scrolled off is unreadable. */}
+                                    <thead className="sticky top-0 z-10 bg-surface"><tr className="text-fg-5 text-left"><th>Entry</th><th>Exit</th><th>Name</th><th>Mode</th><th>Reason</th><th className="text-right">Gross ₹</th><th className="text-right">Charges</th><th className="text-right">Net ₹</th></tr></thead>
                                     <tbody>
                                         {mlTrades.map((t, i) => (
-                                            <tr key={i} className="border-t border-slate-800">
+                                            <tr key={i} className="border-t border-line-0">
                                                 <td className="whitespace-nowrap" title="Entry (IST)">{istDateTime(t.entryAt)}</td>
                                                 <td className="whitespace-nowrap" title="Exit (IST) — date shown when it differs from entry">{istSmart(t.exitAt, t.entryAt)}<DayGap from={t.entryAt} to={t.exitAt} /></td>
                                                 <td>{t.name}</td>
                                                 <td className={t.trade_mode === 'LIVE' ? 'text-red-300' : 'text-sky-300'}>{t.trade_mode}</td>
-                                                <td className="text-slate-400">{t.exitReason}</td>
+                                                <td className="text-fg-4">{t.exitReason}</td>
                                                 <td className="text-right">₹{fmt(t.grossPnl)}</td>
-                                                <td className="text-right text-slate-500">₹{fmt(t.charges)}</td>
+                                                <td className="text-right text-fg-5">₹{fmt(t.charges)}</td>
                                                 <td className={`text-right font-semibold ${t.netPnl > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(t.netPnl)}</td>
                                             </tr>
                                         ))}
                                     </tbody>
                                 </table>
+                              </div>
                             )}
                         </div>
                     </div>
@@ -2426,41 +2521,41 @@ export default function MultiLeg() {
             {mode === 'results' && (
                 <div className="space-y-4">
                     {/* Filters */}
-                    <div className="bg-surface rounded-xl border border-slate-700 p-4 flex flex-wrap items-end gap-3">
+                    <div className="bg-surface rounded-xl border border-line p-4 flex flex-wrap items-end gap-3">
                         <div>
-                            <div className="text-[10px] text-slate-500 mb-0.5">Book</div>
-                            <select value={resFilter.mode} onChange={e => setResFilter(f => ({ ...f, mode: e.target.value }))} className="bg-slate-800 border border-slate-700 rounded p-1 text-xs text-slate-200">
+                            <div className="text-3xs text-fg-5 mb-0.5">Book</div>
+                            <select value={resFilter.mode} onChange={e => setResFilter(f => ({ ...f, mode: e.target.value }))} className="bg-slate-800 border border-line rounded p-1 text-xs text-fg-2">
                                 <option value="all">All books</option><option value="LIVE">LIVE only</option><option value="PAPER">PAPER only</option>
                             </select>
                         </div>
                         <div>
-                            <div className="text-[10px] text-slate-500 mb-0.5">Deployment</div>
-                            <select value={resFilter.deploymentId} onChange={e => setResFilter(f => ({ ...f, deploymentId: e.target.value }))} className="bg-slate-800 border border-slate-700 rounded p-1 text-xs text-slate-200 max-w-[180px]">
+                            <div className="text-3xs text-fg-5 mb-0.5">Deployment</div>
+                            <select value={resFilter.deploymentId} onChange={e => setResFilter(f => ({ ...f, deploymentId: e.target.value }))} className="bg-slate-800 border border-line rounded p-1 text-xs text-fg-2 max-w-[11.25rem]">
                                 <option value="all">All deployments</option>
                                 {[...new Map(resTrades.map(t => [String(t.deploymentId), t.name])).entries()].filter(([id]) => id && id !== 'undefined').map(([id, name]) => <option key={id} value={id}>{name || id.slice(-6)}</option>)}
                             </select>
                         </div>
                         <div>
-                            <div className="text-[10px] text-slate-500 mb-0.5">Structure</div>
-                            <select value={resFilter.template} onChange={e => setResFilter(f => ({ ...f, template: e.target.value }))} className="bg-slate-800 border border-slate-700 rounded p-1 text-xs text-slate-200">
+                            <div className="text-3xs text-fg-5 mb-0.5">Structure</div>
+                            <select value={resFilter.template} onChange={e => setResFilter(f => ({ ...f, template: e.target.value }))} className="bg-slate-800 border border-line rounded p-1 text-xs text-fg-2">
                                 <option value="all">All structures</option>
                                 {[...new Set(resTrades.map(t => t.template))].filter(Boolean).map(k => <option key={k} value={k}>{templates.find(t => t.key === k)?.name || k}</option>)}
                             </select>
                         </div>
                         <div>
-                            <div className="text-[10px] text-slate-500 mb-0.5">Symbol</div>
-                            <select value={resFilter.symbol} onChange={e => setResFilter(f => ({ ...f, symbol: e.target.value }))} className="bg-slate-800 border border-slate-700 rounded p-1 text-xs text-slate-200">
+                            <div className="text-3xs text-fg-5 mb-0.5">Symbol</div>
+                            <select value={resFilter.symbol} onChange={e => setResFilter(f => ({ ...f, symbol: e.target.value }))} className="bg-slate-800 border border-line rounded p-1 text-xs text-fg-2">
                                 <option value="all">All symbols</option>
                                 {[...new Set(resTrades.map(t => t.symbol))].filter(Boolean).map(s => <option key={s} value={s}>{shortSym(s)}</option>)}
                             </select>
                         </div>
-                        <button onClick={refreshResults} className="ml-auto px-2 py-1 rounded border border-slate-700 bg-slate-800 text-xs text-slate-300 hover:text-white flex items-center gap-1">
+                        <button onClick={refreshResults} className="ml-auto px-2 py-1 rounded border border-line bg-slate-800 text-xs text-fg-3 hover:text-fg flex items-center gap-1">
                             <RefreshCw className={`w-3 h-3 ${resLoading ? 'animate-spin' : ''}`} /> Refresh
                         </button>
                     </div>
 
                     {resStats.n === 0 ? (
-                        <div className="bg-surface rounded-xl border border-slate-700 p-8 text-center text-sm text-slate-500">
+                        <div className="bg-surface rounded-xl border border-line p-8 text-center text-sm text-fg-5">
                             {resLoading ? 'Loading…' : 'No completed structure round-trips yet for this filter. Deploy a strategy (PAPER first) — booked structures show here.'}
                         </div>
                     ) : (
@@ -2482,33 +2577,33 @@ export default function MultiLeg() {
                             </div>
 
                             {/* Equity curve */}
-                            <div className="bg-surface rounded-xl border border-slate-700 p-4">
-                                <div className="text-sm font-semibold text-white mb-2 flex items-center gap-2"><TrendingUp className="w-4 h-4 text-emerald-400" /> Equity Curve (cumulative net ₹)</div>
-                                <ResponsiveContainer width="100%" height={260}>
-                                    <LineChart data={resStats.equity} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                                        <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#64748b' }} minTickGap={40} />
-                                        <YAxis tick={{ fontSize: 10, fill: '#64748b' }} width={54} />
-                                        <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', fontSize: 12 }} />
-                                        <ReferenceLine y={0} stroke="#475569" />
-                                        <Line type="monotone" dataKey="cum" stroke="#34d399" dot={false} strokeWidth={2} />
+                            <div className="bg-surface rounded-xl border border-line p-4">
+                                <div className="text-sm font-semibold text-fg mb-2 flex items-center gap-2"><TrendingUp className="w-4 h-4 text-emerald-400" /> Equity Curve (cumulative net ₹)</div>
+                                <ZoomableChart data={resStats.equity} height={260}>
+                                    <LineChart margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
+                                        <XAxis dataKey="date" tick={{ fontSize: ct.type['3xs'], fill: ct.text.secondary }} minTickGap={40} />
+                                        <YAxis tick={{ fontSize: ct.type['3xs'], fill: ct.text.secondary }} width={54} />
+                                        <Tooltip contentStyle={ct.tooltipStyle({ fontSize: ct.type['xs'] })} />
+                                        <ReferenceLine y={0} stroke={ct.axis} />
+                                        <Line type="monotone" dataKey="cum" stroke={ct.categorical[0]} dot={false} strokeWidth={2} />
                                     </LineChart>
-                                </ResponsiveContainer>
+                                </ZoomableChart>
                             </div>
 
                             {/* Breakdowns */}
                             <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                                 {[['By exit reason', resStats.byReason], ['By structure', resStats.byTemplate], ['By symbol', resStats.bySymbol]].map(([title, m]) => (
-                                    <div key={title} className="bg-surface rounded-xl border border-slate-700 p-4">
-                                        <div className="text-sm font-semibold text-white mb-2">{title}</div>
-                                        <table className="w-full text-[11px] text-slate-300">
-                                            <thead><tr className="text-slate-500 text-left"><th>Key</th><th className="text-right">Trades</th><th className="text-right">Win%</th><th className="text-right">Net ₹</th></tr></thead>
+                                    <div key={title} className="bg-surface rounded-xl border border-line p-4">
+                                        <div className="text-sm font-semibold text-fg mb-2">{title}</div>
+                                        <table className="w-full text-2xs text-fg-3">
+                                            <thead><tr className="text-fg-5 text-left"><th>Key</th><th className="text-right">Trades</th><th className="text-right">Win%</th><th className="text-right">Net ₹</th></tr></thead>
                                             <tbody>
                                                 {Object.entries(m).sort((a, b) => b[1].net - a[1].net).map(([k, v]) => (
-                                                    <tr key={k} className="border-t border-slate-800">
-                                                        <td className="truncate max-w-[120px]" title={k}>{title === 'By structure' ? (templates.find(t => t.key === k)?.name || k) : title === 'By symbol' ? shortSym(k) : k}</td>
+                                                    <tr key={k} className="border-t border-line-0">
+                                                        <td className="truncate max-w-[7.5rem]" title={k}>{title === 'By structure' ? (templates.find(t => t.key === k)?.name || k) : title === 'By symbol' ? shortSym(k) : k}</td>
                                                         <td className="text-right">{v.n}</td>
-                                                        <td className="text-right text-slate-400">{Math.round(100 * v.wins / v.n)}%</td>
+                                                        <td className="text-right text-fg-4">{Math.round(100 * v.wins / v.n)}%</td>
                                                         <td className={`text-right font-semibold ${v.net > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(v.net)}</td>
                                                     </tr>
                                                 ))}
@@ -2519,50 +2614,50 @@ export default function MultiLeg() {
                             </div>
 
                             {/* Trades table */}
-                            <div className="bg-surface rounded-xl border border-slate-700 p-4 overflow-x-auto">
-                                <div className="text-sm font-semibold text-white mb-2">Structure round-trips ({resFiltered.length})</div>
-                                <table className="w-full text-[11px] text-slate-300">
-                                    <thead><tr className="text-slate-500 text-left">
+                            <div className="bg-surface rounded-xl border border-line p-4 overflow-x-auto">
+                                <div className="text-sm font-semibold text-fg mb-2">Structure round-trips ({resFiltered.length})</div>
+                                <table className="w-full text-2xs text-fg-3">
+                                    <thead><tr className="text-fg-5 text-left">
                                         <th></th><th>Entry → Exit</th><th>Structure</th><th>Sym</th><th>Mode</th><th>Reason</th>
                                         <th className="text-right">Credit/u</th><th className="text-right">IVP@in</th><th className="text-right">Gross ₹</th><th className="text-right">Chg</th><th className="text-right">Net ₹</th>
                                     </tr></thead>
                                     <tbody>
-                                        {[...resFiltered].sort((a, b) => new Date(b.exitAt) - new Date(a.exitAt)).map((t, i) => {
+                                        {[...resFiltered].sort((a, b) => new Date(b.exitAt) - new Date(a.exitAt)).map((t, _i) => {
                                             const tid = t._id || `${t.deploymentId}-${t.entryAt}`;
                                             const openT = resTradeOpen === tid;
                                             const allLegs = [...(t.legs || []), ...(t.closedLegs || [])];
                                             return (
                                             <React.Fragment key={tid}>
-                                            <tr className="border-t border-slate-800 hover:bg-slate-800/40 cursor-pointer" onClick={() => setResTradeOpen(openT ? null : tid)}>
-                                                <td className="text-slate-500 w-4">{openT ? '▲' : '▾'}</td>
+                                            <tr className="border-t border-line-0 hover:bg-slate-800/40 cursor-pointer" onClick={() => setResTradeOpen(openT ? null : tid)}>
+                                                <td className="text-fg-5 w-4">{openT ? '▲' : '▾'}</td>
                                                 <td className="whitespace-nowrap" title={`Entry ${istDateTimeSec(t.entryAt)} → Exit ${istDateTimeSec(t.exitAt)} IST`}>{istSpan(t.entryAt, t.exitAt)}<DayGap from={t.entryAt} to={t.exitAt} /></td>
-                                                <td className="truncate max-w-[120px]" title={t.template}>{templates.find(x => x.key === t.template)?.name || t.template}</td>
+                                                <td className="truncate max-w-[7.5rem]" title={t.template}>{templates.find(x => x.key === t.template)?.name || t.template}</td>
                                                 <td>{shortSym(t.symbol)}</td>
                                                 <td className={t.trade_mode === 'LIVE' ? 'text-red-300' : 'text-sky-300'}>{t.trade_mode}</td>
-                                                <td className="text-slate-400">{t.exitReason}</td>
+                                                <td className="text-fg-4">{t.exitReason}</td>
                                                 <td className="text-right">{t.origCredit != null ? `₹${fmt(t.origCredit, 1)}` : '—'}</td>
-                                                <td className="text-right text-slate-500">{t.ivpAtEntry != null ? fmt(t.ivpAtEntry, 0) : '—'}</td>
+                                                <td className="text-right text-fg-5">{t.ivpAtEntry != null ? fmt(t.ivpAtEntry, 0) : '—'}</td>
                                                 <td className="text-right">₹{fmt(t.grossPnl)}</td>
-                                                <td className="text-right text-slate-500">₹{fmt(t.charges)}</td>
+                                                <td className="text-right text-fg-5">₹{fmt(t.charges)}</td>
                                                 <td className={`text-right font-semibold ${t.netPnl > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(t.netPnl)}</td>
                                             </tr>
                                             {openT && (
                                                 <tr className="bg-slate-900/60"><td colSpan={11} className="p-2">
-                                                    <div className="text-[10px] text-slate-400 mb-1">Held {t.holdDays != null ? `${t.holdDays}d` : fmtDur(t.entryAt)} · spot {fmt(t.entrySpot)} → {fmt(t.exitSpot)} · net credit at entry ₹{fmt(t.origCredit, 1)}/u{t.lots ? ` · ${t.lots} lot(s)` : ''}</div>
+                                                    <div className="text-3xs text-fg-4 mb-1">Held {t.holdDays != null ? `${t.holdDays}d` : fmtDur(t.entryAt)} · spot {fmt(t.entrySpot)} → {fmt(t.exitSpot)} · net credit at entry ₹{fmt(t.origCredit, 1)}/u{t.lots ? ` · ${t.lots} lot(s)` : ''}</div>
                                                     {allLegs.length > 0 ? (
-                                                        <table className="w-full text-[10px] font-mono text-slate-300">
-                                                            <thead><tr className="text-slate-500 text-left"><th>Leg</th><th>Strike</th><th className="text-right">Entry ₹</th><th className="text-right">Exit ₹</th><th>Close</th></tr></thead>
+                                                        <table className="w-full text-3xs font-mono text-fg-3">
+                                                            <thead><tr className="text-fg-5 text-left"><th>Leg</th><th>Strike</th><th className="text-right">Entry ₹</th><th className="text-right">Exit ₹</th><th>Close</th></tr></thead>
                                                             <tbody>{allLegs.map((l, j) => (
-                                                                <tr key={j} className="border-t border-slate-800/60">
+                                                                <tr key={j} className="border-t border-line-0/60">
                                                                     <td className={l.action === 'BUY' ? 'text-emerald-300' : 'text-red-300'}>{l.action} {l.type}</td>
                                                                     <td>{l.strike}{l.ratio > 1 ? ` ×${l.ratio}` : ''}</td>
                                                                     <td className="text-right">{fmt(l.entryPrice, 2)}</td>
                                                                     <td className="text-right">{l.exitPrice != null ? fmt(l.exitPrice, 2) : '—'}</td>
-                                                                    <td className="text-slate-500">{l.closeReason || l.reason || l.status || '—'}</td>
+                                                                    <td className="text-fg-5">{l.closeReason || l.reason || l.status || '—'}</td>
                                                                 </tr>
                                                             ))}</tbody>
                                                         </table>
-                                                    ) : <div className="text-[10px] text-slate-500">No leg detail stored for this trade.</div>}
+                                                    ) : <div className="text-3xs text-fg-5">No leg detail stored for this trade.</div>}
                                                 </td></tr>
                                             )}
                                             </React.Fragment>
@@ -2591,7 +2686,12 @@ function useLocalStorage(key, initial) {
 
 // Tiny inline SVG sparkline for the intraday MTM path (no chart lib overhead).
 function Sparkline({ data, width = 68, height = 20 }) {
-    if (!data || data.length < 2) return <span className="text-slate-600 text-[9px]">—</span>;
+    // Hand-built SVG, so the same rule applies as for recharts: `stroke` is an
+    // attribute, not a CSS property. Sign is carried by colour ALONE here (there
+    // is no room for a label), which is exactly why it takes the CVD-safe
+    // diverging pair rather than green/red.
+    const ct = useChartTheme();
+    if (!data || data.length < 2) return <span className="text-fg-6 text-4xs">—</span>;
     const ys = data.map(d => d.pnl);
     const min = Math.min(...ys, 0), max = Math.max(...ys, 0), rng = (max - min) || 1;
     const step = width / (data.length - 1);
@@ -2600,8 +2700,8 @@ function Sparkline({ data, width = 68, height = 20 }) {
     const zeroY = (height - ((0 - min) / rng) * height).toFixed(1);
     return (
         <svg width={width} height={height} className="overflow-visible" aria-hidden="true">
-            <line x1="0" y1={zeroY} x2={width} y2={zeroY} stroke="#334155" strokeWidth="0.5" strokeDasharray="2 2" />
-            <polyline points={pts} fill="none" stroke={last >= 0 ? '#34d399' : '#f87171'} strokeWidth="1.2" />
+            <line x1="0" y1={zeroY} x2={width} y2={zeroY} stroke={ct.grid} strokeWidth="0.5" strokeDasharray="2 2" />
+            <polyline points={pts} fill="none" stroke={last >= 0 ? ct.diverging.positive : ct.diverging.negative} strokeWidth="1.2" />
         </svg>
     );
 }
@@ -2622,9 +2722,9 @@ function Toasts({ toasts, dismiss }) {
     return (
         <div className="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm" role="status" aria-live="polite">
             {toasts.map(t => (
-                <div key={t.id} className={`flex items-start gap-2 px-3 py-2 rounded-lg border shadow-lg text-xs ${t.kind === 'error' ? 'bg-red-950/90 border-red-700 text-red-200' : t.kind === 'success' ? 'bg-emerald-950/90 border-emerald-700 text-emerald-200' : t.kind === 'warn' ? 'bg-amber-950/90 border-amber-700 text-amber-200' : 'bg-slate-900/95 border-slate-600 text-slate-200'}`}>
+                <div key={t.id} className={`flex items-start gap-2 px-3 py-2 rounded-lg border shadow-lg text-xs ${t.kind === 'error' ? 'bg-red-950/90 border-red-700 text-red-200' : t.kind === 'success' ? 'bg-emerald-950/90 border-emerald-700 text-emerald-200' : t.kind === 'warn' ? 'bg-amber-950/90 border-amber-700 text-amber-200' : 'bg-slate-900/95 border-line-2 text-fg-2'}`}>
                     <span className="flex-1 whitespace-pre-wrap">{t.msg}</span>
-                    <button onClick={() => dismiss(t.id)} className="text-slate-400 hover:text-white" aria-label="Dismiss">✕</button>
+                    <button onClick={() => dismiss(t.id)} className="text-fg-4 hover:text-fg" aria-label="Dismiss">✕</button>
                 </div>
             ))}
         </div>
@@ -2644,17 +2744,17 @@ function ConfirmModal({ open, title, danger, confirmLabel = 'Confirm', requireTe
     const ok = !requireText || typed.trim() === requireText;
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" onKeyDown={e => e.key === 'Escape' && onCancel()}>
-            <div className={`w-full max-w-md rounded-xl border p-4 ${danger ? 'border-red-700 bg-slate-900' : 'border-slate-600 bg-slate-900'}`}>
-                <div className={`text-sm font-bold mb-2 ${danger ? 'text-red-300' : 'text-white'}`}>{title}</div>
-                <div className="text-xs text-slate-300 space-y-2 mb-3">{body || children}</div>
+            <div className={`w-full max-w-md rounded-xl border p-4 ${danger ? 'border-red-700 bg-slate-900' : 'border-line-2 bg-slate-900'}`}>
+                <div className={`text-sm font-bold mb-2 ${danger ? 'text-red-300' : 'text-fg'}`}>{title}</div>
+                <div className="text-xs text-fg-3 space-y-2 mb-3">{body || children}</div>
                 {requireText && (
-                    <label className="block text-[11px] text-slate-400 mb-3">Type <span className="font-mono text-slate-200">{requireText}</span> to confirm
+                    <label className="block text-2xs text-fg-4 mb-3">Type <span className="font-mono text-fg-2">{requireText}</span> to confirm
                         <input autoFocus value={typed} onChange={e => setTyped(e.target.value)}
-                            className="w-full mt-1 bg-slate-800 border border-slate-700 rounded p-1.5 text-slate-200 font-mono" />
+                            className="w-full mt-1 bg-slate-800 border border-line rounded p-1.5 text-fg-2 font-mono" />
                     </label>
                 )}
                 <div className="flex justify-end gap-2">
-                    <button onClick={onCancel} className="px-3 py-1.5 rounded border border-slate-600 bg-slate-800 text-slate-300 text-xs hover:text-white">Cancel</button>
+                    <button onClick={onCancel} className="px-3 py-1.5 rounded border border-line-2 bg-slate-800 text-fg-3 text-xs hover:text-fg">Cancel</button>
                     <button onClick={() => ok && onConfirm()} disabled={!ok}
                         className={`px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-40 ${danger ? 'bg-red-700 hover:bg-red-600 text-white' : 'bg-emerald-700 hover:bg-emerald-600 text-white'}`}>{confirmLabel}</button>
                 </div>
@@ -2668,7 +2768,7 @@ function ConfirmModal({ open, title, danger, confirmLabel = 'Confirm', requireTe
 // Hoisted OUT of PreviewModal: a component created during render gets a new
 // identity every pass, so React remounts it and any state it holds resets.
 function Row({ k, v, cls }) {
-    return (<div className="flex justify-between"><span className="text-slate-500">{k}</span><span className={`font-mono ${cls || 'text-slate-200'}`}>{v}</span></div>);
+    return (<div className="flex justify-between"><span className="text-fg-5">{k}</span><span className={`font-mono ${cls || 'text-fg-2'}`}>{v}</span></div>);
 }
 
 function PreviewModal({ preview, deployLots, onConfirm, onCancel }) {
@@ -2682,9 +2782,9 @@ function PreviewModal({ preview, deployLots, onConfirm, onCancel }) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true">
             <div className="w-full max-w-lg rounded-xl border border-red-700 bg-slate-900 p-4">
                 <div className="text-sm font-bold text-red-300 mb-1">🔴 Deploy “{need}” LIVE — confirm risk</div>
-                <div className="text-[11px] text-slate-400 mb-3">Real broker orders · {deployLots} lot(s) · marketable-limit, hedges first. Review before confirming.</div>
-                {loading ? <div className="text-xs text-slate-400 py-6 text-center">Pricing the structure at the live chain…</div>
-                    : data?.error ? <div className="text-xs text-red-400 py-4">Preview failed: {data.error}<div className="text-slate-500 mt-1">(needs live market hours + a valid chain). You can still deploy, but you’ll be doing so blind.</div></div>
+                <div className="text-2xs text-fg-4 mb-3">Real broker orders · {deployLots} lot(s) · marketable-limit, hedges first. Review before confirming.</div>
+                {loading ? <div className="text-xs text-fg-4 py-6 text-center">Pricing the structure at the live chain…</div>
+                    : data?.error ? <div className="text-xs text-red-400 py-4">Preview failed: {data.error}<div className="text-fg-5 mt-1">(needs live market hours + a valid chain). You can still deploy, but you’ll be doing so blind.</div></div>
                     : data ? (
                         <div className="space-y-2 text-xs">
                             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
@@ -2699,26 +2799,26 @@ function PreviewModal({ preview, deployLots, onConfirm, onCancel }) {
                                 <Row k="Expected move (±1σ)" v={`±${fmt(data.expectedMove)} (${data.dte}DTE)`} />
                                 <Row k="ATM IV" v={`${data.ivAtmPct}%`} />
                             </div>
-                            {data.unbounded && <div className="text-[11px] text-red-400 border border-red-800 rounded p-1.5">⚠ UNDEFINED tail risk — this structure can lose without limit unless leg-SL / structure-SL are set.</div>}
-                            {data.fundsOk === false && <div className="text-[11px] text-red-400 border border-red-800 rounded p-1.5">⛔ Insufficient funds — needs ₹{fmt(data.marginEst)} margin but only ₹{fmt(data.fundsAvailable)} available. A LIVE deploy will be refused.</div>}
+                            {data.unbounded && <div className="text-2xs text-red-400 border border-red-800 rounded p-1.5">⚠ UNDEFINED tail risk — this structure can lose without limit unless leg-SL / structure-SL are set.</div>}
+                            {data.fundsOk === false && <div className="text-2xs text-red-400 border border-red-800 rounded p-1.5">⛔ Insufficient funds — needs ₹{fmt(data.marginEst)} margin but only ₹{fmt(data.fundsAvailable)} available. A LIVE deploy will be refused.</div>}
                             {Array.isArray(data.lint) && data.lint.length > 0 && (
                                 <div className="space-y-1">
-                                    <div className="text-[10px] uppercase tracking-wide text-slate-500">Pre-deploy review</div>
+                                    <div className="text-3xs uppercase tracking-wide text-fg-5">Pre-deploy review</div>
                                     {data.lint.map((l, i) => (
-                                        <div key={i} className={`text-[11px] rounded px-1.5 py-1 border ${l.level === 'danger' ? 'text-red-300 border-red-800 bg-red-950/20' : l.level === 'warn' ? 'text-amber-300 border-amber-800/60 bg-amber-950/10' : 'text-slate-400 border-slate-700 bg-slate-800/30'}`}>
+                                        <div key={i} className={`text-2xs rounded px-1.5 py-1 border ${l.level === 'danger' ? 'text-red-300 border-red-800 bg-red-950/20' : l.level === 'warn' ? 'text-amber-300 border-amber-800/60 bg-amber-950/10' : 'text-fg-4 border-line bg-slate-800/30'}`}>
                                             {l.level === 'danger' ? '⛔' : l.level === 'warn' ? '⚠' : 'ℹ'} {l.msg}
                                         </div>
                                     ))}
                                 </div>
                             )}
-                            <div className="text-[10px] font-mono text-slate-500">{data.legs?.map((l, i) => <span key={i} className={l.action === 'BUY' ? 'text-emerald-400' : 'text-red-400'}>{l.action} {l.strike}{l.type} @{fmt(l.premium, 1)}{i < data.legs.length - 1 ? ' · ' : ''}</span>)}</div>
+                            <div className="text-3xs font-mono text-fg-5">{data.legs?.map((l, i) => <span key={i} className={l.action === 'BUY' ? 'text-emerald-400' : 'text-red-400'}>{l.action} {l.strike}{l.type} @{fmt(l.premium, 1)}{i < data.legs.length - 1 ? ' · ' : ''}</span>)}</div>
                         </div>
                     ) : null}
-                <label className="block text-[11px] text-slate-400 mt-3 mb-3">Type <span className="font-mono text-slate-200">{need}</span> to place LIVE orders
-                    <input autoFocus value={typed} onChange={e => setTyped(e.target.value)} className="w-full mt-1 bg-slate-800 border border-slate-700 rounded p-1.5 text-slate-200 font-mono" />
+                <label className="block text-2xs text-fg-4 mt-3 mb-3">Type <span className="font-mono text-fg-2">{need}</span> to place LIVE orders
+                    <input autoFocus value={typed} onChange={e => setTyped(e.target.value)} className="w-full mt-1 bg-slate-800 border border-line rounded p-1.5 text-fg-2 font-mono" />
                 </label>
                 <div className="flex justify-end gap-2">
-                    <button onClick={onCancel} className="px-3 py-1.5 rounded border border-slate-600 bg-slate-800 text-slate-300 text-xs hover:text-white">Cancel</button>
+                    <button onClick={onCancel} className="px-3 py-1.5 rounded border border-line-2 bg-slate-800 text-fg-3 text-xs hover:text-fg">Cancel</button>
                     <button onClick={() => ok && onConfirm()} disabled={!ok} className="px-3 py-1.5 rounded bg-red-700 hover:bg-red-600 text-white text-xs font-semibold disabled:opacity-40">Deploy LIVE</button>
                 </div>
             </div>
@@ -2932,17 +3032,17 @@ function Help({ k, className = '' }) {
                 onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); }}
                 aria-label={`What does "${h.label}" mean?`}
                 aria-expanded={open}
-                className="ml-1 w-3.5 h-3.5 rounded-full border border-slate-600 text-slate-500 hover:text-sky-300 hover:border-sky-500 text-[9px] leading-none align-middle">?</button>
+                className="ml-1 w-3.5 h-3.5 rounded-full border border-line-2 text-fg-5 hover:text-sky-300 hover:border-sky-500 text-4xs leading-none align-middle">?</button>
             {open && (
                 <>
                     <span className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setOpen(false); }} />
                     <span role="tooltip"
-                        className="absolute z-50 left-0 top-5 w-72 rounded-lg border border-slate-600 bg-slate-900 p-2.5 shadow-xl text-left normal-case font-normal tracking-normal block">
-                        <span className="block text-[11px] font-semibold text-sky-200 mb-1">{h.label}</span>
-                        <span className="block text-[11px] text-slate-200 mb-1.5">{h.short}</span>
-                        <span className="block text-[10px] text-slate-400 leading-relaxed">{h.detail}</span>
+                        className="absolute z-50 left-0 top-5 w-72 rounded-lg border border-line-2 bg-slate-900 p-2.5 shadow-xl text-left normal-case font-normal tracking-normal block">
+                        <span className="block text-2xs font-semibold text-sky-200 mb-1">{h.label}</span>
+                        <span className="block text-2xs text-fg-2 mb-1.5">{h.short}</span>
+                        <span className="block text-3xs text-fg-4 leading-relaxed">{h.detail}</span>
                         {h.gotcha && (
-                            <span className="block text-[10px] text-amber-300/90 leading-relaxed mt-1.5 pt-1.5 border-t border-slate-700">
+                            <span className="block text-3xs text-amber-300/90 leading-relaxed mt-1.5 pt-1.5 border-t border-line">
                                 <span className="font-semibold">Watch out: </span>{h.gotcha}
                             </span>
                         )}
@@ -2955,9 +3055,9 @@ function Help({ k, className = '' }) {
 
 function Tile({ label, value, good, bad, small, help, title }) {
     return (
-        <div className="bg-slate-800/60 border border-slate-700 rounded p-2" title={title}>
-            <div className="text-[10px] text-slate-500">{label}{help ? <Help k={help} /> : null}</div>
-            <div className={`${small ? 'text-[10px]' : 'text-sm font-semibold'} ${good ? 'text-emerald-300' : bad ? 'text-red-300' : 'text-slate-200'}`}>{value}</div>
+        <div className="bg-slate-800/60 border border-line rounded p-2" title={title}>
+            <div className="text-3xs text-fg-5">{label}{help ? <Help k={help} /> : null}</div>
+            <div className={`${small ? 'text-3xs' : 'text-sm font-semibold'} ${good ? 'text-emerald-300' : bad ? 'text-red-300' : 'text-fg-2'}`}>{value}</div>
         </div>
     );
 }
@@ -2973,7 +3073,7 @@ const GRADE_STYLE = {
     fair: 'text-sky-300 border-sky-700/50 bg-sky-950/20',
     poor: 'text-amber-300 border-amber-700/50 bg-amber-950/10',
     untradeable: 'text-red-300 border-red-700/50 bg-red-950/25',
-    unknown: 'text-slate-400 border-slate-600 bg-slate-800/40',
+    unknown: 'text-fg-4 border-line-2 bg-slate-800/40',
 };
 const GRADE_NOTE = {
     good: 'tight book — spread costs are negligible here',
@@ -2983,38 +3083,43 @@ const GRADE_NOTE = {
     unknown: 'not measured yet — costs fall back to the old flat 0.50% assumption',
 };
 function BookCost({ symbol }) {
-    const [d, setD] = useState(null);
-    const [err, setErr] = useState(null);
+    // The result carries the symbol it belongs to, so switching instruments
+    // DERIVES an empty panel rather than clearing it with a synchronous setState
+    // inside the effect (which lints as a cascading render, and would briefly
+    // paint the previous symbol's cost against the new symbol's name).
+    const [res, setRes] = useState({ sym: null, data: null, err: null });
     useEffect(() => {
         let dead = false;
-        setD(null); setErr(null);
         axios.get(`${API_URL}/multileg/liquidity`, { params: { symbol, live: 1 } })
-            .then(r => { if (!dead) setD(r.data?.symbols?.[0] || null); })
-            .catch(e => { if (!dead) setErr(e.response?.data?.error || e.message); });
+            .then(r => { if (!dead) setRes({ sym: symbol, data: r.data?.symbols?.[0] || null, err: null }); })
+            .catch(e => { if (!dead) setRes({ sym: symbol, data: null, err: e.response?.data?.error || e.message }); });
         return () => { dead = true; };
     }, [symbol]);
+    const fresh = res.sym === symbol;
+    const d = fresh ? res.data : null;
+    const err = fresh ? res.err : null;
     if (err || !d) return null;
     const g = d.grade || 'unknown';
     const bad = g === 'untradeable' || g === 'poor';
     return (
-        <div className={`rounded-lg border p-2.5 mb-3 ${bad ? 'border-red-800/60 bg-red-950/15' : 'border-slate-700 bg-slate-800/30'}`}>
+        <div className={`rounded-lg border p-2.5 mb-3 ${bad ? 'border-red-800/60 bg-red-950/15' : 'border-line bg-slate-800/30'}`}>
             <div className="flex items-center justify-between flex-wrap gap-1">
-                <span className="text-xs font-semibold text-slate-200">
-                    💸 Book cost<Help k="book-cost" /> <span className="text-slate-500 font-normal">— what the market maker takes before you make anything</span>
+                <span className="text-xs font-semibold text-fg-2">
+                    💸 Book cost<Help k="book-cost" /> <span className="text-fg-5 font-normal">— what the market maker takes before you make anything</span>
                 </span>
-                <span className={`text-[10px] px-2 py-0.5 rounded border font-semibold uppercase ${GRADE_STYLE[g]}`}>{g}</span>
+                <span className={`text-3xs px-2 py-0.5 rounded border font-semibold uppercase ${GRADE_STYLE[g]}`}>{g}</span>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 text-[10px] mt-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 text-3xs mt-2">
                 <Tile label="Spread at ATM" value={`${d.atmPct?.toFixed(2)}%`} small good={d.atmPct <= 0.20} bad={d.atmPct > 1.5} />
                 <Tile label="Spread on wings" value={`${d.wingPct?.toFixed(2)}%`} small good={d.wingPct <= 0.35} bad={d.wingPct > 2} />
                 <Tile label="Round trip cost" value={`${d.roundTripPctOfPremium}% of premium`} small bad={d.roundTripPctOfPremium > 5} />
                 <Tile label="Live ATM now" value={d.live?.cePct != null ? `${d.live.cePct}% / ${d.live.pePct ?? '—'}%` : '—'} small />
             </div>
-            <div className={`text-[10px] mt-1.5 ${bad ? 'text-red-300' : 'text-slate-500'}`}>
+            <div className={`text-3xs mt-1.5 ${bad ? 'text-red-300' : 'text-fg-5'}`}>
                 {bad ? '⚠ ' : ''}{GRADE_NOTE[g]}
-                {d.live?.ageSec != null && <span className="text-slate-600"> · live quote {Math.round(d.live.ageSec / 60)}m old</span>}
+                {d.live?.ageSec != null && <span className="text-fg-6"> · live quote {Math.round(d.live.ageSec / 60)}m old</span>}
             </div>
-            {!d.measured && <div className="text-[9px] text-slate-600 mt-1">No archived quotes for this symbol yet — backtests use the 0.50% fallback, which may be badly wrong in either direction.</div>}
+            {!d.measured && <div className="text-4xs text-fg-6 mt-1">No archived quotes for this symbol yet — backtests use the 0.50% fallback, which may be badly wrong in either direction.</div>}
         </div>
     );
 }
@@ -3036,31 +3141,31 @@ function MarketRead({ symbol, presets, onApplyPreset }) {
     useEffect(() => { setData(null); setErr(null); }, [symbol]);
     const preset = data && presets.find(p => p.key === data.suggested?.preset);
     return (
-        <div className="rounded-lg border border-slate-700 bg-slate-800/30 p-2.5 mb-3">
+        <div className="rounded-lg border border-line bg-slate-800/30 p-2.5 mb-3">
             <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-200">🧭 Market read <span className="text-slate-500 font-normal">— momentum + where the sellers are</span></span>
-                <button onClick={load} disabled={loading} className="text-[10px] px-2 py-0.5 rounded border border-slate-600 bg-slate-800 text-slate-300 hover:text-white disabled:opacity-40">{loading ? 'reading…' : data ? 'refresh' : 'read now'}</button>
+                <span className="text-xs font-semibold text-fg-2">🧭 Market read <span className="text-fg-5 font-normal">— momentum + where the sellers are</span></span>
+                <button onClick={load} disabled={loading} className="text-3xs px-2 py-0.5 rounded border border-line-2 bg-slate-800 text-fg-3 hover:text-fg disabled:opacity-40">{loading ? 'reading…' : data ? 'refresh' : 'read now'}</button>
             </div>
-            {err && <div className="text-[11px] text-red-400 mt-1.5">{err}</div>}
+            {err && <div className="text-2xs text-red-400 mt-1.5">{err}</div>}
             {data && (
                 <div className="mt-2 space-y-1.5">
-                    <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                    <div className="flex items-center gap-2 flex-wrap text-2xs">
                         <span className={`px-2 py-0.5 rounded border font-semibold uppercase ${BIAS_STYLE[data.bias] || ''}`}>{data.bias} · {data.confidence}</span>
-                        <span className="text-slate-500">{data.summary}</span>
+                        <span className="text-fg-5">{data.summary}</span>
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 text-[10px]">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 text-3xs">
                         <Tile label="Momentum" value={data.momentum?.dir || '—'} small good={data.momentum?.dir === 'up'} bad={data.momentum?.dir === 'down'} />
                         <Tile label="Sellers (PCR)" value={data.sellers?.pcr != null ? `${data.sellers.tilt} · ${data.sellers.pcr}` : (data.sellers?.tilt || '—')} small />
                         <Tile label="Support / Resist" value={`${data.support ?? '—'} / ${data.resistance ?? '—'}`} small />
                         <Tile label="Max pain / spot" value={`${data.sellers?.maxPain ?? '—'} / ${data.spot ?? '—'}`} small />
                     </div>
                     {data.suggested && (
-                        <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                        <div className="flex items-center gap-2 text-2xs text-fg-4">
                             <span>→ {data.suggested.note}</span>
-                            {preset && <button onClick={() => onApplyPreset(preset)} className="text-[10px] px-2 py-0.5 rounded border border-primary/40 bg-primary/15 text-primary hover:bg-primary/25">Load {preset.name}</button>}
+                            {preset && <button onClick={() => onApplyPreset(preset)} className="text-3xs px-2 py-0.5 rounded border border-primary/40 bg-primary/15 text-primary-ink hover:bg-primary/25">Load {preset.name}</button>}
                         </div>
                     )}
-                    <div className="text-[9px] text-slate-600">A read, not a guarantee — momentum can flip and OI is a snapshot. Confirm with a backtest before deploying.</div>
+                    <div className="text-4xs text-fg-6">A read, not a guarantee — momentum can flip and OI is a snapshot. Confirm with a backtest before deploying.</div>
                 </div>
             )}
         </div>

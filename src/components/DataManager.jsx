@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { FaDatabase, FaCloudDownloadAlt, FaSpinner, FaFolderOpen, FaCheck, FaChevronDown, FaTimes, FaSearch } from 'react-icons/fa';
 import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 import { INSTRUMENT_CONFIG } from '../constants';
+import { pollInterval } from '../hooks/usePolling.js';
+import { API_URL } from '../config/api.js';
 
 // --- MultiSelect Component ---
 const MultiSelect = ({ options, selectedValues, onChange, placeholder = "Select...", label = "Items" }) => {
@@ -50,14 +52,14 @@ const MultiSelect = ({ options, selectedValues, onChange, placeholder = "Select.
 
     return (
         <div className="relative" ref={wrapperRef}>
-            <label className="block text-sm text-gray-400 mb-1">{label}</label>
+            <label className="block text-sm text-fg-4 mb-1">{label}</label>
             <div 
-                className="w-full bg-gray-900 border border-gray-700 p-2 rounded text-white cursor-pointer flex justify-between items-center"
+                className="w-full bg-gray-900 border border-line p-2 rounded text-fg cursor-pointer flex justify-between items-center"
                 onClick={() => setIsOpen(!isOpen)}
             >
                 <div className="truncate">
                     {selectedValues.length === 0 ? (
-                        <span className="text-gray-500">{placeholder}</span>
+                        <span className="text-fg-5">{placeholder}</span>
                     ) : (
                         <span>{selectedValues.length} selected</span>
                     )}
@@ -66,16 +68,16 @@ const MultiSelect = ({ options, selectedValues, onChange, placeholder = "Select.
             </div>
 
             {isOpen && (
-                <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-700 rounded-md shadow-xl max-h-64 flex flex-col">
-                    <div className="p-2 border-b border-gray-700">
+                <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-line rounded-md shadow-xl max-h-64 flex flex-col">
+                    <div className="p-2 border-b border-line">
                         <div className="relative">
-                            <FaSearch className="absolute left-2 top-2.5 text-gray-500 text-xs" />
+                            <FaSearch className="absolute left-2 top-2.5 text-fg-5 text-xs" />
                             <input 
                                 type="text"
                                 placeholder="Search..."
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
-                                className="w-full bg-gray-900 border border-gray-700 rounded pl-7 pr-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
+                                className="w-full bg-gray-900 border border-line rounded pl-7 pr-2 py-1 text-xs text-fg focus:outline-none focus:border-blue-500"
                                 autoFocus
                             />
                         </div>
@@ -89,7 +91,7 @@ const MultiSelect = ({ options, selectedValues, onChange, placeholder = "Select.
                     
                     <div className="overflow-y-auto flex-1 p-1">
                         {filteredOptions.length === 0 ? (
-                            <div className="p-2 text-center text-gray-500 text-xs">No matches</div>
+                            <div className="p-2 text-center text-fg-5 text-xs">No matches</div>
                         ) : (
                             filteredOptions.map(opt => (
                                 <div 
@@ -97,8 +99,8 @@ const MultiSelect = ({ options, selectedValues, onChange, placeholder = "Select.
                                     onClick={() => toggleOption(opt.value)}
                                     className="flex items-center gap-2 p-2 hover:bg-gray-700 rounded cursor-pointer text-sm"
                                 >
-                                    <div className={`w-4 h-4 rounded border flex items-center justify-center ${selectedValues.includes(opt.value) ? 'bg-blue-600 border-blue-600' : 'border-gray-500'}`}>
-                                        {selectedValues.includes(opt.value) && <FaCheck className="text-[10px] text-white" />}
+                                    <div className={`w-4 h-4 rounded border flex items-center justify-center ${selectedValues.includes(opt.value) ? 'bg-blue-600 border-blue-600' : 'border-line-3'}`}>
+                                        {selectedValues.includes(opt.value) && <FaCheck className="text-3xs text-fg" />}
                                     </div>
                                     <span className="truncate">{opt.label}</span>
                                 </div>
@@ -145,8 +147,7 @@ const DataManager = () => {
     const [expiryDates, setExpiryDates] = useState([]);
     const [selectedExpiry, setSelectedExpiry] = useState('');
 
-    const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
-
+    
     useEffect(() => {
         fetchInstruments();
         fetchArchives();
@@ -197,12 +198,12 @@ const DataManager = () => {
         try {
             const res = await fetch(`${API_URL}/data/option-archive/status`);
             setOptArchive(await res.json());
-        } catch (e) { /* panel shows its own loading state */ }
+        } catch { /* panel shows its own loading state */ }
     };
     useEffect(() => {
         fetchOptArchive();
-        const t = setInterval(fetchOptArchive, 15000);
-        return () => clearInterval(t);
+        const t = pollInterval(fetchOptArchive, 15000);
+        return () => t?.();
     }, []);
 
     const archiveControl = async (action) => {
@@ -396,12 +397,12 @@ const DataManager = () => {
     };
     const oa = optArchive;
     const OptionArchivePanel = (
-        <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg mb-8">
+        <div className="bg-gray-800 p-6 rounded-xl border border-line shadow-lg mb-8">
             <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
                 <h2 className="text-xl font-bold flex items-center gap-2">
                     <FaDatabase className="text-purple-400" /> Live Option-Chain Archive
                     {oa && (
-                        <span className={`text-[11px] px-2 py-0.5 rounded border font-semibold ${oa.running ? 'border-green-600 text-green-300 bg-green-900/25' : oa.active ? 'border-yellow-600 text-yellow-300 bg-yellow-900/20' : 'border-gray-600 text-gray-400'}`}>
+                        <span className={`text-2xs px-2 py-0.5 rounded border font-semibold ${oa.running ? 'border-green-600 text-green-300 bg-green-900/25' : oa.active ? 'border-yellow-600 text-yellow-300 bg-yellow-900/20' : 'border-line-2 text-fg-4'}`}>
                             {oa.running ? '● RECORDING' : oa.active ? 'IDLE' : 'INACTIVE'}
                         </span>
                     )}
@@ -413,17 +414,17 @@ const DataManager = () => {
                         {optArchBusy ? <FaSpinner className="animate-spin inline" /> : '📸'} Snapshot now
                     </button>
                     <button onClick={() => archiveControl(oa?.running ? 'stop' : 'start')} disabled={optArchBusy}
-                        className="text-xs px-3 py-1.5 rounded border border-gray-600 bg-gray-900 text-gray-300 hover:text-white disabled:opacity-40">
+                        className="text-xs px-3 py-1.5 rounded border border-line-2 bg-gray-900 text-fg-3 hover:text-fg disabled:opacity-40">
                         {oa?.running ? 'Stop' : 'Start'}
                     </button>
                 </div>
             </div>
-            <p className="text-xs text-gray-500 mb-4">
-                Records every index's real chain — premiums, OI, bid/ask and <strong className="text-gray-400">implied vol per strike</strong> — continuously in production.
+            <p className="text-xs text-fg-5 mb-4">
+                Records every index's real chain — premiums, OI, bid/ask and <strong className="text-fg-4">implied vol per strike</strong> — continuously in production.
                 This is the dataset that makes backtesting on <em>actual</em> option prices (with skew) possible; spot-based Black-Scholes can't model it.
             </p>
 
-            {!oa ? <div className="text-sm text-gray-500">Loading archive status…</div> : (<>
+            {!oa ? <div className="text-sm text-fg-5">Loading archive status…</div> : (<>
                 {!oa.active && (
                     <div className="text-xs mb-4 p-2 rounded border border-yellow-800/60 bg-yellow-900/15 text-yellow-300">
                         ⚠ Not recording — {oa.reason}. Environment: <strong>{oa.environment}</strong>.
@@ -432,75 +433,75 @@ const DataManager = () => {
                 )}
                 {/* headline stats */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                    <div className="bg-gray-900/70 border border-gray-700 rounded p-3">
-                        <div className="text-[10px] text-gray-500 uppercase">Total storage</div>
+                    <div className="bg-gray-900/70 border border-line rounded p-3">
+                        <div className="text-3xs text-fg-5 uppercase">Total storage</div>
                         <div className="text-lg font-bold text-purple-300">{fmtBytes(oa.storage?.totalBytes)}</div>
-                        <div className="text-[10px] text-gray-500">data {fmtBytes(oa.storage?.storageSizeBytes)} + idx {fmtBytes(oa.storage?.indexSizeBytes)}</div>
+                        <div className="text-3xs text-fg-5">data {fmtBytes(oa.storage?.storageSizeBytes)} + idx {fmtBytes(oa.storage?.indexSizeBytes)}</div>
                     </div>
-                    <div className="bg-gray-900/70 border border-gray-700 rounded p-3">
-                        <div className="text-[10px] text-gray-500 uppercase">Snapshots saved</div>
+                    <div className="bg-gray-900/70 border border-line rounded p-3">
+                        <div className="text-3xs text-fg-5 uppercase">Snapshots saved</div>
                         <div className="text-lg font-bold text-blue-300">{fmtNum(oa.storage?.documents)}</div>
-                        <div className="text-[10px] text-gray-500">{fmtNum(oa.snapshotsToday)} today · avg {fmtBytes(oa.storage?.avgDocBytes)}</div>
+                        <div className="text-3xs text-fg-5">{fmtNum(oa.snapshotsToday)} today · avg {fmtBytes(oa.storage?.avgDocBytes)}</div>
                     </div>
-                    <div className="bg-gray-900/70 border border-gray-700 rounded p-3">
-                        <div className="text-[10px] text-gray-500 uppercase">Growth</div>
+                    <div className="bg-gray-900/70 border border-line rounded p-3">
+                        <div className="text-3xs text-fg-5 uppercase">Growth</div>
                         <div className="text-lg font-bold text-green-300">{oa.growth ? `${fmtBytes(oa.growth.perDayBytes)}/day` : '—'}</div>
-                        <div className="text-[10px] text-gray-500">{oa.growth ? `~${fmtBytes(oa.growth.projected1yBytes)}/yr projected` : 'needs a full day of data'}</div>
+                        <div className="text-3xs text-fg-5">{oa.growth ? `~${fmtBytes(oa.growth.projected1yBytes)}/yr projected` : 'needs a full day of data'}</div>
                     </div>
-                    <div className="bg-gray-900/70 border border-gray-700 rounded p-3">
-                        <div className="text-[10px] text-gray-500 uppercase">Retention</div>
-                        <div className="text-lg font-bold text-gray-200">{oa.config?.retentionDays}d</div>
-                        <div className="text-[10px] text-gray-500">auto-expires · cap ≈ {oa.growth ? fmtBytes(oa.growth.atRetentionBytes) : '—'}</div>
+                    <div className="bg-gray-900/70 border border-line rounded p-3">
+                        <div className="text-3xs text-fg-5 uppercase">Retention</div>
+                        <div className="text-lg font-bold text-fg-2">{oa.config?.retentionDays}d</div>
+                        <div className="text-3xs text-fg-5">auto-expires · cap ≈ {oa.growth ? fmtBytes(oa.growth.atRetentionBytes) : '—'}</div>
                     </div>
                 </div>
 
                 {/* runtime */}
-                <div className="flex flex-wrap gap-x-5 gap-y-1 text-[11px] font-mono text-gray-400 mb-4 px-3 py-2 rounded bg-gray-900/50 border border-gray-800">
-                    <span>env <span className="text-gray-200">{oa.environment}</span></span>
-                    <span>market <span className={oa.marketOpen?.open ? 'text-green-400' : 'text-gray-500'}>{oa.marketOpen?.open ? 'OPEN' : 'closed'}</span></span>
-                    <span>every <span className="text-gray-200">{oa.config?.intervalSec}s</span></span>
-                    <span>strikes <span className="text-gray-200">ATM±{oa.config?.strikesEachSide}</span></span>
-                    <span>cycles <span className="text-gray-200">{fmtNum(oa.metrics?.cycles)}</span></span>
+                <div className="flex flex-wrap gap-x-5 gap-y-1 text-2xs font-mono text-fg-4 mb-4 px-3 py-2 rounded bg-gray-900/50 border border-line-0">
+                    <span>env <span className="text-fg-2">{oa.environment}</span></span>
+                    <span>market <span className={oa.marketOpen?.open ? 'text-green-400' : 'text-fg-5'}>{oa.marketOpen?.open ? 'OPEN' : 'closed'}</span></span>
+                    <span>every <span className="text-fg-2">{oa.config?.intervalSec}s</span></span>
+                    <span>strikes <span className="text-fg-2">ATM±{oa.config?.strikesEachSide}</span></span>
+                    <span>cycles <span className="text-fg-2">{fmtNum(oa.metrics?.cycles)}</span></span>
                     <span>written <span className="text-green-300">{fmtNum(oa.metrics?.snapshots)}</span></span>
-                    <span>failures <span className={oa.metrics?.failures ? 'text-red-400' : 'text-gray-500'}>{fmtNum(oa.metrics?.failures)}</span></span>
-                    <span>last cycle <span className="text-gray-200">{ago(oa.metrics?.lastCycleAt)}</span>{oa.metrics?.lastCycleMs != null ? ` (${oa.metrics.lastCycleMs}ms)` : ''}</span>
-                    {oa.storage?.compressionRatio && <span>compression <span className="text-gray-200">{oa.storage.compressionRatio}×</span></span>}
+                    <span>failures <span className={oa.metrics?.failures ? 'text-red-400' : 'text-fg-5'}>{fmtNum(oa.metrics?.failures)}</span></span>
+                    <span>last cycle <span className="text-fg-2">{ago(oa.metrics?.lastCycleAt)}</span>{oa.metrics?.lastCycleMs != null ? ` (${oa.metrics.lastCycleMs}ms)` : ''}</span>
+                    {oa.storage?.compressionRatio && <span>compression <span className="text-fg-2">{oa.storage.compressionRatio}×</span></span>}
                 </div>
                 {oa.metrics?.lastError && (
-                    <div className="text-[11px] text-red-300 mb-3">last error: {oa.metrics.lastError.message} <span className="text-gray-600">({ago(oa.metrics.lastError.at)})</span></div>
+                    <div className="text-2xs text-red-300 mb-3">last error: {oa.metrics.lastError.message} <span className="text-fg-6">({ago(oa.metrics.lastError.at)})</span></div>
                 )}
 
                 {/* per-index coverage */}
                 <div className="overflow-x-auto">
                     <table className="w-full text-xs">
-                        <thead><tr className="text-gray-500 text-left border-b border-gray-700">
+                        <thead><tr className="text-fg-5 text-left border-b border-line">
                             <th className="py-1">Index</th><th className="text-right">Snapshots</th><th className="text-right">Days</th>
                             <th className="text-right">Strikes</th><th className="text-right">Last spot</th><th className="text-right">First</th><th className="text-right">Last</th>
                         </tr></thead>
                         <tbody>
                             {(oa.coverage || []).length === 0 ? (
-                                <tr><td colSpan={7} className="py-3 text-center text-gray-600">No snapshots recorded yet — press “Snapshot now” to verify the pipeline, or wait for market hours in production.</td></tr>
+                                <tr><td colSpan={7} className="py-3 text-center text-fg-6">No snapshots recorded yet — press “Snapshot now” to verify the pipeline, or wait for market hours in production.</td></tr>
                             ) : oa.coverage.map((c) => (
-                                <tr key={c.symbol} className="border-b border-gray-800/70">
-                                    <td className="py-1 text-gray-200">{String(c.symbol).split(':')[1]?.replace('-INDEX', '') || c.symbol}</td>
+                                <tr key={c.symbol} className="border-b border-line-0/70">
+                                    <td className="py-1 text-fg-2">{String(c.symbol).split(':')[1]?.replace('-INDEX', '') || c.symbol}</td>
                                     <td className="text-right text-blue-300">{fmtNum(c.snapshots)}</td>
                                     <td className="text-right">{fmtNum(c.tradingDays)}</td>
                                     <td className="text-right">{c.avgStrikes ?? '—'}</td>
                                     <td className="text-right">{c.lastSpot ?? '—'}</td>
-                                    <td className="text-right text-gray-500">{c.firstAt ? new Date(c.firstAt).toLocaleDateString('en-IN') : '—'}</td>
-                                    <td className="text-right text-gray-400">{ago(c.lastAt)}</td>
+                                    <td className="text-right text-fg-5">{c.firstAt ? new Date(c.firstAt).toLocaleDateString('en-IN') : '—'}</td>
+                                    <td className="text-right text-fg-4">{ago(c.lastAt)}</td>
                                 </tr>
                             ))}
                         </tbody>
                     </table>
                 </div>
-                {optArchMsg && <div className="text-xs mt-3 text-gray-300">{optArchMsg}</div>}
+                {optArchMsg && <div className="text-xs mt-3 text-fg-3">{optArchMsg}</div>}
             </>)}
         </div>
     );
 
     return (
-        <div className="p-6 bg-gray-900 min-h-screen text-white">
+        <div className="p-6 bg-gray-900 min-h-screen text-fg">
             <h1 className="text-2xl font-bold flex items-center gap-2 mb-6">
                 <FaDatabase className="text-blue-400" /> Data Archivist
             </h1>
@@ -513,7 +514,7 @@ const DataManager = () => {
                 <div className="space-y-6">
                 
                     {/* A. Futures Archiver */}
-                    <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg h-fit">
+                    <div className="bg-gray-800 p-6 rounded-xl border border-line shadow-lg h-fit">
                         <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
                             <FaCloudDownloadAlt className="text-green-400" /> Futures & AI Dataset
                         </h2>
@@ -530,11 +531,11 @@ const DataManager = () => {
                             
                             <div className="grid grid-cols-1 gap-4">
                                 <div>
-                                    <label className="block text-sm text-gray-400 mb-1">Resolution (min)</label>
-                                    <select 
+                                    <label htmlFor="datamanager-resolution-min-1" className="block text-sm text-fg-4 mb-1">Resolution (min)</label>
+                                    <select id="datamanager-resolution-min-1" 
                                         value={resolution}
                                         onChange={(e) => setResolution(e.target.value)}
-                                        className="w-full bg-gray-900 border border-gray-700 p-2 rounded text-white"
+                                        className="w-full bg-gray-900 border border-line p-2 rounded text-fg"
                                     >
                                         <option value="1">1 Minute</option>
                                         <option value="5">5 Minute (Recommended)</option>
@@ -544,7 +545,7 @@ const DataManager = () => {
                                         <option value="ALL">All Timeframes (Batch)</option>
                                     </select>
                                 </div>
-                                <div className="text-xs text-gray-500 italic">
+                                <div className="text-xs text-fg-5 italic">
                                     * Archives active futures (~100 days). Use 'All Timeframes' for full AI training set.
                                 </div>
                             </div>
@@ -569,11 +570,11 @@ const DataManager = () => {
                     </div>
 
                     {/* B. SPOT Archiver (New) */}
-                    <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg h-fit text-orange-100 border-orange-900/50">
+                    <div className="bg-gray-800 p-6 rounded-xl border border-line shadow-lg h-fit text-orange-100 border-orange-900/50">
                         <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
                              <FaDatabase className="text-orange-400" /> SPOT Data Archiver
                         </h2>
-                        <p className="text-sm text-gray-400 mb-4">
+                        <p className="text-sm text-fg-4 mb-4">
                              Archive actual Index/Equity data for specific custom ranges.
                         </p>
 
@@ -590,32 +591,32 @@ const DataManager = () => {
 
                             <div className="grid grid-cols-2 gap-4">
                                  <div>
-                                    <label className="block text-sm text-gray-400 mb-1">From Date</label>
-                                    <input 
+                                    <label htmlFor="datamanager-from-date-2" className="block text-sm text-fg-4 mb-1">From Date</label>
+                                    <input id="datamanager-from-date-2" 
                                         type="date" 
                                         value={spotFromDate}
                                         onChange={(e) => setSpotFromDate(e.target.value)}
-                                        className="w-full bg-gray-900 border border-gray-700 p-2 rounded text-white text-sm"
+                                        className="w-full bg-gray-900 border border-line p-2 rounded text-fg text-sm"
                                     />
                                 th
                                 </div>
                                 <div>
-                                    <label className="block text-sm text-gray-400 mb-1">To Date</label>
-                                    <input 
+                                    <label htmlFor="datamanager-to-date-3" className="block text-sm text-fg-4 mb-1">To Date</label>
+                                    <input id="datamanager-to-date-3" 
                                         type="date" 
                                         value={spotToDate}
                                         onChange={(e) => setSpotToDate(e.target.value)}
-                                        className="w-full bg-gray-900 border border-gray-700 p-2 rounded text-white text-sm"
+                                        className="w-full bg-gray-900 border border-line p-2 rounded text-fg text-sm"
                                     />
                                 </div>
                             </div>
                             
                              <div>
-                                <label className="block text-sm text-gray-400 mb-1">Resolution</label>
-                                <select 
+                                <label htmlFor="datamanager-resolution-4" className="block text-sm text-fg-4 mb-1">Resolution</label>
+                                <select id="datamanager-resolution-4" 
                                     value={spotResolution}
                                     onChange={(e) => setSpotResolution(e.target.value)}
-                                    className="w-full bg-gray-900 border border-gray-700 p-2 rounded text-white"
+                                    className="w-full bg-gray-900 border border-line p-2 rounded text-fg"
                                 >
                                     <option value="1">1 Minute</option>
                                     <option value="5">5 Minute</option>
@@ -646,11 +647,11 @@ const DataManager = () => {
                     </div>
 
                    {/* C. Options Archiver */}
-                    <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg h-fit text-purple-100 border-purple-900/50">
+                    <div className="bg-gray-800 p-6 rounded-xl border border-line shadow-lg h-fit text-purple-100 border-purple-900/50">
                         <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
                             <FaDatabase className="text-purple-400" /> Options Archiver
                         </h2>
-                         <p className="text-sm text-gray-400 mb-4">
+                         <p className="text-sm text-fg-4 mb-4">
                              Fetches 1-minute history for <b>Current Month</b> Options (CE/PE) around the ATM.
                             <br/><span className="text-xs text-orange-400">⚠️ Rate Limited: Takes ~30s for 20 strikes.</span>
                         </p>
@@ -658,8 +659,8 @@ const DataManager = () => {
                         <div className="space-y-4">
                             {/* Reuses Selected Futures Symbols if not separated */}
                              <div>
-                                <label className="block text-sm text-gray-400 mb-1">Target Symbols</label>
-                                <div className="text-sm text-gray-300 bg-gray-900 p-2 rounded border border-gray-700">
+                                <label className="block text-sm text-fg-4 mb-1">Target Symbols</label>
+                                <div className="text-sm text-fg-3 bg-gray-900 p-2 rounded border border-line">
                                     {selectedSymbols.length === 0 ? "None Selected (Use Futures Panel)" : 
                                      selectedSymbols.length === 1 ? instruments[selectedSymbols[0]]?.underlying || selectedSymbols[0] : 
                                      `${selectedSymbols.length} Symbols Selected`}
@@ -667,16 +668,16 @@ const DataManager = () => {
                              </div>
 
                              <div>
-                                <label className="block text-sm text-gray-400 mb-1">Expiry Date</label>
+                                <label className="block text-sm text-fg-4 mb-1">Expiry Date</label>
                                 {selectedSymbols.length > 1 ? (
-                                    <div className="w-full bg-gray-900 border border-gray-700 p-2 rounded text-gray-500 italic text-sm">
+                                    <div className="w-full bg-gray-900 border border-line p-2 rounded text-fg-5 italic text-sm">
                                         Auto-Select (Current Month) for Batch
                                     </div>
                                 ) : (
                                     <select 
                                         value={selectedExpiry}
                                         onChange={(e) => setSelectedExpiry(e.target.value)}
-                                        className="w-full bg-gray-900 border border-gray-700 p-2 rounded text-white"
+                                        className="w-full bg-gray-900 border border-line p-2 rounded text-fg"
                                         disabled={selectedSymbols.length === 0}
                                     >
                                         {expiryDates.map((exp) => (
@@ -686,11 +687,11 @@ const DataManager = () => {
                                 )}
                             </div>
                              <div>
-                                <label className="block text-sm text-gray-400 mb-1">Strike Range (+/-)</label>
-                                <select 
+                                <label htmlFor="datamanager-strike-range-5" className="block text-sm text-fg-4 mb-1">Strike Range (+/-)</label>
+                                <select id="datamanager-strike-range-5" 
                                     value={optRange}
                                     onChange={(e) => setOptRange(e.target.value)}
-                                    className="w-full bg-gray-900 border border-gray-700 p-2 rounded text-white"
+                                    className="w-full bg-gray-900 border border-line p-2 rounded text-fg"
                                 >
                                     <option value="5">5 Strikes (Narrow)</option>
                                     <option value="10">10 Strikes (Standard)</option>
@@ -719,23 +720,23 @@ const DataManager = () => {
                 </div>
 
                 {/* 2. Existing Archives List */}
-                <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg">
+                <div className="bg-gray-800 p-6 rounded-xl border border-line shadow-lg">
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
                         <FaFolderOpen className="text-yellow-400" /> Local Archives
                     </h2>
                     
                     {Object.keys(archives).length === 0 ? (
-                        <div className="text-center text-gray-500 py-10 italic">
+                        <div className="text-center text-fg-5 py-10 italic">
                             No archives found.
                         </div>
                     ) : (
-                        <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
+                        <div className="space-y-4 max-h-[31.25rem] overflow-y-auto pr-2">
                             {Object.entries(archives).map(([sym, files]) => {
                                 const isOption = sym.startsWith('OPTIONS:');
                                 const isSpot = sym.startsWith('SPOT:');
                                 const displaySym = (isOption || isSpot) ? sym.split(':')[1] : sym;
                                 
-                                let borderClass = 'border-gray-800';
+                                let borderClass = 'border-line-0';
                                 let textClass = 'text-blue-300';
                                 let tagBg = 'bg-blue-900';
                                 let tagText = 'text-blue-200';
@@ -763,7 +764,7 @@ const DataManager = () => {
                                     </div>
                                     <div className="flex flex-wrap gap-2">
                                         {files.map((f, i) => (
-                                            <div key={i} className="px-2 py-1 bg-gray-800 rounded text-xs border border-gray-700 text-gray-300 flex items-center gap-1">
+                                            <div key={i} className="px-2 py-1 bg-gray-800 rounded text-xs border border-line text-fg-3 flex items-center gap-1">
                                                 <span className={`${isOption ? 'text-purple-400' : (isSpot ? 'text-orange-400' : 'text-green-400')} font-mono`}>
                                                     {isOption ? f.label : `${f.resolution}m`}
                                                 </span>

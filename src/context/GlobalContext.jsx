@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState } from 'react';
 import { INSTRUMENT_CONFIG } from '../constants';
+import { API_URL } from '../config/api.js';
 
 const GlobalContext = createContext();
 
@@ -74,8 +75,7 @@ export function GlobalProvider({ children }) {
   React.useEffect(() => {
     const fetchDefaults = async () => {
       try {
-        const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
-        const res = await fetch(`${API_URL}/engine/defaults`);
+                const res = await fetch(`${API_URL}/engine/defaults`);
         const data = await res.json();
         if (data) {
             // Filter out system params that should NOT be overwritten by defaults (Dates, Capital)

@@ -1,9 +1,13 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useState } from 'react';
 import axios from 'axios';
 import { io } from 'socket.io-client';
 import { Zap, Plus, Play, Pause, Trash2, Activity, TrendingUp, TrendingDown, Clock, AlertTriangle, Octagon, Power, Eye, Square, Layers, Sliders } from 'lucide-react';
 import { INSTRUMENT_CONFIG, MONTH_NAMES } from '../constants';
 import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
+import { pollInterval } from '../hooks/usePolling.js';
+import { API_URL, SOCKET_URL } from '../config/api.js';
+import { useEscapeKey } from '../hooks/useEscapeKey.js';
+import { useConfirm } from '../components/confirmContext.js';
 
 // Build a Fyers futures symbol from an index key + expiry date.
 //   buildFuturesSymbol('NSE:NIFTYBANK-INDEX', '2026-06-30')
@@ -25,10 +29,9 @@ function buildFuturesSymbol(indexKey, expiryDateStr) {
 // tick_trades collection. Hooked into the backend tickEngine via
 // /api/tick-strategies + socket event 'tick_strategy_event'.
 
-const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
-const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 export default function TickStrategies() {
+    const confirm = useConfirm();
     const [strategies, setStrategies] = useState([]);
     const [snapshot, setSnapshot] = useState({ events: [], totals: {} });
     const [types, setTypes] = useState({});
@@ -240,8 +243,8 @@ export default function TickStrategies() {
             await fetchRecordings();
         };
         tick();
-        const interval = setInterval(tick, 3000);
-        return () => { cancelled = true; clearInterval(interval); };
+        const interval = pollInterval(tick, 3000);
+        return () => { cancelled = true; interval?.(); };
     }, []);
 
     const startRecording = async ({ name, symbols, autoStopMinutes }) => {
@@ -272,7 +275,7 @@ export default function TickStrategies() {
     };
 
     const deleteRecording = async (rec) => {
-        if (!window.confirm(`Delete recording "${rec.name}" and all ${(rec.tickCount || 0).toLocaleString()} ticks? This cannot be undone.`)) return;
+        if (!await confirm({ title: 'Delete recording', body: `Delete recording "${rec.name}" and all ${(rec.tickCount || 0).toLocaleString()} ticks? This cannot be undone.`, danger: true, confirmLabel: 'Delete recording' })) return;
         const prev = recordings;
         setRecordings(curr => curr.filter(r => r._id !== rec._id));
         try {
@@ -350,7 +353,7 @@ export default function TickStrategies() {
     };
 
     const deleteStrategy = async (s) => {
-        if (!window.confirm(`Delete "${s.name}"? Open paper position (if any) will be closed at last LTP.`)) return;
+        if (!await confirm({ title: 'Delete strategy', body: `Delete "${s.name}"? Open paper position (if any) will be closed at last LTP.`, danger: true, confirmLabel: 'Delete strategy' })) return;
         // Optimistic remove. If the server rejects (rare — usually a race
         // with another tab deleting first) we re-add it on rollback by
         // refetching the canonical list.
@@ -379,7 +382,7 @@ export default function TickStrategies() {
         } catch (err) { alert('Halt failed: ' + (err.response?.data?.error || err.message)); }
     };
     const handleResume = async () => {
-        if (!window.confirm('Resume tick engine? New entries will be permitted again.')) return;
+        if (!await confirm('Resume tick engine? New entries will be permitted again.')) return;
         try {
             await axios.post(`${API_URL}/tick-strategies/resume`, { actor: 'operator' });
             await fetchAll();
@@ -389,7 +392,7 @@ export default function TickStrategies() {
         const openCount = snapshot?.totals?.openPositions || 0;
         const reason = window.prompt(`KILL ALL: force-close every open paper position (${openCount} currently) and halt the engine. Type the reason:`, 'kill-all');
         if (reason == null) return;
-        if (!window.confirm(`Confirm KILL ALL: close ${openCount} position(s) at last LTP and halt entries?`)) return;
+        if (!await confirm({ title: 'Kill all positions', body: `Confirm KILL ALL: close ${openCount} position(s) at last LTP and halt entries?`, danger: true, confirmLabel: 'Kill all positions', requireText: 'KILL' })) return;
         try {
             const res = await axios.post(`${API_URL}/tick-strategies/kill-all`, { reason, actor: 'operator' });
             alert(`Closed ${res.data.closed} position(s). Engine is halted.`);
@@ -412,13 +415,13 @@ export default function TickStrategies() {
             {/* Header */}
             <div className="flex justify-between items-center">
                 <div>
-                    <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+                    <h1 className="text-3xl font-bold text-fg flex items-center gap-3">
                         <Zap className="w-7 h-7 text-amber-400" /> Live Tick Strategies
                         <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/40">
                             PAPER ONLY
                         </span>
                     </h1>
-                    <p className="text-slate-400 mt-1 text-sm">
+                    <p className="text-fg-4 mt-1 text-sm">
                         Sub-second strategies that react to raw tick data — volume bursts, order-flow footprints, premium spikes.
                         These can't be backtested against 1-min candles, so they run paper-only against the live tick stream.
                     </p>
@@ -452,7 +455,7 @@ export default function TickStrategies() {
                     <button
                         onClick={() => openCreate()}
                         disabled={Object.keys(types).length === 0}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:bg-slate-700 disabled:text-slate-500 text-black font-semibold transition"
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:bg-slate-700 disabled:text-fg-5 text-black font-semibold transition"
                     >
                         <Plus className="w-4 h-4" /> New Tick Strategy
                     </button>
@@ -544,10 +547,10 @@ export default function TickStrategies() {
             </div>
 
             {/* Strategies list */}
-            <div className="bg-surface p-6 rounded-xl border border-slate-700">
-                <h2 className="text-lg font-bold text-white mb-4">Deployed Strategies</h2>
+            <div className="bg-surface p-6 rounded-xl border border-line">
+                <h2 className="text-lg font-bold text-fg mb-4">Deployed Strategies</h2>
                 {merged.length === 0 ? (
-                    <div className="text-slate-500 text-sm italic text-center py-8">
+                    <div className="text-fg-5 text-sm italic text-center py-8">
                         No tick strategies yet. Click <span className="text-amber-400 font-semibold">New Tick Strategy</span> to deploy one — e.g. a Large Order Detector on NIFTY futures to catch institutional fills.
                     </div>
                 ) : (
@@ -566,13 +569,13 @@ export default function TickStrategies() {
             </div>
 
             {/* Live event feed */}
-            <div className="bg-surface p-6 rounded-xl border border-slate-700">
-                <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+            <div className="bg-surface p-6 rounded-xl border border-line">
+                <h2 className="text-lg font-bold text-fg mb-4 flex items-center gap-2">
                     <Activity className="w-5 h-5 text-cyan-400" /> Live Event Feed
-                    <span className="text-xs font-normal text-slate-500">({snapshot.events?.length || 0} recent)</span>
+                    <span className="text-xs font-normal text-fg-5">({snapshot.events?.length || 0} recent)</span>
                 </h2>
                 {!snapshot.events || snapshot.events.length === 0 ? (
-                    <div className="text-slate-500 text-sm italic text-center py-6">
+                    <div className="text-fg-5 text-sm italic text-center py-6">
                         Waiting for signals… activate a strategy and let the tick stream do its thing.
                     </div>
                 ) : (
@@ -589,11 +592,11 @@ export default function TickStrategies() {
                 /api/tick-recordings route) don't render a misleading empty
                 section with disabled action buttons. */}
             {recordingsSupported && (
-                <div className="bg-surface p-6 rounded-xl border border-slate-700">
+                <div className="bg-surface p-6 rounded-xl border border-line">
                     <div className="flex justify-between items-center mb-4">
-                        <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                        <h2 className="text-lg font-bold text-fg flex items-center gap-2">
                             <Layers className="w-5 h-5 text-cyan-400" /> Tick Recordings
-                            <span className="text-xs font-normal text-slate-500">({recordings.length})</span>
+                            <span className="text-xs font-normal text-fg-5">({recordings.length})</span>
                         </h2>
                         <button
                             onClick={() => setRecordingFormOpen(true)}
@@ -613,14 +616,14 @@ export default function TickStrategies() {
             )}
 
             {/* Paper trade log */}
-            <div className="bg-surface p-6 rounded-xl border border-slate-700">
-                <h2 className="text-lg font-bold text-white mb-4">Paper Trade Log <span className="text-xs font-normal text-slate-500">(showing latest {trades.length} of {tradesTotal})</span></h2>
+            <div className="bg-surface p-6 rounded-xl border border-line">
+                <h2 className="text-lg font-bold text-fg mb-4">Paper Trade Log <span className="text-xs font-normal text-fg-5">(showing latest {trades.length} of {tradesTotal})</span></h2>
                 {trades.length === 0 ? (
-                    <div className="text-slate-500 text-sm italic text-center py-6">No trades recorded yet.</div>
+                    <div className="text-fg-5 text-sm italic text-center py-6">No trades recorded yet.</div>
                 ) : (
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm">
-                            <thead className="text-xs uppercase text-slate-500 border-b border-slate-700">
+                            <thead className="text-xs uppercase text-fg-5 border-b border-line">
                                 <tr>
                                     <th className="text-left py-2 pr-3">Date · Time</th>
                                     <th className="text-left py-2 pr-3">Strategy</th>
@@ -659,32 +662,32 @@ export default function TickStrategies() {
                                             ? `Gross ₹${t.option_estimate.gross_pnl}, charges ₹${t.option_estimate.charges?.total}, slippage ₹${t.option_estimate.slippage_cost}`
                                             : 'Options-leg estimate not available';
                                     return (
-                                        <tr key={t._id} className="border-b border-slate-800 hover:bg-slate-800/40">
-                                            <td className="py-2 pr-3 text-slate-400 font-mono text-xs whitespace-nowrap">{new Date(t.entryTime).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</td>
-                                            <td className="py-2 pr-3 text-slate-300">{t.strategyName}</td>
-                                            <td className="py-2 pr-3 font-mono text-slate-300 text-xs">{t.symbol}</td>
+                                        <tr key={t._id} className="border-b border-line-0 hover:bg-slate-800/40">
+                                            <td className="py-2 pr-3 text-fg-4 font-mono text-xs whitespace-nowrap">{new Date(t.entryTime).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</td>
+                                            <td className="py-2 pr-3 text-fg-3">{t.strategyName}</td>
+                                            <td className="py-2 pr-3 font-mono text-fg-3 text-xs">{t.symbol}</td>
                                             <td className={`py-2 pr-3 font-bold ${t.direction === 'LONG' ? 'text-green-400' : 'text-red-400'}`}>{t.direction}</td>
                                             <td className="py-2 pr-3 text-right font-mono">{t.entryPrice?.toFixed(2)}</td>
                                             <td className="py-2 pr-3 text-right font-mono" title={liveOpen ? 'Live LTP (position still open)' : ''}>
                                                 {displayExit}
                                             </td>
-                                            <td className={`py-2 pr-3 text-right font-mono font-bold ${displayPnl == null ? 'text-slate-500' : (displayPnl >= 0 ? 'text-green-400' : 'text-red-400')}`}
+                                            <td className={`py-2 pr-3 text-right font-mono font-bold ${displayPnl == null ? 'text-fg-5' : (displayPnl >= 0 ? 'text-green-400' : 'text-red-400')}`}
                                                 title={liveOpen ? 'Unrealized — updates live' : ''}>
                                                 {displayPnl != null
                                                     ? (displayPnl >= 0 ? '+' : '') + displayPnl.toFixed(2) + (liveOpen ? ' (live)' : '')
                                                     : '—'}
                                             </td>
-                                            <td className={`py-2 pr-3 text-right font-mono ${netRupees == null ? 'text-slate-500' : (netRupees >= 0 ? 'text-green-400' : 'text-red-400')}`}
+                                            <td className={`py-2 pr-3 text-right font-mono ${netRupees == null ? 'text-fg-5' : (netRupees >= 0 ? 'text-green-400' : 'text-red-400')}`}
                                                 title={netTooltip}>
                                                 {netRupees != null
                                                     ? (netRupees >= 0 ? '+' : '') + Math.round(netRupees).toLocaleString()
                                                     : '—'}
                                             </td>
-                                            <td className="py-2 pr-3 text-right font-mono text-slate-400 text-xs">
+                                            <td className="py-2 pr-3 text-right font-mono text-fg-4 text-xs">
                                                 {displayHoldMs ? `${(displayHoldMs / 1000).toFixed(1)}s` : '—'}
                                             </td>
                                             <td className="py-2 pr-3">
-                                                <span className={`text-xs px-2 py-0.5 rounded ${t.status === 'OPEN' ? 'bg-amber-500/20 text-amber-300 animate-pulse' : 'bg-slate-700 text-slate-400'}`}>{t.status}</span>
+                                                <span className={`text-xs px-2 py-0.5 rounded ${t.status === 'OPEN' ? 'bg-amber-500/20 text-amber-300 animate-pulse' : 'bg-slate-700 text-fg-4'}`}>{t.status}</span>
                                             </td>
                                         </tr>
                                     );
@@ -709,7 +712,7 @@ export default function TickStrategies() {
                         <select
                             value={form.strategyType}
                             onChange={e => onTypeChange(e.target.value)}
-                            className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                            className="w-full bg-slate-800 border border-line rounded px-3 py-2 text-fg-2"
                             disabled={!!editingId}
                         >
                             {Object.entries(types).map(([key, meta]) => (
@@ -717,7 +720,7 @@ export default function TickStrategies() {
                             ))}
                         </select>
                         {form.strategyType && types[form.strategyType] && (
-                            <p className="text-xs text-slate-400 mt-2 leading-relaxed">{types[form.strategyType].description}</p>
+                            <p className="text-xs text-fg-4 mt-2 leading-relaxed">{types[form.strategyType].description}</p>
                         )}
                     </FormField>
 
@@ -727,7 +730,7 @@ export default function TickStrategies() {
                             value={form.name}
                             onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                             placeholder="e.g. NIFTY big-order scalp"
-                            className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                            className="w-full bg-slate-800 border border-line rounded px-3 py-2 text-fg-2"
                         />
                     </FormField>
 
@@ -735,7 +738,7 @@ export default function TickStrategies() {
                         <select
                             value={form.indexSymbol}
                             onChange={e => setForm(f => ({ ...f, indexSymbol: e.target.value, futuresExpiry: '' }))}
-                            className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                            className="w-full bg-slate-800 border border-line rounded px-3 py-2 text-fg-2"
                         >
                             <optgroup label="Indices">
                                 {Object.entries(INSTRUMENT_CONFIG)
@@ -779,12 +782,12 @@ export default function TickStrategies() {
                         <select
                             value={form.dataSource}
                             onChange={e => setForm(f => ({ ...f, dataSource: e.target.value, futuresExpiry: e.target.value === 'SPOT' ? '' : f.futuresExpiry }))}
-                            className="w-full bg-slate-800 border border-blue-800 rounded px-3 py-2 text-slate-200"
+                            className="w-full bg-slate-800 border border-blue-800 rounded px-3 py-2 text-fg-2"
                         >
                             <option value="SPOT">Spot / Index (no per-tick volume)</option>
                             <option value="FUT">Futures Contract (recommended)</option>
                         </select>
-                        <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+                        <p className="text-xs text-fg-5 mt-1.5 leading-relaxed">
                             {form.dataSource === 'SPOT'
                                 ? '⚠️ Index spot ticks report vol=0 — volume-driven strategies (Large Order, CVD, VWAP Reversion) will never trigger. Use this only for price-only strategies.'
                                 : '✓ Futures contracts carry per-tick traded volume — required for any volume-aware strategy.'}
@@ -796,7 +799,7 @@ export default function TickStrategies() {
                             <select
                                 value={form.futuresExpiry}
                                 onChange={e => setForm(f => ({ ...f, futuresExpiry: e.target.value }))}
-                                className="w-full bg-slate-800 border border-purple-900 rounded px-3 py-2 text-slate-200"
+                                className="w-full bg-slate-800 border border-purple-900 rounded px-3 py-2 text-fg-2"
                                 disabled={expiryLoading}
                             >
                                 <option value="">{expiryLoading ? 'Loading…' : '— select expiry —'}</option>
@@ -806,7 +809,7 @@ export default function TickStrategies() {
                                     </option>
                                 ))}
                             </select>
-                            <p className="text-xs text-slate-500 mt-1.5">
+                            <p className="text-xs text-fg-5 mt-1.5">
                                 Most index futures roll monthly. The current-month contract has the deepest liquidity for tick strategies.
                             </p>
                         </FormField>
@@ -817,9 +820,9 @@ export default function TickStrategies() {
                             type="text"
                             value={form.symbol}
                             onChange={e => setForm(f => ({ ...f, symbol: e.target.value }))}
-                            className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200 font-mono text-sm"
+                            className="w-full bg-slate-800 border border-line rounded px-3 py-2 text-fg-2 font-mono text-sm"
                         />
-                        <p className="text-xs text-slate-500 mt-1">
+                        <p className="text-xs text-fg-5 mt-1">
                             Auto-built from the selections above. Editable — type a custom symbol if you need one not in the lists (e.g. <code className="bg-slate-700 px-1">NSE:NIFTY25NOVFUT</code>).
                         </p>
                     </FormField>
@@ -832,7 +835,7 @@ export default function TickStrategies() {
                                 <select
                                     value={form.presetId}
                                     onChange={e => applyPreset(e.target.value)}
-                                    className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                                    className="w-full bg-slate-800 border border-line rounded px-3 py-2 text-fg-2"
                                 >
                                     <option value="">— Custom (manual params below) —</option>
                                     {presets.map(p => (
@@ -840,12 +843,12 @@ export default function TickStrategies() {
                                     ))}
                                 </select>
                                 {selected ? (
-                                    <p className="text-xs text-slate-400 mt-2 leading-relaxed p-2 bg-slate-800/60 border border-slate-700 rounded">
+                                    <p className="text-xs text-fg-4 mt-2 leading-relaxed p-2 bg-slate-800/60 border border-line rounded">
                                         <span className="text-amber-300 font-semibold">{selected.name}: </span>
                                         {selected.description}
                                     </p>
                                 ) : (
-                                    <p className="text-xs text-slate-500 mt-1.5">
+                                    <p className="text-xs text-fg-5 mt-1.5">
                                         Pick a preset to fill the parameters below, then tweak as needed. Presets are heuristic starting points — validate against live ticks before relying on them.
                                     </p>
                                 )}
@@ -858,7 +861,7 @@ export default function TickStrategies() {
                             <div className="grid grid-cols-2 gap-3">
                                 {Object.entries(form.params).map(([key, val]) => (
                                     <div key={key}>
-                                        <label className="text-[10px] uppercase tracking-wider text-slate-500">{key.replace(/_/g, ' ')}</label>
+                                        <label className="text-3xs uppercase tracking-wider text-fg-5">{key.replace(/_/g, ' ')}</label>
                                         <input
                                             type="text"
                                             value={val}
@@ -869,7 +872,7 @@ export default function TickStrategies() {
                                                 presetId: '',
                                                 params: { ...f.params, [key]: e.target.value },
                                             }))}
-                                            className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 text-sm font-mono"
+                                            className="w-full bg-slate-800 border border-line rounded px-2 py-1 text-fg-2 text-sm font-mono"
                                         />
                                     </div>
                                 ))}
@@ -914,13 +917,13 @@ export default function TickStrategies() {
 // Sub-components
 // ────────────────────────────────────────────────────────────────────────
 
-function StatBox({ label, value, icon: Icon, color, subtext, valueClass = 'text-white' }) {
+function StatBox({ label, value, icon: _Icon, color, subtext, valueClass = 'text-fg' }) {
     return (
-        <div className="bg-surface p-5 rounded-xl border border-slate-700 flex items-center justify-between">
+        <div className="bg-surface p-5 rounded-xl border border-line flex items-center justify-between">
             <div>
-                <p className="text-slate-400 text-xs uppercase tracking-wider">{label}</p>
+                <p className="text-fg-4 text-xs uppercase tracking-wider">{label}</p>
                 <h3 className={`text-3xl font-bold mt-1 ${valueClass}`}>{value}</h3>
-                {subtext && <p className="text-[11px] text-slate-500 mt-1">{subtext}</p>}
+                {subtext && <p className="text-2xs text-fg-5 mt-1">{subtext}</p>}
             </div>
             <div className={`p-3 rounded-lg bg-${color}-500/10 text-${color}-400`}>
                 <Icon className="w-6 h-6" />
@@ -957,25 +960,25 @@ function StrategyCard({ strategy: s, typeMeta, engineMarketOpen, onToggle, onEdi
         }
     }
     return (
-        <div className="bg-slate-800 rounded-lg border border-slate-600 overflow-hidden">
+        <div className="bg-slate-800 rounded-lg border border-line-2 overflow-hidden">
             <div className="p-4 flex items-center justify-between gap-4 flex-wrap">
                 <div className="flex items-center gap-3 flex-1 min-w-[200px]">
                     <button
                         onClick={onToggle}
                         title={s.isActive ? 'Pause strategy' : 'Activate strategy'}
-                        className={`w-10 h-10 rounded-full flex items-center justify-center transition ${s.isActive ? 'bg-green-500 hover:bg-green-600 text-black' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'}`}
+                        className={`w-10 h-10 rounded-full flex items-center justify-center transition ${s.isActive ? 'bg-green-500 hover:bg-green-600 text-black' : 'bg-slate-700 hover:bg-slate-600 text-fg-3'}`}
                     >
                         {s.isActive ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                     </button>
                     <div>
                         <div className="flex items-center gap-2 flex-wrap">
-                            <h4 className="font-bold text-white">{s.name}</h4>
-                            <span className="text-[10px] px-2 py-0.5 rounded bg-violet-500/20 text-violet-300 border border-violet-500/40">
+                            <h4 className="font-bold text-fg">{s.name}</h4>
+                            <span className="text-3xs px-2 py-0.5 rounded bg-violet-500/20 text-violet-300 border border-violet-500/40">
                                 {typeMeta?.label || s.strategyType}
                             </span>
-                            <span className="text-[10px] px-2 py-0.5 rounded bg-slate-700 text-slate-300 font-mono">{s.symbol}</span>
+                            <span className="text-3xs px-2 py-0.5 rounded bg-slate-700 text-fg-3 font-mono">{s.symbol}</span>
                         </div>
-                        <p className="text-xs text-slate-500 mt-0.5">
+                        <p className="text-xs text-fg-5 mt-0.5">
                             {rt?.errors?.autoDeactivatedAt && !s.isActive
                                 ? <span className="text-red-400 font-semibold">⚠️ Auto-deactivated (errors)</span>
                                 : (s.isActive ? `${streamDot} Listening to ticks${streamSuffix}` : '⏸ Paused')}
@@ -989,7 +992,7 @@ function StrategyCard({ strategy: s, typeMeta, engineMarketOpen, onToggle, onEdi
                                 </span>
                             )}
                             {rt?.health && s.isActive && (
-                                <span className={`ml-2 ${rt.health.warnedNoVol ? 'text-amber-400' : 'text-slate-500'}`}>
+                                <span className={`ml-2 ${rt.health.warnedNoVol ? 'text-amber-400' : 'text-fg-5'}`}>
                                     · <span className={rt.health.ticksPerSec > 0 ? 'text-cyan-400 font-semibold' : ''}>{rt.health.ticksPerSec || 0} t/s</span>
                                     {' '}({rt.health.totalTicks} total
                                     {rt.health.totalTicks > 0 && (
@@ -1044,7 +1047,7 @@ function StrategyCard({ strategy: s, typeMeta, engineMarketOpen, onToggle, onEdi
                         }
                         color={(stats.optionNetPnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}
                     />
-                    <button onClick={onEdit} className="text-xs px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-200">Edit</button>
+                    <button onClick={onEdit} className="text-xs px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-fg-2">Edit</button>
                     <button onClick={onDelete} className="p-2 rounded text-red-400 hover:bg-red-500/10" title="Delete">
                         <Trash2 className="w-4 h-4" />
                     </button>
@@ -1054,10 +1057,10 @@ function StrategyCard({ strategy: s, typeMeta, engineMarketOpen, onToggle, onEdi
     );
 }
 
-function Stat({ label, value, color = 'text-white' }) {
+function Stat({ label, value, color = 'text-fg' }) {
     return (
         <div className="text-right">
-            <p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p>
+            <p className="text-3xs uppercase tracking-wider text-fg-5">{label}</p>
             <p className={`font-bold font-mono ${color}`}>{value}</p>
         </div>
     );
@@ -1077,51 +1080,53 @@ function EventRow({ ev }) {
         : isStreamHealthy ? 'text-green-400'
         : isEntry ? (ev.direction === 'LONG' ? 'text-green-400' : 'text-red-400')
         : isExit ? (ev.pnl >= 0 ? 'text-green-400' : 'text-red-400')
-        : 'text-slate-400';
+        : 'text-fg-4';
     const rowCls = isWarn || isStreamStale
         ? 'bg-amber-900/20 border-amber-700/40'
         : isStreamHealthy
             ? 'bg-green-900/10 border-green-800/40'
-            : 'bg-slate-900/40 border-slate-800';
+            : 'bg-slate-900/40 border-line-0';
     return (
         <div className={`flex items-start gap-3 p-2 rounded border ${rowCls}`}>
             <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${color}`} />
             <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap text-sm">
                     <span className={`font-bold ${color}`}>{ev.kind}</span>
-                    <span className="text-slate-300">{ev.strategyName}</span>
-                    <span className="text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 font-mono">{ev.symbol}</span>
+                    <span className="text-fg-3">{ev.strategyName}</span>
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-slate-700 text-fg-4 font-mono">{ev.symbol}</span>
                     {ev.direction && (
                         <span className={`text-xs font-bold ${ev.direction === 'LONG' ? 'text-green-400' : 'text-red-400'}`}>{ev.direction}</span>
                     )}
-                    {isEntry && <span className="text-xs text-slate-400 font-mono">@ {ev.entryPrice?.toFixed(2)}</span>}
+                    {isEntry && <span className="text-xs text-fg-4 font-mono">@ {ev.entryPrice?.toFixed(2)}</span>}
                     {ev.kind === 'EXIT' && (
-                        <span className="text-xs text-slate-400 font-mono">
+                        <span className="text-xs text-fg-4 font-mono">
                             {ev.entryPrice?.toFixed(2)} → {ev.exitPrice?.toFixed(2)}
                             {ev.pnlPoints != null && ` · ${ev.pnlPoints >= 0 ? '+' : ''}${ev.pnlPoints.toFixed(2)} pts`}
                             {ev.holdMs != null && ` · ${(ev.holdMs / 1000).toFixed(1)}s`}
                         </span>
                     )}
-                    <span className="text-xs text-slate-500 ml-auto font-mono">{new Date(ev.time).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</span>
+                    <span className="text-xs text-fg-5 ml-auto font-mono">{new Date(ev.time).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</span>
                 </div>
-                <p className={`text-xs mt-0.5 ${isWarn || isStreamStale ? 'text-amber-200' : isStreamHealthy ? 'text-green-200' : 'text-slate-500 truncate'}`}>{ev.reason}</p>
+                <p className={`text-xs mt-0.5 ${isWarn || isStreamStale ? 'text-amber-200' : isStreamHealthy ? 'text-green-200' : 'text-fg-5 truncate'}`}>{ev.reason}</p>
             </div>
         </div>
     );
 }
 
 function Modal({ title, children, onClose, onSubmit, submitLabel, loading, error }) {
+    // Shared modal: this one hook makes every caller Escape-dismissable.
+    useEscapeKey(onClose);
     return (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-6">
-            <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="bg-slate-900 border border-line rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
                 <div className="flex justify-between items-center mb-5">
-                    <h3 className="text-lg font-bold text-white">{title}</h3>
-                    <button onClick={onClose} className="text-slate-400 hover:text-white text-xl leading-none">×</button>
+                    <h3 className="text-lg font-bold text-fg">{title}</h3>
+                    <button onClick={onClose} className="text-fg-4 hover:text-fg text-xl leading-none">×</button>
                 </div>
                 <div className="space-y-4">{children}</div>
                 {error && <p className="mt-4 text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded p-3">{error}</p>}
                 <div className="flex justify-end gap-2 mt-6">
-                    <button onClick={onClose} className="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-slate-200">Cancel</button>
+                    <button onClick={onClose} className="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-fg-2">Cancel</button>
                     <button
                         onClick={onSubmit}
                         disabled={loading}
@@ -1136,10 +1141,20 @@ function Modal({ title, children, onClose, onSubmit, submitLabel, loading, error
 }
 
 function FormField({ label, children }) {
+    // useId() + cloneElement rather than a hand-written id: this wrapper renders
+    // wherever it is used, including inside lists, so a static id would repeat in
+    // the DOM and point every copy of the label at the first control. useId is
+    // unique per instance and stable across re-renders. The id is only injected
+    // when the child is an element that does not already carry one, so a caller
+    // that manages its own id keeps it.
+    const id = useId();
+    const control = React.isValidElement(children) && !children.props.id
+        ? React.cloneElement(children, { id })
+        : children;
     return (
         <div>
-            <label className="block text-xs uppercase tracking-wider text-slate-400 mb-1.5">{label}</label>
-            {children}
+            <label htmlFor={id} className="block text-xs uppercase tracking-wider text-fg-4 mb-1.5">{label}</label>
+            {control}
         </div>
     );
 }
@@ -1168,14 +1183,14 @@ function formatBytes(bytes) {
 }
 
 function RecordingStatusPill({ status }) {
-    let cls = 'bg-slate-700 text-slate-300';
+    let cls = 'bg-slate-700 text-fg-3';
     let pulsing = false;
     if (status === 'RECORDING') { cls = 'bg-green-500/20 text-green-300 border border-green-500/40'; pulsing = true; }
-    else if (status === 'STOPPED') { cls = 'bg-slate-700 text-slate-300 border border-slate-600'; }
+    else if (status === 'STOPPED') { cls = 'bg-slate-700 text-fg-3 border border-line-2'; }
     else if (status === 'INCOMPLETE_STOPPED') { cls = 'bg-amber-500/20 text-amber-300 border border-amber-500/40'; }
     else if (status === 'ERROR') { cls = 'bg-red-500/20 text-red-300 border border-red-500/40'; }
     return (
-        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${cls} ${pulsing ? 'animate-pulse' : ''}`}>
+        <span className={`text-3xs font-semibold px-2 py-0.5 rounded ${cls} ${pulsing ? 'animate-pulse' : ''}`}>
             {status}
         </span>
     );
@@ -1186,13 +1201,13 @@ function RecordingList({ recordings, onStop, onDelete, onSample, onReplay }) {
     // calling Date.now() during render (which the lint rule flags as impure).
     const [nowTs, setNowTs] = useState(() => Date.now());
     useEffect(() => {
-        const i = setInterval(() => setNowTs(Date.now()), 1000);
-        return () => clearInterval(i);
+        const i = pollInterval(() => setNowTs(Date.now()), 1000);
+        return () => i?.();
     }, []);
 
     if (!recordings || recordings.length === 0) {
         return (
-            <div className="text-slate-500 text-sm italic text-center py-8">
+            <div className="text-fg-5 text-sm italic text-center py-8">
                 No recordings yet. Click <span className="text-amber-400 font-semibold">New Recording</span> to capture a live tick stream for replay.
             </div>
         );
@@ -1211,24 +1226,24 @@ function RecordingList({ recordings, onStop, onDelete, onSample, onReplay }) {
                 const visibleSymbols = symbolsList.slice(0, 3);
                 const extraSymbols = Math.max(0, symbolsList.length - visibleSymbols.length);
                 return (
-                    <div key={rec._id} className="bg-slate-800 rounded-lg border border-slate-600 p-4">
+                    <div key={rec._id} className="bg-slate-800 rounded-lg border border-line-2 p-4">
                         <div className="flex items-center justify-between gap-4 flex-wrap">
                             <div className="flex-1 min-w-[200px]">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                    <h4 className="font-bold text-white">{rec.name}</h4>
+                                    <h4 className="font-bold text-fg">{rec.name}</h4>
                                     <RecordingStatusPill status={rec.status} />
                                     {rec.autoStopMinutes != null && isActive && (
-                                        <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/40">
+                                        <span className="text-3xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/40">
                                             auto-stop {rec.autoStopMinutes}m
                                         </span>
                                     )}
                                 </div>
                                 <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
                                     {visibleSymbols.map(sym => (
-                                        <span key={sym} className="text-[10px] px-2 py-0.5 rounded bg-slate-700 text-slate-300 font-mono">{sym}</span>
+                                        <span key={sym} className="text-3xs px-2 py-0.5 rounded bg-slate-700 text-fg-3 font-mono">{sym}</span>
                                     ))}
                                     {extraSymbols > 0 && (
-                                        <span className="text-[10px] px-2 py-0.5 rounded bg-slate-700 text-slate-400">+{extraSymbols} more</span>
+                                        <span className="text-3xs px-2 py-0.5 rounded bg-slate-700 text-fg-4">+{extraSymbols} more</span>
                                     )}
                                 </div>
                                 {rec.errorMessage && (
@@ -1419,14 +1434,14 @@ function RecordingForm({ onClose, onSubmit }) {
                     onChange={e => setName(e.target.value)}
                     placeholder="e.g. NIFTY Spot 9:30-10:00"
                     maxLength={100}
-                    className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                    className="w-full bg-slate-800 border border-line rounded px-3 py-2 text-fg-2"
                 />
             </FormField>
 
             <FormField label={`Symbols (${symbols.length}/10)`}>
-                <div className="flex items-center gap-1.5 flex-wrap mb-2 min-h-[28px]">
+                <div className="flex items-center gap-1.5 flex-wrap mb-2 min-h-[1.75rem]">
                     {symbols.length === 0 && (
-                        <span className="text-xs text-slate-500 italic">No symbols picked yet.</span>
+                        <span className="text-xs text-fg-5 italic">No symbols picked yet.</span>
                     )}
                     {symbols.map(sym => (
                         <span key={sym} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-violet-500/20 text-violet-300 border border-violet-500/40 font-mono">
@@ -1434,7 +1449,7 @@ function RecordingForm({ onClose, onSubmit }) {
                             <button
                                 type="button"
                                 onClick={() => removeSymbol(sym)}
-                                className="text-violet-300 hover:text-white text-sm leading-none"
+                                className="text-violet-300 hover:text-fg text-sm leading-none"
                                 aria-label={`Remove ${sym}`}
                             >×</button>
                         </span>
@@ -1447,7 +1462,7 @@ function RecordingForm({ onClose, onSubmit }) {
                     <select
                         value={pickerIndex}
                         onChange={e => setPickerIndex(e.target.value)}
-                        className="col-span-5 bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200 text-sm"
+                        className="col-span-5 bg-slate-800 border border-line rounded px-3 py-2 text-fg-2 text-sm"
                     >
                         <option value="">— pick underlying —</option>
                         <optgroup label="Indices">
@@ -1493,7 +1508,7 @@ function RecordingForm({ onClose, onSubmit }) {
                         onChange={e => setPickerDataSource(e.target.value)}
                         disabled={!pickerIndex || !pickerSupportsSpot}
                         title={!pickerSupportsSpot && pickerIndex ? 'This underlying is futures-only.' : ''}
-                        className="col-span-3 bg-slate-800 border border-slate-700 rounded px-2 py-2 text-slate-200 text-sm disabled:opacity-50"
+                        className="col-span-3 bg-slate-800 border border-line rounded px-2 py-2 text-fg-2 text-sm disabled:opacity-50"
                     >
                         {pickerSupportsSpot && <option value="SPOT">Spot</option>}
                         {pickerSupportsFut  && <option value="FUT">Futures</option>}
@@ -1505,7 +1520,7 @@ function RecordingForm({ onClose, onSubmit }) {
                             value={pickerExpiry}
                             onChange={e => setPickerExpiry(e.target.value)}
                             disabled={!pickerIndex || pickerExpiryLoading || pickerExpiryDates.length === 0}
-                            className="col-span-3 bg-slate-800 border border-slate-700 rounded px-2 py-2 text-slate-200 text-sm disabled:opacity-50"
+                            className="col-span-3 bg-slate-800 border border-line rounded px-2 py-2 text-fg-2 text-sm disabled:opacity-50"
                         >
                             {pickerExpiryLoading && <option value="">Loading…</option>}
                             {!pickerExpiryLoading && pickerExpiryDates.length === 0 && (
@@ -1518,7 +1533,7 @@ function RecordingForm({ onClose, onSubmit }) {
                             ))}
                         </select>
                     ) : (
-                        <div className="col-span-3 text-xs text-slate-500 italic flex items-center px-2">
+                        <div className="col-span-3 text-xs text-fg-5 italic flex items-center px-2">
                             (no expiry for spot)
                         </div>
                     )}
@@ -1527,7 +1542,7 @@ function RecordingForm({ onClose, onSubmit }) {
                         type="button"
                         onClick={handleAddPicked}
                         disabled={!resolvedPickerSymbol}
-                        className="col-span-1 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded px-2 py-2 text-sm font-semibold"
+                        className="col-span-1 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-fg-5 text-white rounded px-2 py-2 text-sm font-semibold"
                         title={resolvedPickerSymbol || 'Pick an underlying first'}
                     >+ Add</button>
                 </div>
@@ -1537,7 +1552,7 @@ function RecordingForm({ onClose, onSubmit }) {
                     {resolvedPickerSymbol ? (
                         <span className="text-violet-300">Will add: <code className="bg-slate-700 px-1 font-mono">{resolvedPickerSymbol}</code></span>
                     ) : (
-                        <span className="text-slate-500">
+                        <span className="text-fg-5">
                             Pick an underlying, then (for futures) pick an expiry. Index spot ticks report vol=0 — use Futures for volume-aware replays.
                         </span>
                     )}
@@ -1552,9 +1567,9 @@ function RecordingForm({ onClose, onSubmit }) {
                     value={autoStopMinutes}
                     onChange={e => setAutoStopMinutes(e.target.value)}
                     placeholder="leave blank for manual stop"
-                    className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                    className="w-full bg-slate-800 border border-line rounded px-3 py-2 text-fg-2"
                 />
-                <p className="text-xs text-slate-500 mt-1.5">
+                <p className="text-xs text-fg-5 mt-1.5">
                     Recording stops automatically after this many minutes. Range 1–1440. Leave blank to require a manual stop.
                 </p>
             </FormField>
@@ -1607,14 +1622,14 @@ function SamplePreviewModal({ recording, onClose }) {
             error={error}
         >
             <div className="flex items-center gap-3 flex-wrap mb-2">
-                <span className="text-xs text-slate-400">
+                <span className="text-xs text-fg-4">
                     Showing first {ticks.length} of {(recording.tickCount || 0).toLocaleString()} ticks
                 </span>
                 {symbols.length > 1 && (
                     <select
                         value={symbolFilter}
                         onChange={e => setSymbolFilter(e.target.value)}
-                        className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 text-xs"
+                        className="bg-slate-800 border border-line rounded px-2 py-1 text-fg-2 text-xs"
                     >
                         <option value="">All symbols</option>
                         {symbols.map(s => <option key={s} value={s}>{s}</option>)}
@@ -1623,16 +1638,16 @@ function SamplePreviewModal({ recording, onClose }) {
                 {limit < 500 && (
                     <button
                         onClick={() => setLimit(Math.min(500, limit + 100))}
-                        className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200"
+                        className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-fg-2"
                         disabled={loading}
                     >
                         Load 100 more
                     </button>
                 )}
             </div>
-            <div className="overflow-x-auto max-h-[60vh] overflow-y-auto border border-slate-700 rounded">
+            <div className="overflow-x-auto max-h-[60vh] overflow-y-auto border border-line rounded">
                 <table className="w-full text-xs">
-                    <thead className="text-[10px] uppercase text-slate-500 border-b border-slate-700 bg-slate-900 sticky top-0">
+                    <thead className="text-3xs uppercase text-fg-5 border-b border-line bg-slate-900 sticky top-0">
                         <tr>
                             <th className="text-left py-2 px-2">Seq</th>
                             <th className="text-left py-2 px-2">Symbol</th>
@@ -1645,24 +1660,24 @@ function SamplePreviewModal({ recording, onClose }) {
                     </thead>
                     <tbody>
                         {loading && ticks.length === 0 ? (
-                            <tr><td colSpan={7} className="py-4 text-center text-slate-500 italic">Loading…</td></tr>
+                            <tr><td colSpan={7} className="py-4 text-center text-fg-5 italic">Loading…</td></tr>
                         ) : ticks.length === 0 ? (
-                            <tr><td colSpan={7} className="py-4 text-center text-slate-500 italic">No ticks.</td></tr>
+                            <tr><td colSpan={7} className="py-4 text-center text-fg-5 italic">No ticks.</td></tr>
                         ) : ticks.map(t => (
-                            <tr key={`${t.recordingId}_${t.sequence}`} className="border-b border-slate-800 hover:bg-slate-800/40">
-                                <td className="py-1 px-2 font-mono text-slate-400">{t.sequence}</td>
-                                <td className="py-1 px-2 font-mono text-slate-300">{t.symbol}</td>
-                                <td className="py-1 px-2 font-mono text-slate-400">
+                            <tr key={`${t.recordingId}_${t.sequence}`} className="border-b border-line-0 hover:bg-slate-800/40">
+                                <td className="py-1 px-2 font-mono text-fg-4">{t.sequence}</td>
+                                <td className="py-1 px-2 font-mono text-fg-3">{t.symbol}</td>
+                                <td className="py-1 px-2 font-mono text-fg-4">
                                     {t.receivedAt ? new Date(t.receivedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '—'}
                                 </td>
                                 <td className="py-1 px-2 text-right font-mono">{t.ltp != null ? Number(t.ltp).toFixed(2) : '—'}</td>
-                                <td className="py-1 px-2 text-right font-mono text-slate-400">{t.vol != null ? t.vol.toLocaleString() : '—'}</td>
-                                <td className="py-1 px-2 text-right font-mono text-slate-400">
+                                <td className="py-1 px-2 text-right font-mono text-fg-4">{t.vol != null ? t.vol.toLocaleString() : '—'}</td>
+                                <td className="py-1 px-2 text-right font-mono text-fg-4">
                                     {t.bid_price != null ? Number(t.bid_price).toFixed(2) : '—'}
                                     {' / '}
                                     {t.ask_price != null ? Number(t.ask_price).toFixed(2) : '—'}
                                 </td>
-                                <td className="py-1 px-2 text-right font-mono text-slate-400">
+                                <td className="py-1 px-2 text-right font-mono text-fg-4">
                                     {t.tot_buy_qty != null ? t.tot_buy_qty.toLocaleString() : '—'}
                                     {' / '}
                                     {t.tot_sell_qty != null ? t.tot_sell_qty.toLocaleString() : '—'}
@@ -1702,10 +1717,10 @@ function ReplayModal({ recording, types, onClose }) {
     // Tick the elapsed counter once per second while a replay is running.
     useEffect(() => {
         if (!running || !runStartedAt) return;
-        const i = setInterval(() => {
+        const i = pollInterval(() => {
             setElapsedSec(Math.floor((Date.now() - runStartedAt) / 1000));
         }, 1000);
-        return () => clearInterval(i);
+        return () => i?.();
     }, [running, runStartedAt]);
 
     // When strategyType changes, reset params to that strategy's defaults.
@@ -1826,7 +1841,7 @@ function ReplayModal({ recording, types, onClose }) {
                         <select
                             value={strategyType}
                             onChange={e => setStrategyType(e.target.value)}
-                            className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                            className="w-full bg-slate-800 border border-line rounded px-3 py-2 text-fg-2"
                         >
                             {typeKeys.length === 0 && <option value="">— no strategy types loaded —</option>}
                             {typeKeys.map(k => (
@@ -1834,7 +1849,7 @@ function ReplayModal({ recording, types, onClose }) {
                             ))}
                         </select>
                         {strategyType && types[strategyType]?.description && (
-                            <p className="text-xs text-slate-400 mt-2 leading-relaxed">{types[strategyType].description}</p>
+                            <p className="text-xs text-fg-4 mt-2 leading-relaxed">{types[strategyType].description}</p>
                         )}
                     </FormField>
 
@@ -1843,14 +1858,14 @@ function ReplayModal({ recording, types, onClose }) {
                             <button
                                 type="button"
                                 onClick={() => setMode('single')}
-                                className={`flex-1 px-3 py-2 rounded text-sm font-semibold transition ${mode === 'single' ? 'bg-amber-500 text-black' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                                className={`flex-1 px-3 py-2 rounded text-sm font-semibold transition ${mode === 'single' ? 'bg-amber-500 text-black' : 'bg-slate-800 text-fg-3 hover:bg-slate-700'}`}
                             >
                                 <Sliders className="w-4 h-4 inline mr-1" /> Single Run
                             </button>
                             <button
                                 type="button"
                                 onClick={() => setMode('optimizer')}
-                                className={`flex-1 px-3 py-2 rounded text-sm font-semibold transition ${mode === 'optimizer' ? 'bg-amber-500 text-black' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                                className={`flex-1 px-3 py-2 rounded text-sm font-semibold transition ${mode === 'optimizer' ? 'bg-amber-500 text-black' : 'bg-slate-800 text-fg-3 hover:bg-slate-700'}`}
                             >
                                 <Layers className="w-4 h-4 inline mr-1" /> Optimizer (random params)
                             </button>
@@ -1862,7 +1877,7 @@ function ReplayModal({ recording, types, onClose }) {
                             <select
                                 value={presetId}
                                 onChange={e => applyPreset(e.target.value)}
-                                className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                                className="w-full bg-slate-800 border border-line rounded px-3 py-2 text-fg-2"
                             >
                                 <option value="">— Custom (manual params below) —</option>
                                 {presets.map(p => (
@@ -1885,9 +1900,9 @@ function ReplayModal({ recording, types, onClose }) {
                                     const isNumeric = typeof defVal === 'number';
                                     return (
                                         <div key={key}>
-                                            <label className="text-[10px] uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                                            <label className="text-3xs uppercase tracking-wider text-fg-5 flex items-center gap-1.5">
                                                 <span>{key.replace(/_/g, ' ')}</span>
-                                                <span className="text-[9px] normal-case text-slate-600 font-mono">
+                                                <span className="text-4xs normal-case text-fg-6 font-mono">
                                                     {isNumeric ? 'number' : (typeof defVal === 'boolean' ? 'bool' : 'text')}
                                                 </span>
                                             </label>
@@ -1896,7 +1911,7 @@ function ReplayModal({ recording, types, onClose }) {
                                                 step="any"
                                                 value={val}
                                                 onChange={e => setParams(p => ({ ...p, [key]: e.target.value }))}
-                                                className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 text-sm font-mono"
+                                                className="w-full bg-slate-800 border border-line rounded px-2 py-1 text-fg-2 text-sm font-mono"
                                             />
                                         </div>
                                     );
@@ -1913,16 +1928,16 @@ function ReplayModal({ recording, types, onClose }) {
                                 max="50"
                                 value={optimizerCount}
                                 onChange={e => setOptimizerCount(e.target.value)}
-                                className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-slate-200"
+                                className="w-full bg-slate-800 border border-line rounded px-3 py-2 text-fg-2"
                             />
-                            <p className="text-xs text-slate-500 mt-1.5">
+                            <p className="text-xs text-fg-5 mt-1.5">
                                 The engine will run this many trials with randomized parameters and rank by net PnL. Larger counts take longer.
                             </p>
                         </FormField>
                     )}
 
                     {running && (
-                        <div className="text-slate-300 text-sm bg-slate-800/50 border border-slate-700 rounded p-3 flex items-center justify-between gap-3">
+                        <div className="text-fg-3 text-sm bg-slate-800/50 border border-line rounded p-3 flex items-center justify-between gap-3">
                             <div>
                                 Running replay — elapsed <span className="font-mono text-amber-300">{elapsedSec}s</span>.
                                 Don't close this modal. Server timeout 5min.
@@ -1956,8 +1971,8 @@ function ReplayResults({ result, expandedRun, onExpandRun }) {
 
     return (
         <div className="space-y-4">
-            <div className="text-xs text-slate-400 flex items-center gap-3 flex-wrap">
-                <span>Recording: <span className="text-slate-200 font-semibold">{result.recordingName}</span></span>
+            <div className="text-xs text-fg-4 flex items-center gap-3 flex-wrap">
+                <span>Recording: <span className="text-fg-2 font-semibold">{result.recordingName}</span></span>
                 <span>·</span>
                 <span>Strategy: <span className="text-violet-300 font-semibold">{result.strategyType}</span></span>
                 <span>·</span>
@@ -1975,10 +1990,10 @@ function ReplayResults({ result, expandedRun, onExpandRun }) {
 
             {isOptimizer && (
                 <div>
-                    <h4 className="text-sm font-bold text-white mb-2">Leaderboard ({runs.length} trials)</h4>
-                    <div className="overflow-x-auto border border-slate-700 rounded">
+                    <h4 className="text-sm font-bold text-fg mb-2">Leaderboard ({runs.length} trials)</h4>
+                    <div className="overflow-x-auto border border-line rounded">
                         <table className="w-full text-xs">
-                            <thead className="text-[10px] uppercase text-slate-500 border-b border-slate-700 bg-slate-900">
+                            <thead className="text-3xs uppercase text-fg-5 border-b border-line bg-slate-900">
                                 <tr>
                                     <th className="text-left py-2 px-2">#</th>
                                     <th className="text-right py-2 px-2">Net PnL</th>
@@ -1999,22 +2014,22 @@ function ReplayResults({ result, expandedRun, onExpandRun }) {
                                             ? (run.stats.winningTrades / run.stats.totalTrades) * 100
                                             : 0;
                                         return (
-                                            <tr key={run.runIndex} className={`border-b border-slate-800 ${isBest ? 'bg-amber-500/5' : ''}`}>
-                                                <td className="py-1.5 px-2 font-mono text-slate-300">
+                                            <tr key={run.runIndex} className={`border-b border-line-0 ${isBest ? 'bg-amber-500/5' : ''}`}>
+                                                <td className="py-1.5 px-2 font-mono text-fg-3">
                                                     #{run.runIndex}{isBest && <span className="ml-1 text-amber-400">★</span>}
                                                 </td>
                                                 <td className={`py-1.5 px-2 text-right font-mono font-bold ${net >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                                                     {net >= 0 ? '+' : ''}{net.toFixed(2)}
                                                 </td>
-                                                <td className="py-1.5 px-2 text-right font-mono text-slate-300">{winRate.toFixed(0)}%</td>
-                                                <td className="py-1.5 px-2 text-right font-mono text-slate-300">{run.stats?.totalTrades || 0}</td>
-                                                <td className="py-1.5 px-2 text-right font-mono text-slate-400">
+                                                <td className="py-1.5 px-2 text-right font-mono text-fg-3">{winRate.toFixed(0)}%</td>
+                                                <td className="py-1.5 px-2 text-right font-mono text-fg-3">{run.stats?.totalTrades || 0}</td>
+                                                <td className="py-1.5 px-2 text-right font-mono text-fg-4">
                                                     {run.stats?.avgHoldMs != null ? formatDuration(run.stats.avgHoldMs) : '—'}
                                                 </td>
                                                 <td className="py-1.5 px-2 text-center">
                                                     <button
                                                         onClick={() => onExpandRun(isExpanded ? -1 : run.runIndex)}
-                                                        className="text-xs px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-200"
+                                                        className="text-xs px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-fg-2"
                                                     >
                                                         {isExpanded ? 'Hide' : 'View'}
                                                     </button>
@@ -2030,7 +2045,7 @@ function ReplayResults({ result, expandedRun, onExpandRun }) {
 
             {(() => {
                 const run = runs.find(r => r.runIndex === expandedRun) || runs[0];
-                if (!run) return <div className="text-slate-500 italic text-sm">No runs.</div>;
+                if (!run) return <div className="text-fg-5 italic text-sm">No runs.</div>;
                 return <ReplayRunDetail run={run} isOptimizer={isOptimizer} />;
             })()}
         </div>
@@ -2045,9 +2060,9 @@ function ReplayRunDetail({ run, isOptimizer }) {
     return (
         <div className="space-y-3">
             {isOptimizer && (
-                <div className="text-xs text-slate-400">
+                <div className="text-xs text-fg-4">
                     Run #{run.runIndex} — params:
-                    <span className="ml-2 font-mono text-slate-300 break-all">
+                    <span className="ml-2 font-mono text-fg-3 break-all">
                         {Object.entries(run.params || {}).map(([k, v]) => `${k}=${v}`).join(', ')}
                     </span>
                 </div>
@@ -2074,9 +2089,9 @@ function ReplayRunDetail({ run, isOptimizer }) {
                 />
             </div>
 
-            <div className="overflow-x-auto max-h-72 overflow-y-auto border border-slate-700 rounded">
+            <div className="overflow-x-auto max-h-72 overflow-y-auto border border-line rounded">
                 <table className="w-full text-xs">
-                    <thead className="text-[10px] uppercase text-slate-500 border-b border-slate-700 bg-slate-900 sticky top-0">
+                    <thead className="text-3xs uppercase text-fg-5 border-b border-line bg-slate-900 sticky top-0">
                         <tr>
                             <th className="text-left py-2 px-2">Symbol</th>
                             <th className="text-left py-2 px-2">Dir</th>
@@ -2089,18 +2104,18 @@ function ReplayRunDetail({ run, isOptimizer }) {
                     </thead>
                     <tbody>
                         {trades.length === 0 ? (
-                            <tr><td colSpan={7} className="py-4 text-center text-slate-500 italic">No trades simulated.</td></tr>
+                            <tr><td colSpan={7} className="py-4 text-center text-fg-5 italic">No trades simulated.</td></tr>
                         ) : trades.map((t, i) => (
-                            <tr key={i} className="border-b border-slate-800 hover:bg-slate-800/40">
-                                <td className="py-1 px-2 font-mono text-slate-300">{t.symbol}</td>
+                            <tr key={i} className="border-b border-line-0 hover:bg-slate-800/40">
+                                <td className="py-1 px-2 font-mono text-fg-3">{t.symbol}</td>
                                 <td className={`py-1 px-2 font-bold ${t.direction === 'LONG' ? 'text-green-400' : 'text-red-400'}`}>{t.direction}</td>
                                 <td className="py-1 px-2 text-right font-mono">{t.entryPrice != null ? Number(t.entryPrice).toFixed(2) : '—'}</td>
                                 <td className="py-1 px-2 text-right font-mono">{t.exitPrice != null ? Number(t.exitPrice).toFixed(2) : '—'}</td>
                                 <td className={`py-1 px-2 text-right font-mono font-bold ${(t.pnlPoints || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                                     {(t.pnlPoints || 0) >= 0 ? '+' : ''}{(t.pnlPoints || 0).toFixed(2)}
                                 </td>
-                                <td className="py-1 px-2 text-right font-mono text-slate-400">{formatDuration(t.holdMs)}</td>
-                                <td className="py-1 px-2 text-slate-400 truncate max-w-[260px]" title={`${t.entryReason || ''} → ${t.exitReason || ''}`}>
+                                <td className="py-1 px-2 text-right font-mono text-fg-4">{formatDuration(t.holdMs)}</td>
+                                <td className="py-1 px-2 text-fg-4 truncate max-w-[16.25rem]" title={`${t.entryReason || ''} → ${t.exitReason || ''}`}>
                                     {(t.entryReason || '—')} → {(t.exitReason || '—')}
                                 </td>
                             </tr>
@@ -2112,10 +2127,10 @@ function ReplayRunDetail({ run, isOptimizer }) {
     );
 }
 
-function ReplayStatBox({ label, value, color = 'text-white' }) {
+function ReplayStatBox({ label, value, color = 'text-fg' }) {
     return (
-        <div className="bg-slate-800 border border-slate-700 rounded p-2">
-            <p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p>
+        <div className="bg-slate-800 border border-line rounded p-2">
+            <p className="text-3xs uppercase tracking-wider text-fg-5">{label}</p>
             <p className={`font-bold font-mono text-lg ${color}`}>{value}</p>
         </div>
     );

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
+import { API_URL } from '../config/api.js';
 
 /**
  * AuthContext — single-password gate for the whole app.
@@ -14,7 +15,6 @@ import axios from 'axios';
  * never touches it directly. We just remember the boolean here.
  */
 const AuthContext = createContext(null);
-const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
 
 export function AuthProvider({ children }) {
     const [status, setStatus] = useState('checking');
@@ -32,7 +32,7 @@ export function AuthProvider({ children }) {
             } else {
                 setStatus('unauthenticated');
             }
-        } catch (err) {
+        } catch {
             // 401 → not logged in. Anything else → treat as unauth and show login.
             setStatus('unauthenticated');
         }
@@ -83,7 +83,10 @@ export function AuthProvider({ children }) {
     }, []);
 
     const logout = useCallback(async () => {
-        try { await axios.post(`${API_URL}/auth/logout`, {}, { withCredentials: true }); } catch (_) {}
+        try { await axios.post(`${API_URL}/auth/logout`, {}, { withCredentials: true }); }
+        // Deliberate: the local sign-out below happens whether or not the server
+        // acknowledges, so a failure here must not block it — but it should be visible.
+        catch (err) { console.warn('Server logout failed; clearing local session anyway:', err); }
         setStatus('unauthenticated');
         setExpiresAt(null);
     }, []);

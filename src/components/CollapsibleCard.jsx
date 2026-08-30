@@ -22,17 +22,17 @@ export default function CollapsibleCard({
         try {
             const v = localStorage.getItem(storageKey);
             return v === null ? defaultOpen : v === '1';
-        } catch (_) { return defaultOpen; }
+        } catch { return defaultOpen; }
     });
 
     const toggle = () => setOpen(prev => {
         const next = !prev;
-        if (storageKey) { try { localStorage.setItem(storageKey, next ? '1' : '0'); } catch (_) {} }
+        if (storageKey) { try { localStorage.setItem(storageKey, next ? '1' : '0'); } catch { /* localStorage unavailable (private mode / blocked cookies) — the preference just does not persist */ } }
         return next;
     });
 
     return (
-        <div className={`bg-surface rounded-xl border border-slate-700 ${className}`}>
+        <div className={`bg-surface rounded-xl border border-line ${className}`}>
             <button
                 type="button"
                 onClick={toggle}
@@ -41,12 +41,12 @@ export default function CollapsibleCard({
             >
                 <span className="flex items-center gap-2 min-w-0">
                     {open
-                        ? <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0" />
-                        : <ChevronRight className="w-4 h-4 text-slate-400 flex-shrink-0" />}
+                        ? <ChevronDown className="w-4 h-4 text-fg-4 flex-shrink-0" />
+                        : <ChevronRight className="w-4 h-4 text-fg-4 flex-shrink-0" />}
                     {Icon && <Icon className="w-5 h-5 text-primary flex-shrink-0" />}
-                    <span className="text-lg font-bold text-white truncate">{title}</span>
+                    <span className="text-lg font-bold text-fg truncate">{title}</span>
                     {!open && summary && (
-                        <span className="text-xs font-normal text-slate-500 truncate hidden sm:inline">{summary}</span>
+                        <span className="text-xs font-normal text-fg-5 truncate hidden sm:inline">{summary}</span>
                     )}
                 </span>
                 {right && <span className="flex items-center gap-2 flex-shrink-0">{right}</span>}

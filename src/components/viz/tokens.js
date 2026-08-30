@@ -1,11 +1,19 @@
 /**
  * Visualization tokens — the ONE place chart colour is defined.
  *
- * This app is dark-only (bg #0e1117, cards #262730), so these are dark steps
- * SELECTED for that surface, not a light palette dimmed.
+ * WHAT CHANGED, AND WHAT DID NOT
+ * This file used to hold 127 lines of literal dark-only hex. It now holds the
+ * same RULES, expressed against whichever of the 12 themes is active. The
+ * values below are no longer typed in; they are cut from the theme's role ramp
+ * by `src/theme/chartTheme.js`, which returns exactly the shape this file used
+ * to export. Nothing about the design rationale changed — only where the
+ * numbers come from.
  *
- * Every value below was run through the palette validator against the real
- * card surface (#262730) rather than eyeballed:
+ * The palette relationships this file encodes were validated against the real
+ * dark card surface (#262730), and the theme engine reproduces those anchors
+ * byte-for-byte on the default `midnight` theme (see CHART_ANCHORS in
+ * `src/theme/ramp.js`, which carries the same OKLCH values forward and rotates
+ * them per theme rather than re-deriving them — so the gates below still hold):
  *
  *   categorical [#3987e5, #d95926, #199e70]
  *     ✓ lightness band  ✓ chroma floor  ✓ contrast ≥3:1
@@ -29,25 +37,47 @@
  *   trading convention but is the classic CVD failure, and on the stress
  *   heatmap colour is doing real work. Every cell is direct-labelled with its
  *   rupee value, so the number always carries the sign regardless.
+ *
+ * TWO WAYS IN — AND WHICH ONE TO USE
+ * -----------------------
+ *   useChartTheme()  ← from a component. Returns the ACTIVE theme's role table
+ *                      and re-renders the caller when the theme changes.
+ *   SURFACE / TEXT / CATEGORICAL / DIVERGING / STATUS / GRID
+ *                    ← the frozen `midnight` values. These exist for module
+ *                      scope and for callers that are not in a React tree
+ *                      (a plain helper, a test, a node probe). They are CORRECT
+ *                      but they are FIXED: a component that reads them will not
+ *                      follow a theme switch. Prefer the hook in components.
+ *
+ * The two are the same function of the same data — the constants are literally
+ * `buildChartTheme(midnight)` — so they can never disagree about what a role
+ * means, only about which theme is being asked.
  */
+import { MIDNIGHT_CHART_THEME, useChartTheme } from '../../theme/chartTheme.js';
+
+// The hook is re-exported from here so a chart component has ONE import for
+// both its colours and its formatters, and so no call site needs to know the
+// theme engine's file layout.
+export { useChartTheme };
 
 // ── Surfaces ─────────────────────────────────────────────────────────────────
-export const SURFACE = '#262730';
-export const SURFACE_SUNK = '#1c1d25';
-export const BACKGROUND = '#0e1117';
+// midnight: #262730 / #1c1d25 / #0e1117 — the three literal surfaces in the
+// shipping stylesheet, which is why they are the documented fallback.
+export const SURFACE = MIDNIGHT_CHART_THEME.surface;
+export const SURFACE_SUNK = MIDNIGHT_CHART_THEME.surfaceSunk;
+export const BACKGROUND = MIDNIGHT_CHART_THEME.background;
 
 // ── Text (never a series colour) ─────────────────────────────────────────────
-export const TEXT = {
-    primary: '#f1f5f9',
-    secondary: '#94a3b8',
-    muted: '#64748b',
-};
+export const TEXT = MIDNIGHT_CHART_THEME.text;
 
 // ── Categorical: identity. Fixed order, never cycled, hard cap of 3. ─────────
-export const CATEGORICAL = ['#3987e5', '#d95926', '#199e70'];
+export const CATEGORICAL = MIDNIGHT_CHART_THEME.categorical;
 
 /** Stable hue for a named entity — colour follows the entity, never its rank,
- *  so filtering a list never repaints the survivors. */
+ *  so filtering a list never repaints the survivors.
+ *
+ *  Fixed to the midnight trio, like the constants above. The theme-aware
+ *  version is `useChartTheme().hueFor`, which hashes identically. */
 export function hueFor(name, index) {
     if (typeof index === 'number' && index < CATEGORICAL.length) return CATEGORICAL[index];
     let h = 0;
@@ -56,53 +86,41 @@ export function hueFor(name, index) {
 }
 
 // ── Diverging: polarity (profit ↔ loss, positive ↔ negative contribution) ────
-export const DIVERGING = { positive: '#3987e5', negative: '#e66767', neutral: '#3a3b47' };
+export const DIVERGING = MIDNIGHT_CHART_THEME.diverging;
 
 /**
  * Blend a pole toward the surface by magnitude. Alpha-over-surface guarantees a
  * monotone lightness ramp with the surface itself as the neutral midpoint — no
  * hand-picked steps to drift out of order.
+ *
+ * Theme-aware equivalent: `useChartTheme().divergingFill`.
  * @param {number} value   the signed value
  * @param {number} maxAbs  the scale's largest |value|
  */
 export function divergingFill(value, maxAbs) {
-    if (!maxAbs || !Number.isFinite(value)) return DIVERGING.neutral;
-    const t = Math.min(1, Math.abs(value) / maxAbs);
-    // Floor the alpha so a small non-zero value is still visibly not-zero.
-    const alpha = (0.12 + 0.78 * t).toFixed(3);
-    const pole = value >= 0 ? DIVERGING.positive : DIVERGING.negative;
-    return `color-mix(in srgb, ${pole} ${alpha * 100}%, ${SURFACE})`;
+    return MIDNIGHT_CHART_THEME.divergingFill(value, maxAbs);
 }
 
-/** Same ramp expressed as rgba — for engines without color-mix support. */
+/** Same ramp expressed as rgb() — for engines without color-mix support.
+ *  Theme-aware equivalent: `useChartTheme().divergingRgba`. */
 export function divergingRgba(value, maxAbs) {
-    if (!maxAbs || !Number.isFinite(value) || value === 0) return DIVERGING.neutral;
-    const t = Math.min(1, Math.abs(value) / maxAbs);
-    const alpha = 0.12 + 0.78 * t;
-    const hex = value >= 0 ? DIVERGING.positive : DIVERGING.negative;
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    // Composite over the card surface so the midpoint reads as the card itself.
-    const sr = 0x26, sg = 0x27, sb = 0x30;
-    const mix = (c, s) => Math.round(c * alpha + s * (1 - alpha));
-    return `rgb(${mix(r, sr)}, ${mix(g, sg)}, ${mix(b, sb)})`;
+    return MIDNIGHT_CHART_THEME.divergingRgba(value, maxAbs);
 }
 
 // ── Status: state only. Icon + label ALWAYS accompany these. ─────────────────
-export const STATUS = {
-    good: '#0ca30c',
-    warning: '#fab219',
-    serious: '#ec835a',
-    critical: '#d03b3b',
-};
+export const STATUS = MIDNIGHT_CHART_THEME.status;
 
+// The icon set is NOT a colour and is deliberately not themed: it is the
+// non-colour channel that makes every status legible under CVD, so it must be
+// identical in all 12 themes.
 export const STATUS_ICON = { good: '✓', warning: '▲', serious: '▲', critical: '✕', info: 'i' };
 
 // ── Chrome ───────────────────────────────────────────────────────────────────
-export const GRID = '#33343f';        // solid hairline, one shade off the surface
+export const GRID = MIDNIGHT_CHART_THEME.grid;        // solid hairline, one shade off the surface
 
 // ── Formatting ───────────────────────────────────────────────────────────────
+// Pure text. Nothing below has ever had a colour in it, and none of it moves
+// with the theme.
 
 /** Indian-format rupees. Compact above a lakh so tiles stay one line. */
 export function inr(v, { compact = false, sign = false } = {}) {

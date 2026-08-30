@@ -524,6 +524,48 @@ export const HELP = {
         detail: "Checked live against the most recent option-chain snapshot just before entry, falling back to the measured average for the symbol when no fresh quote is available. It is OFF by default (0 = no limit) so nothing is ever silently skipped — the cost is always reported in the event feed either way, and you decide whether to act on it. Setting it to around 1.0 would let NIFTY, BANKNIFTY, SENSEX and MIDCPNIFTY trade normally while blocking BANKEX entirely and stopping FINNIFTY on its worst days.",
         gotcha: "This blocks the trade rather than repricing it. If you would rather still take the trade but see the true cost, leave it at 0 and read the LIQUIDITY line in the event feed.",
     },
+    "expiry-settled": {
+        label: "Settled at expiry",
+        short: "The options ran out before the system could close them, so the exchange settled them for you.",
+        detail: "Every structure is normally closed at 3:00pm on the day its options expire. If the system was restarting or offline through that window, the options simply cease to exist at 3:30pm and the exchange settles them against your account automatically. When the system next wakes up it can no longer trade them — there is nothing left to trade — so it records each one at its true settlement value: how far in-the-money it finished. A sold call that ended 300 points in-the-money is booked as a 300-point loss, because that is exactly what the exchange took.",
+        gotcha: "Seeing this reason at all means an expiry-day close was missed. The position is now correctly recorded, but check why the engine was not running between 3:00 and 3:30pm.",
+    },
+    "dte-exit-unreachable": {
+        label: "dte_exit can never fire",
+        short: "You set an exit-by-days-to-expiry rule at a value the clock never reaches during market hours.",
+        detail: "Days-to-expiry counts down to zero at 3:30pm on expiry day — but the engine force-closes every expiring structure at 3:00pm, half an hour earlier. So a rule of 'exit when days-to-expiry reaches 0' is never true while the market is open, and the 3:00pm rule quietly does the job instead. Set roughly 0.3 to exit on the morning of expiry day, or 1 to exit the day before.",
+        gotcha: "This is a warning, not an error — nothing is unprotected. The 3:00pm expiry close still runs. It only means the setting you chose is not the thing actually closing your trade.",
+    },
+    "vega-open-vs-entry": {
+        label: "Why vega appears three times",
+        short: "Same measure, three different moments and leg sets — none of them wrong.",
+        detail: "The card's V figure is the vega of the legs still OPEN, right now. 'vega@in' is a frozen snapshot taken at entry across ALL legs, including any that have since been stopped out — so it is usually larger. The figure in the decay note is the same open legs but priced at the next trading open, which is smaller again because an option has less time value left after the gap. Only the first one changes as the market moves.",
+        gotcha: "If a leg has hit its individual stop-loss it leaves the live figure but stays in the entry snapshot, which is the usual reason the two look far apart.",
+    },
+    "builder": {
+        label: "Strategy builder",
+        short: "Draw any option position leg by leg and see exactly what it does before you commit a rupee.",
+        detail: "The rest of this page works from templates — fixed recipes like 'iron condor' that pick their strikes automatically. The builder has no template: you choose each leg yourself (buy or sell, call or put, which strike, which expiry, how many), and it prices them from the live market and shows the whole picture — what you make or lose at every possible index level, the odds of finishing in profit, the margin it blocks, the brokerage and the bid/ask cost. Nothing is placed or saved unless you ask.",
+        gotcha: "Everything shown is a snapshot at the current market. Premiums move, so the numbers change between looking and trading — and the payoff curve is before brokerage unless a figure says otherwise.",
+    },
+    "what-if": {
+        label: "What-if",
+        short: "Ask what happens to this position if the index moves, volatility changes, or a few days pass.",
+        detail: "Three independent dials. Moving the index shows the same position at a different level. Shifting volatility shows what happens if option prices richen or cheapen across the board — the thing that hurts a seller even when the index sits still. Days forward shows time decay working for or against you. The dials combine, so you can ask 'if the index drops 1%, volatility spikes 3 points and two days pass, where am I?' — which is the question that actually decides whether a position is survivable.",
+        gotcha: "This is the model's opinion, not a forecast. It assumes volatility moves the same amount at every strike, which real markets do not do — a crash lifts downside volatility far more than upside.",
+    },
+    "risk-reward": {
+        label: "Risk : reward",
+        short: "Best case divided by worst case.",
+        detail: "A ratio of 0.5 means you are risking two rupees to make one. That is not automatically bad — a position risking 2 to make 1 only needs to win about two-thirds of the time to break even, and many selling strategies do exactly that. Read it together with the probability of profit: the pair is what matters, never either alone.",
+        gotcha: "Undefined when the loss is unbounded, because there is no worst case to divide by. A blank here is a warning, not missing data.",
+    },
+    "leg": {
+        label: "Leg",
+        short: "One option contract in the position.",
+        detail: "A position can be a single leg or many. Each leg is defined by four things: whether you are buying or selling it, whether it is a call or a put, the strike price it is tied to, and when it expires. Selling collects premium now and takes on an obligation; buying pays premium now for a right. Combining legs is how you shape the payoff — for instance selling one option and buying a further one of the same type caps what you could lose.",
+        gotcha: "Ratio multiplies a leg's size. A ratio of 2 on a sold leg means twice the obligation, and it is the usual reason a structure that looks balanced has an unbounded loss on one side.",
+    },
 };
 
 export default HELP;

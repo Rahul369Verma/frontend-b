@@ -6,9 +6,10 @@ import {
     Legend, ShareBar, StatusBadge, Placeholder,
 } from '../components/viz/primitives';
 import AttributionPanel from '../components/viz/AttributionPanel';
-import { inr, num, CATEGORICAL, DIVERGING } from '../components/viz/tokens';
+import { inr, num, useChartTheme } from '../components/viz/tokens';
+import { pollInterval } from '../hooks/usePolling.js';
+import { API_URL } from '../config/api.js';
 
-const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
 
 /**
  * Portfolio Risk — the whole-account view.
@@ -23,6 +24,7 @@ const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`
  * order.
  */
 export default function Risk() {
+    const ct = useChartTheme();
     const [tab, setTab] = useState('book');
     const [greeks, setGreeks] = useState(null);
     const [stress, setStress] = useState(null);
@@ -73,8 +75,8 @@ export default function Risk() {
 
     useEffect(() => {
         if (!autoRefresh) return;
-        const id = setInterval(loadLive, 15000);
-        return () => clearInterval(id);
+        const id = pollInterval(loadLive, 15000);
+        return () => id?.();
     }, [autoRefresh, loadLive]);
 
     const tabs = [
@@ -88,49 +90,64 @@ export default function Risk() {
         <div className="p-6 space-y-4">
             <header className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                    <h1 className="text-2xl font-bold text-slate-100">Portfolio Risk</h1>
-                    <p className="text-xs text-slate-500 mt-0.5">
+                    <h1 className="text-2xl font-bold text-fg">Portfolio Risk</h1>
+                    <p className="text-xs text-fg-5 mt-0.5">
                         Whole-account view across the single-leg and multi-leg engines. Read-only.
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
                     {['attribution', 'portfolio'].includes(tab) && (
                         <select value={days} onChange={e => setDays(Number(e.target.value))}
-                                className="bg-surface border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-300">
+                                className="bg-surface border border-line rounded px-2 py-1.5 text-xs text-fg-3">
                             {[7, 14, 30, 60, 90, 180].map(d => <option key={d} value={d}>Last {d} days</option>)}
                         </select>
                     )}
-                    <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer">
+                    <label className="flex items-center gap-1.5 text-xs text-fg-4 cursor-pointer">
+                        {/* accent-fg-5, not accent-slate-500: `accent-color` is the tick's own
+                            fill, so it needs to stay dark enough for the browser's white
+                            checkmark. neutral-500 lands at L 0.70 on the light themes (2.7:1);
+                            fg-5 holds ~L 0.53 in both modes (>=5:1) and is neutral-500's dark
+                            value, so midnight's grey checkbox is unchanged. Deliberately
+                            neutral rather than `accent-primary` — this is a minor auto-refresh
+                            toggle and the design keeps it unobtrusive. */}
                         <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)}
-                               className="accent-slate-500" />
+                               className="accent-fg-5" />
                         Auto 15s
                     </label>
                     <button onClick={() => { loadLive(); loadHistory(); }}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-surface border border-slate-700 text-xs text-slate-300 hover:bg-slate-800">
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-surface border border-line text-xs text-fg-3 hover:bg-slate-800">
                         <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
                         Refresh
                     </button>
                 </div>
             </header>
 
+            {/* Same tint/edge/ink recipe as StatusBadge, so the error banner
+                follows the theme's danger token instead of a fixed red that
+                disappears against a light surface. */}
             {err && (
-                <div className="px-3 py-2 rounded text-xs" style={{ backgroundColor: '#d03b3b1f', border: '1px solid #d03b3b55', color: '#f0a8a8' }}>
+                <div className="px-3 py-2 rounded text-xs"
+                     style={{
+                         backgroundColor: ct.alpha(ct.status.critical, 0.12),
+                         border: `1px solid ${ct.alpha(ct.status.critical, 0.33)}`,
+                         color: ct.status.critical,
+                     }}>
                     {err}
                 </div>
             )}
 
-            <nav className="flex gap-1 border-b border-slate-700">
+            <nav className="flex gap-1 border-b border-line">
                 {tabs.map(t => (
                     <button key={t.key} onClick={() => setTab(t.key)}
                             className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition ${
                                 tab === t.key
-                                    ? 'border-primary text-slate-100'
-                                    : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
+                                    ? 'border-primary text-fg'
+                                    : 'border-transparent text-fg-5 hover:text-fg-3'}`}>
                         <t.icon className="w-4 h-4" />
                         {t.label}
                     </button>
                 ))}
-                {lastAt && <span className="ml-auto self-center text-[11px] text-slate-600">
+                {lastAt && <span className="ml-auto self-center text-2xs text-fg-6">
                     updated {lastAt.toLocaleTimeString('en-IN')}
                 </span>}
             </nav>
@@ -148,6 +165,7 @@ export default function Risk() {
 /* ══════════════════════════════════════════════════════════════════════════ */
 
 function LiveBook({ greeks, margin }) {
+    const ct = useChartTheme();
     if (!greeks) return <Placeholder>Loading book…</Placeholder>;
     if (!greeks.ok) return <Placeholder>Book unavailable: {greeks.reason}</Placeholder>;
 
@@ -211,15 +229,15 @@ function LiveBook({ greeks, margin }) {
                             />
                             <div className="mt-3 grid grid-cols-2 gap-3">
                                 <div>
-                                    <p className="text-[11px] text-slate-500">Long side</p>
-                                    <p className="text-sm tabular-nums" style={{ color: DIVERGING.positive }}>
-                                        {inr(c.longRiskRupeesPer1Pct, { compact: true })}<span className="text-slate-500 text-[11px]">/1%</span>
+                                    <p className="text-2xs text-fg-5">Long side</p>
+                                    <p className="text-sm tabular-nums" style={{ color: ct.diverging.positive }}>
+                                        {inr(c.longRiskRupeesPer1Pct, { compact: true })}<span className="text-fg-5 text-2xs">/1%</span>
                                     </p>
                                 </div>
                                 <div>
-                                    <p className="text-[11px] text-slate-500">Short side</p>
-                                    <p className="text-sm tabular-nums" style={{ color: DIVERGING.negative }}>
-                                        {inr(c.shortRiskRupeesPer1Pct, { compact: true })}<span className="text-slate-500 text-[11px]">/1%</span>
+                                    <p className="text-2xs text-fg-5">Short side</p>
+                                    <p className="text-sm tabular-nums" style={{ color: ct.diverging.negative }}>
+                                        {inr(c.shortRiskRupeesPer1Pct, { compact: true })}<span className="text-fg-5 text-2xs">/1%</span>
                                     </p>
                                 </div>
                             </div>
@@ -238,7 +256,7 @@ function LiveBook({ greeks, margin }) {
                                   : <StatusBadge level="warning" title="No external leg provider registered">single-leg only</StatusBadge>}>
                             <ShareBar
                                 parts={sources.map(([name, s], i) => ({
-                                    label: name, value: Math.abs(s.deltaRupeesPer1Pct), color: CATEGORICAL[i],
+                                    label: name, value: Math.abs(s.deltaRupeesPer1Pct), color: ct.categorical[i],
                                 }))}
                                 format={(v) => `${inr(v, { compact: true })}/1%`}
                             />
@@ -277,8 +295,8 @@ function LiveBook({ greeks, margin }) {
                                 {greeks.warnings.map((w, i) => (
                                     <li key={i} className="flex items-start gap-2 text-xs">
                                         <StatusBadge level="warning">Unpriced</StatusBadge>
-                                        <span className="text-slate-300">{w.symbol}</span>
-                                        <span className="text-slate-500">{w.reason}</span>
+                                        <span className="text-fg-3">{w.symbol}</span>
+                                        <span className="text-fg-5">{w.reason}</span>
                                     </li>
                                 ))}
                             </ul>
@@ -292,16 +310,16 @@ function LiveBook({ greeks, margin }) {
                                 { key: 'symbol', header: 'Contract', render: r => (
                                     <span className="flex items-center gap-1.5">
                                         <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                                              style={{ backgroundColor: r.source === 'multileg' ? CATEGORICAL[1] : CATEGORICAL[0] }} />
-                                        <span className="text-slate-200">{r.symbol}</span>
+                                              style={{ backgroundColor: r.source === 'multileg' ? ct.categorical[1] : ct.categorical[0] }} />
+                                        <span className="text-fg-2">{r.symbol}</span>
                                     </span>
                                 ) },
                                 { key: 'source', header: 'Engine', render: r => (
-                                    <span className="text-slate-500">{r.structure || r.source}</span>
+                                    <span className="text-fg-5">{r.structure || r.source}</span>
                                 ) },
-                                { key: 'strategyName', header: 'Strategy', render: r => <span className="text-slate-400">{r.strategyName || '—'}</span> },
+                                { key: 'strategyName', header: 'Strategy', render: r => <span className="text-fg-4">{r.strategyName || '—'}</span> },
                                 { key: 'side', header: 'Side', render: r => (
-                                    <span style={{ color: r.side === 1 ? DIVERGING.positive : DIVERGING.negative }}>
+                                    <span style={{ color: r.side === 1 ? ct.diverging.positive : ct.diverging.negative }}>
                                         {r.side === 1 ? 'LONG' : 'SHORT'}
                                     </span>
                                 ) },
@@ -321,8 +339,8 @@ function LiveBook({ greeks, margin }) {
                             rows={(greeks.legs || []).map((l, i) => ({ _key: l.symbol + i, ...l }))}
                         />
                         <Legend items={[
-                            { label: 'single-leg engine', color: CATEGORICAL[0] },
-                            { label: 'multi-leg engine', color: CATEGORICAL[1] },
+                            { label: 'single-leg engine', color: ct.categorical[0] },
+                            { label: 'multi-leg engine', color: ct.categorical[1] },
                         ]} />
                     </Card>
                 </>
@@ -336,6 +354,7 @@ function LiveBook({ greeks, margin }) {
 /* ══════════════════════════════════════════════════════════════════════════ */
 
 function Stress({ stress, scenarios, greeks }) {
+    const ct = useChartTheme();
     if (!stress) return <Placeholder>Loading stress grid…</Placeholder>;
     if (!stress.legCount) return <Card><Placeholder>No open positions to stress.</Placeholder></Card>;
 
@@ -367,7 +386,7 @@ function Stress({ stress, scenarios, greeks }) {
             <Card
                 title="Shock grid — full repricing"
                 subtitle="Every leg repriced with Black-Scholes under each shock, not a greek approximation: convexity is exactly what hurts in a tail."
-                right={<span className="text-[11px] text-slate-500">+{stress.grid?.hoursForward}h decay applied</span>}
+                right={<span className="text-2xs text-fg-5">+{stress.grid?.hoursForward}h decay applied</span>}
             >
                 <Heatmap
                     rows={spotShocks}
@@ -387,25 +406,25 @@ function Stress({ stress, scenarios, greeks }) {
                     columns={[
                         { key: 'label', header: 'Scenario' },
                         { key: 'shock', header: 'Shock', render: r => (
-                            <span className="text-slate-500">
+                            <span className="text-fg-5">
                                 {r.shock.spotShockPct > 0 ? '+' : ''}{r.shock.spotShockPct}% spot ·
                                 {' '}{r.shock.ivShockPct > 0 ? '+' : ''}{r.shock.ivShockPct}% IV
                                 {r.shock.hoursForward ? ` · +${r.shock.hoursForward}h` : ''}
                             </span>
                         ) },
                         { key: 'pnl', header: 'P&L', align: 'right', render: r => (
-                            <span style={{ color: r.pnl >= 0 ? DIVERGING.positive : DIVERGING.negative }}>
+                            <span style={{ color: r.pnl >= 0 ? ct.diverging.positive : ct.diverging.negative }}>
                                 {inr(r.pnl, { compact: true, sign: true })}
                             </span>
                         ) },
                         { key: 'by', header: 'Worst underlying', align: 'right', render: r => {
                             const e = Object.entries(r.byUnderlying || {}).sort((a, b) => a[1] - b[1])[0];
-                            return e ? <span className="text-slate-500">{e[0].replace(/^[A-Z]+:|-INDEX$/g, '')} {inr(e[1], { compact: true })}</span> : '—';
+                            return e ? <span className="text-fg-5">{e[0].replace(/^[A-Z]+:|-INDEX$/g, '')} {inr(e[1], { compact: true })}</span> : '—';
                         } },
                     ]}
                     rows={(scenarios?.scenarios || []).map((s, i) => ({ _key: s.name + i, ...s }))}
                 />
-                <p className="text-[11px] text-slate-500 mt-3 leading-snug">
+                <p className="text-2xs text-fg-5 mt-3 leading-snug">
                     These magnitudes are templates for the <em>kinds</em> of day an index book must survive,
                     not measurements from your archive. Calibrate them to your own worst days with
                     <code className="mx-1 px-1 rounded bg-slate-800">deriveScenariosFromHistory()</code>
@@ -421,6 +440,7 @@ function Stress({ stress, scenarios, greeks }) {
 /* ══════════════════════════════════════════════════════════════════════════ */
 
 function Portfolio({ factors }) {
+    const ct = useChartTheme();
     if (!factors) return <Placeholder>Loading portfolio model…</Placeholder>;
     const cl = factors.clusters;
     if (!cl || !cl.strategyCount) {
@@ -447,8 +467,8 @@ function Portfolio({ factors }) {
             </StatRow>
 
             <Card title="The headline">
-                <p className="text-sm text-slate-200">{cl.verdict}</p>
-                <p className="text-[11px] text-slate-500 mt-1.5 leading-snug">
+                <p className="text-sm text-fg-2">{cl.verdict}</p>
+                <p className="text-2xs text-fg-5 mt-1.5 leading-snug">
                     Two strategies with different names and different indicators are the SAME bet if their daily
                     P&L moves together. Running both doubles position size without doubling edge — the same expected
                     return for √2 more risk.
@@ -460,13 +480,13 @@ function Portfolio({ factors }) {
                       subtitle="Within each cluster, the member with the best risk-adjusted return is the keeper.">
                     <div className="space-y-3">
                         {cl.clusters.map(c => (
-                            <div key={c.clusterId} className="rounded border border-slate-700/60 p-2.5">
+                            <div key={c.clusterId} className="rounded border border-line/60 p-2.5">
                                 <div className="flex items-center justify-between gap-2 mb-1.5">
-                                    <span className="text-xs text-slate-400">
+                                    <span className="text-xs text-fg-4">
                                         Bet #{c.clusterId} · {c.size} {c.size === 1 ? 'strategy' : 'strategies'}
                                     </span>
                                     <span className="text-xs tabular-nums"
-                                          style={{ color: c.clusterTotalNetPnl >= 0 ? DIVERGING.positive : DIVERGING.negative }}>
+                                          style={{ color: c.clusterTotalNetPnl >= 0 ? ct.diverging.positive : ct.diverging.negative }}>
                                         {inr(c.clusterTotalNetPnl, { compact: true, sign: true })}
                                     </span>
                                 </div>
@@ -474,7 +494,7 @@ function Portfolio({ factors }) {
                                     dense
                                     columns={[
                                         { key: 'strategy', header: '', render: r => (
-                                            <span className={r.strategy === c.keep ? 'text-slate-100' : 'text-slate-500'}>
+                                            <span className={r.strategy === c.keep ? 'text-fg' : 'text-fg-5'}>
                                                 {r.strategy}
                                             </span>
                                         ) },
@@ -503,7 +523,7 @@ function Portfolio({ factors }) {
                             }))}
                             format={(v) => `${(v * 100).toFixed(0)}%`}
                         />
-                        <p className="text-[11px] text-slate-500 mt-2 leading-snug">
+                        <p className="text-2xs text-fg-5 mt-2 leading-snug">
                             {factors.allocation?.note}
                         </p>
                     </Card>
@@ -547,10 +567,10 @@ function Portfolio({ factors }) {
                         { key: 'trades', header: 'Trades', align: 'right', render: r => r.ok ? r.trades : '—' },
                         { key: 'r2', header: 'R²', align: 'right', render: r => r.ok ? num(r.r2) : '—' },
                         { key: 'dominantFactor', header: 'Driver', render: r => r.ok
-                            ? <span className="text-slate-200">{r.dominantFactor}</span>
-                            : <span className="text-slate-600">{r.reason}</span> },
+                            ? <span className="text-fg-2">{r.dominantFactor}</span>
+                            : <span className="text-fg-6">{r.reason}</span> },
                         { key: 'interpretation', header: 'Reading', render: r => (
-                            <span className="text-slate-400 whitespace-normal">{r.ok ? r.interpretation : ''}</span>
+                            <span className="text-fg-4 whitespace-normal">{r.ok ? r.interpretation : ''}</span>
                         ) },
                     ]}
                     rows={Object.entries(factors.factorLoadings?.byStrategy || {})

@@ -1,58 +1,461 @@
 @import "tailwindcss";
 
-:root {
-  --background-color: #0e1117;
-  --surface-color: #262730;
-  --text-color: #fafafa;
-  --primary-color: #ff4b4b;
+/**
+ * AlgoBot base style layer.
+ *
+ * WHY this file exists in this shape:
+ *
+ * Tailwind v4 compiles every colour utility to `var(--color-<name>)`. That is the
+ * whole leverage behind the theming system: re-declaring `--color-*` at runtime
+ * rethemes all 5,130 existing hardcoded call sites (including `hover:` variants and
+ * `/opacity` modifiers) with zero JSX changes. But a utility is only *generated* if
+ * its token is declared at build time — so every semantic token has to be declared
+ * HERE, in `@theme`, or `text-fg-3` / `bg-card` / `border-line` simply will not exist.
+ *
+ * `@theme static` (not plain `@theme`) is deliberate: Tailwind v4 PRUNES theme
+ * variables that no utility references, which would silently drop tokens that are
+ * only ever read by JS (`--chart-*`) or by hand-written CSS below (`--ui-*`). Verified
+ * against the previous build: `--color-secondary/success/warning` were declared and
+ * never emitted. `static` pins this block's variables — and only this block's, not
+ * Tailwind's default palette — into `:root`.
+ *
+ * The values below are the DARK / `midnight` defaults. They are what paints the page
+ * before the theme <style> is injected, so `midnight` must be pixel-identical to the
+ * pre-theming UI: the neutral ramp is Tailwind's own slate ramp verbatim and the brand
+ * colours keep their exact legacy hex (which also keeps the build-time hex fallbacks
+ * that Tailwind emits for `/opacity` modifiers byte-identical).
+ *
+ * Cascade contract: the runtime writes `:root[data-theme="<id>"]` (specificity 0,1,1)
+ * which always beats this block's `:root` (0,1,0) regardless of stylesheet order, and
+ * always beats `@layer theme`. Never rely on injection order.
+ *
+ * Sources of truth: src/theme/themes.js (theme data) and src/theme/cssVars.js
+ * (spec -> CSS). This file only supplies build-time declarations + static defaults.
+ */
+/**
+ * THE VALUES IN THIS BLOCK ARE `midnight` RESOLVED, VERBATIM.
+ *
+ * They are what paints the first frame — the boot script sets data-theme before
+ * paint, but the runtime <style> does not exist yet, so this `:root` governs
+ * until ThemeProvider's first effect. If a token here disagrees with what
+ * `resolvePalette(midnight)` emits, the page visibly changes colour one frame in,
+ * which is exactly the flash the boot script exists to prevent. So these are the
+ * ramp's own output, not a hand-kept approximation:
+ *
+ *     node -e "import('./src/theme/ramp.js').then(async r => {
+ *       const { THEMES, DEFAULT_THEME_ID } = await import('./src/theme/themes.js');
+ *       const p = r.resolvePalette(THEMES.find(t => t.id === DEFAULT_THEME_ID));
+ *       console.log(p['--color-fg-5']); })"
+ *
+ * Hex rather than oklch() on purpose: Tailwind emits a build-time hex fallback
+ * for every `/opacity` modifier (`.bg-primary\/10{background-color:#ff4b4b1a}`),
+ * and those fallbacks are only byte-stable if the source value is already hex.
+ */
+@theme static {
+    /* ── Surfaces ────────────────────────────────────────────────────────────
+       Roles, not a gradient. Note that "card" (800) is LIGHTER than "page" (900)
+       in dark mode — that inversion is what produces elevation, and it is
+       preserved (mirrored) in light mode rather than sorted into monotonicity.
+       `card-2` is the INSET tone (nested panel, table header strip) and so
+       recesses in both modes; the RAISED fill role belongs to shade 700. */
+    --color-bg:         #0e1117;   /* neutral 900 — page background */
+    --color-bg-2:       #020617;   /* neutral 950 — sunken surface */
+    --color-card:       #262730;   /* neutral 800 — card surface */
+    --color-card-2:     #1e1f27;   /* one step below card — inset panel */
+
+    /* ── Borders ─────────────────────────────────────────────────────────────
+       Four strengths. 1/2/3 match the measured `border-slate-{700,600,500}`
+       split; 0 is the divider role below all of them.
+
+       `line-0` exists because the 81 `border-{neutral}-800` call sites drew NO
+       BORDER AT ALL — shade 800 *is* the card token, so the border hex and the
+       surface hex were byte-identical and the pair measured exactly 1.0000:1.
+       Those sites want a whisper of separation (a rule inside a card, a table
+       divider), which is a role beneath `--color-line`, not a second name for it.
+       Every theme solves it against its own card at ~1.40:1; `midnight` pins it
+       to the hex those 81 sites render today, because §3 freezes its output.
+
+       Declared here and not only at runtime: Tailwind v4 generates a utility only
+       for a token that exists at BUILD time, so without this line `border-line-0`
+       would not be emitted at all and the runtime value would have nothing to
+       colour. Verified against the previous build — the class was absent. */
+    --color-line-0:     #1d293d;   /* divider — subtlest, ~1.4:1 on its own card */
+    --color-line:       #41434d;   /* the shipping border hex — default */
+    --color-line-2:     #45556c;   /* neutral 600 — stronger */
+    --color-line-3:     #62748e;   /* neutral 500 — strongest */
+
+    /* ── Foreground, 6 levels ────────────────────────────────────────────────
+       These replace the neutral *text* classes (the codemod rewrites
+       text-slate-400 -> text-fg-4 etc.). Level = prominence, NOT lightness:
+       on light themes fg..fg-6 goes dark -> light, the exact opposite of here.
+
+       fg-4/5/6 are deliberately BRIGHTER than the slate-400/500/600 they replace.
+       Transcribing slate exactly reproduced a real failure: `text-slate-500` on
+       `bg-slate-800` measures 3.11:1 and `text-slate-600` 1.96:1, against gates of
+       4.5 and 3.0. See the FG_L block in src/theme/ramp.js for the measurements. */
+    --color-fg:         #ffffff;   /* on-surface white, slate-50/100 */
+    --color-fg-2:       #e2e8f0;   /* slate-200 */
+    --color-fg-3:       #cad5e2;   /* slate-300 */
+    --color-fg-4:       #a2b1c6;   /* the workhorse (483 uses) */
+    --color-fg-5:       #8495ae;   /* 507 uses */
+    --color-fg-6:       #657791;   /* faintest legible */
+
+    /* ── Brand + status ──────────────────────────────────────────────────────
+       Kept as the legacy hex so `midnight` and every `bg-primary/10`-style
+       build-time fallback stay byte-identical to the pre-theming build. */
+    --color-primary:    #ff4b4b;   /* Streamlit red, hue ~25 */
+    /* Ink ON primary, chosen by measurement: white on #ff4b4b is 3.30:1 and this
+       near-black is 6.36:1. The fill is frozen by the pixel-identity requirement,
+       so the ink is the only thing that can move. */
+    --color-on-primary: #060a15;
+    /* The brand hue re-cut at the accent INK role — text that sits on a TINT of
+       the brand (`bg-primary/10..30`), which is the opposite problem to
+       `on-primary` above. Painting `text-primary` on `bg-primary/10` is a fill
+       being read as text and fails everywhere: 2.47:1 on nord, 2.80 on evergreen,
+       4.03 on midnight. This value takes midnight to 6.59:1 and the worst of the
+       twelve themes to 4.97:1. Declared here for the same build-time reason as
+       `--color-line-0`: no declaration, no `text-primary-ink` utility. */
+    --color-primary-ink: #feafa8;
+    --color-secondary:  #31333f;
+    --color-success:    #09ab3b;
+    --color-danger:     #ff2b2b;
+    --color-warning:    #ffbd45;
+    --color-info:       #117c9b;
+
+    /* ── Legacy aliases — DO NOT REMOVE ──────────────────────────────────────
+       `bg-surface` (64 uses) and `bg-background` (4 uses) are load-bearing in
+       existing JSX, so these tokens must keep existing and must keep being
+       emitted per-theme by cssVars.js alongside --color-card / --color-bg.
+       Values are today's exact hex, which is why they are not `var()` aliases:
+       the point of the defaults is pixel-identity with the current UI. */
+    --color-background: #0e1117;                      /* legacy page bg  (~ --color-bg) */
+    --color-surface:    #262730;                      /* legacy card bg  (~ --color-card) */
+
+    /* ── Chart tokens ────────────────────────────────────────────────────────
+       Also `midnight` resolved, and for the same reason as everything above: the
+       runtime block emits all ten per theme, so any value here that disagrees is
+       a one-frame colour change on a chart.
+
+       THESE ARE THE CVD-VALIDATED TRIO, not a fresh pick. The first cut of this
+       block defaulted the series to sky-500 / violet-400 / amber-400 and the
+       polarity pair to emerald-400 / rose-400, and both choices were wrong in a
+       way that only shows up for a dichromat:
+         · sky-500 (L .685) and violet-400 (L .702) are near-iso-lightness AND
+           adjacent in hue, so series 1 and 2 collapse into each other.
+         · emerald/rose for P&L polarity is the textbook red/green failure — and
+           this app's own src/components/viz/tokens.js documents rejecting it.
+       The values below are the trio that passed a CVD-separation gate (worst
+       adjacent deltaE 9.4) and are iso-lightness by construction, which is what
+       keeps them separable when hue distance collapses. Source of truth is
+       CHART_ANCHORS in src/theme/ramp.js; they rotate with the theme's hueClamp.
+
+       Read by src/theme/chartTheme.js. NOTE it does NOT read these back off the
+       computed root style — it recomputes from buildPalette(), because
+       getComputedStyle is a layout-flushing read that returns the PREVIOUS
+       theme's value for one frame after a switch (every chart would lag one
+       theme behind) and cannot run at all without a DOM. These declarations are
+       the static/first-paint copy. */
+    --chart-1:              #3987e5;   /* categorical 1 — blue  */
+    --chart-2:              #d95926;   /* categorical 2 — orange */
+    --chart-3:              #1a9e70;   /* categorical 3 — green */
+    --chart-pos:            #3987e5;   /* P&L positive — blue, NOT green */
+    --chart-neg:            #e66767;   /* P&L negative — red */
+    --chart-neutral:        var(--color-fg-5);
+    /* Grid is the border tone, not the card tone: `var(--color-card)` made the
+       gridlines the same colour as the surface they are drawn on, i.e. invisible.
+       This is also the #334155 the recharts files hardcoded before theming. */
+    --chart-grid:           var(--color-line);
+    --chart-axis:           var(--color-fg-5);
+    --chart-tooltip-bg:     var(--color-bg);
+    --chart-tooltip-border: var(--color-line);
+
+    /* ── Accessibility / appearance axes (src/theme/prefs.js) ────────────────
+       Declared here so they always exist with a sane default, even on the very
+       first paint before ThemeProvider mounts. The runtime overrides them under
+       :root[data-theme="…"]. */
+    --ui-font-family: "Source Sans Pro", ui-sans-serif, system-ui, -apple-system,
+        "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif,
+        "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+    --ui-font-scale: 1;     /* mirrors the fontScale pref; APPLIED as html{font-size}
+                               (inline, by the zero-flash boot script) so there is a
+                               single owner of the property — this var is the readable
+                               copy for JS/CSS that needs to know the current scale. */
+    --ui-radius-scale: 1;   /* sharp 0 / default 1 / round 1.6 */
+
+    /* Route Tailwind's own font + radius namespaces through the axes, so
+       `font-sans` and every `rounded-*` respond to the prefs instead of being
+       three islands immune to them. Scale 1 reproduces Tailwind's defaults. */
+    --font-sans:   var(--ui-font-family);
+    --radius:      calc(0.25rem  * var(--ui-radius-scale));
+    --radius-xs:   calc(0.125rem * var(--ui-radius-scale));
+    --radius-sm:   calc(0.25rem  * var(--ui-radius-scale));
+    --radius-md:   calc(0.375rem * var(--ui-radius-scale));
+    --radius-lg:   calc(0.5rem   * var(--ui-radius-scale));
+    --radius-xl:   calc(0.75rem  * var(--ui-radius-scale));
+    --radius-2xl:  calc(1rem     * var(--ui-radius-scale));
+    --radius-3xl:  calc(1.5rem   * var(--ui-radius-scale));
+    --radius-4xl:  calc(2rem     * var(--ui-radius-scale));
+
+    /* ── Micro type scale — the sub-`text-xs` steps ──────────────────────────
+       WHY THESE EXIST. The fontScale axis works by setting a relative root
+       font-size, so it moves anything sized in rem. It cannot move a px value,
+       because px is absolute by definition. The app had 668 hardcoded
+       `text-[10px]`-style classes — 44% of all its text sizing — which meant the
+       Text Size control silently did nothing to nearly half the UI. The
+       Multi-Leg trade tables were the visible symptom: 10px at every position of
+       the slider.
+
+       Declaring them as named `--text-*` tokens rather than rewriting the call
+       sites to arbitrary `text-[0.625rem]` values buys the second half of the
+       fix: textBoost multiplies the `--text-*` family (see TEXT_SCALE in
+       src/theme/cssVars.js, which must list these four), and an arbitrary rem
+       value would follow root scaling while silently ignoring textBoost.
+
+       The rem values are exact at a 16px root, so scale 1.0 renders pixel-for-
+       pixel what these sites render today — this is a scaling fix, not a
+       restyle. Line-height is a RATIO, matching Tailwind's own convention
+       (`--text-sm--line-height: calc(1.25 / .875)`), so the line box scales with
+       the size and textBoost never has to touch leading. The ratios climb as the
+       size falls, which is the standard typographic correction: small text needs
+       proportionally more leading to stay readable. */
+    --text-2xs:               0.6875rem;                /* was text-[11px] — 199 sites */
+    --text-2xs--line-height:  calc(0.9375 / 0.6875);
+    --text-3xs:               0.625rem;                 /* was text-[10px] — 402 sites */
+    --text-3xs--line-height:  calc(0.875  / 0.625);
+    --text-4xs:               0.5625rem;                /* was text-[9px]  —  59 sites */
+    --text-4xs--line-height:  calc(0.8125 / 0.5625);
+    --text-5xs:               0.5rem;                   /* was text-[8px]  —   2 sites */
+    --text-5xs--line-height:  calc(0.75   / 0.5);
 }
 
-@theme {
-  --color-background: #0e1117;
-  --color-surface: #262730;
-  --color-primary: #ff4b4b;
-  --color-secondary: #31333F;
-  --color-success: #09ab3b;
-  --color-danger: #ff2b2b;
-  --color-warning: #ffbd45;
+/**
+ * Legacy `--*-color` custom properties, kept as thin aliases of the tokens above.
+ * They predate the token layer; anything still reading them keeps working AND now
+ * follows the active theme for free, because var() resolves against whichever
+ * --color-* definition wins the cascade on :root (i.e. the runtime theme block).
+ */
+:root {
+    --background-color: var(--color-background);
+    --surface-color: var(--color-surface);
+    --text-color: var(--color-fg);
+    --primary-color: var(--color-primary);
 }
 
 body {
-  background-color: var(--background-color);
-  color: var(--text-color);
-  font-family: "Source Sans Pro", sans-serif;
+    background-color: var(--color-background);
+    color: var(--color-fg);
+    font-family: var(--ui-font-family);
 }
 
-/* Custom Scrollbar */
+/* ── Pointer cursor on interactive elements ─────────────────────────────────
+   WHY THIS IS NEEDED AT ALL. Tailwind v3's Preflight set `button { cursor:
+   pointer }`. Tailwind v4 REMOVED it, deliberately, to match the bare browser
+   default — where a <button> shows the normal arrow, not a hand. This project is
+   on v4 and never restored it, so all 258 buttons in the app rendered with an
+   arrow cursor and nothing read as clickable. Not one of them carried an
+   explicit `cursor-pointer`, so there was nothing making up the difference.
+
+   Written in `@layer base` on purpose: utilities live in a later layer, so any
+   explicit `cursor-*` class in the markup still wins. The ten existing
+   `disabled:cursor-not-allowed` usages keep working unchanged.
+
+   `:not(:disabled)` matters — a disabled control that still shows a hand is a
+   lie about what will happen when you click it. Those get `not-allowed` below.
+
+   `label[for]` is included because clicking an associated label focuses its
+   control, so it IS a click target; that association now exists on 113 fields. */
+@layer base {
+    button:not(:disabled),
+    summary,
+    label[for],
+    select:not(:disabled),
+    [role="button"]:not([aria-disabled="true"]),
+    [role="tab"]:not([aria-disabled="true"]),
+    [role="switch"]:not([aria-disabled="true"]),
+    input[type="checkbox"]:not(:disabled),
+    input[type="radio"]:not(:disabled),
+    input[type="range"]:not(:disabled),
+    input[type="color"]:not(:disabled),
+    input[type="file"]:not(:disabled),
+    input[type="submit"]:not(:disabled),
+    input[type="reset"]:not(:disabled),
+    input[type="button"]:not(:disabled) {
+        cursor: pointer;
+    }
+
+    button:disabled,
+    select:disabled,
+    input:disabled,
+    [aria-disabled="true"] {
+        cursor: not-allowed;
+    }
+}
+
+/* ── Custom scrollbar ───────────────────────────────────────────────────────
+   Themed via tokens so a light theme does not keep a black gutter. Chromium and
+   WebKit take the ::-webkit-* path below; Firefox has no such pseudo-element, so
+   the standard properties are fenced behind @supports to stop Chromium from
+   preferring `scrollbar-width: thin` (~12px) over the 8px design here. */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+    width: 8px;
+    height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #0e1117;
+    background: var(--color-background);
 }
 ::-webkit-scrollbar-thumb {
-  background: #555;
-  border-radius: 4px;
+    background: var(--color-line-3);
+    border-radius: var(--radius-sm);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #777;
+    background: var(--color-fg-4);
+}
+@supports not selector(::-webkit-scrollbar) {
+    html {
+        scrollbar-width: thin;
+        scrollbar-color: var(--color-line-3) var(--color-background);
+    }
 }
 
 /* Streamlit-like Inputs */
 input, select, textarea {
-  @apply bg-surface border border-[#41434d] text-white rounded-md px-3 py-2 focus:outline-none focus:border-primary transition-colors;
+    @apply bg-surface border border-line text-fg rounded-md px-3 py-2 focus:outline-none focus:border-primary transition-colors;
 }
 
-/* Streamlit-like Cards */
+/**
+ * Streamlit-like Cards.
+ *
+ * Intentionally self-referential: `.bg-surface` is a Tailwind utility AND a
+ * component rule, so every element that asks for the surface colour also gets a
+ * hairline border for free. Preserved verbatim from the pre-theming CSS (only the
+ * hardcoded #41434d becomes --color-line) — 64 call sites depend on that border,
+ * and because this rule is unlayered it still wins over `@layer utilities`
+ * `border-*` classes on the same element, exactly as before.
+ */
 .bg-surface {
-  @apply bg-surface border border-[#41434d];
+    @apply bg-surface border border-line;
 }
 
 /* Streamlit-like Buttons */
 .btn-primary {
-  @apply bg-primary hover:bg-primary/90 text-white font-medium py-2 px-4 rounded transition-colors;
+    @apply bg-primary hover:bg-primary/90 text-on-primary font-medium py-2 px-4 rounded transition-colors;
 }
 .btn-secondary {
-  @apply bg-transparent border border-[#41434d] hover:border-primary text-white font-medium py-2 px-4 rounded transition-colors;
+    @apply bg-transparent border border-line hover:border-primary text-fg font-medium py-2 px-4 rounded transition-colors;
+}
+
+/**
+ * ── Accessibility axes: the static half ────────────────────────────────────
+ *
+ * The axes that are pure CSS live here rather than in the injected runtime block,
+ * because they never vary per theme — only per pref — and shipping them statically
+ * means they are already in effect on the first paint (the boot script in
+ * index.html sets the attributes before paint).
+ *
+ * The value-carrying axes (contrast, density, textBoost, blueLight) are NOT here:
+ * they change token *values*, which is cssVars.js's job.
+ *
+ * Toggle axes are matched as `[attr]:not([attr="false"])` on purpose, so both
+ * conventions work — attribute-present (`data-reading=""` / `"true"`) and
+ * attribute-always-written (`data-reading="false"` when off).
+ */
+
+/* readingMode — longer measure between lines, slight tracking.
+   The body rule carries the tracking (which inherits cleanly) and covers bare
+   text in elements the rule below does not name. */
+:root[data-reading]:not([data-reading="false"]) body {
+    line-height: 1.75;
+    letter-spacing: 0.01em;
+}
+
+/**
+ * …and the half that actually reaches the app.
+ *
+ * `line-height` on `body` is INHERITED, and an inherited value loses to any
+ * direct declaration on the element itself. Tailwind v4's text-size utilities
+ * declare it directly —
+ *     .text-sm { font-size: var(--text-sm); line-height: var(--tw-leading, var(--text-sm--line-height)) }
+ * — so every element carrying `text-xs`/`text-sm`/`text-lg`/… simply ignored the
+ * axis. Measured in Chrome against the shipped stylesheet, toggling only the
+ * attribute: plain <p> 24 -> 28px (worked), but `.text-sm` 20 -> 20, `.text-xs`
+ * 16 -> 16, `.text-lg` 28 -> 28, and `.text-xs.leading-snug` — the theme panel's
+ * OWN axis descriptions — 16.5 -> 16.5. Nine of the ten probes were dead. Only
+ * the letter-spacing and the measure cap were doing anything.
+ *
+ * So set the VARIABLE the utility already reads rather than fighting the
+ * declaration: `--tw-leading` wins inside `.text-*`'s own `var()` no matter which
+ * rule wins the cascade, and the `line-height` beside it covers elements with no
+ * text-size utility at all. Same probes after: 24.5 / 21 / 31.5 / 21.
+ *
+ * `:where()` keeps the element list at zero specificity so an explicit
+ * `leading-*` utility on a SPECIFIC element still reads normally — the selector's
+ * weight comes only from the `:root[data-reading]…` prefix.
+ *
+ * Tailwind registers `--tw-leading` with `inherits: false`, so writing it on a
+ * `div` cannot leak into descendants that were not matched. That is what makes
+ * naming `div`/`span` here safe rather than a blunt instrument.
+ *
+ * `td`/`th` are IN, deliberately. Excluding them was measured at 1.1% (5px on a
+ * 12-row table) because the `<span>`s and `<div>`s inside the cells carry the
+ * same change either way — so omitting them buys no density back and only makes
+ * header rows disagree with body rows. readingMode costs a dense table +12.4%
+ * height; `density: compact` is the separate axis that buys it back.
+ *
+ * NOT a measure cap — that belongs to prose only and cssVars.js owns it.
+ */
+:root[data-reading]:not([data-reading="false"])
+:where(p, li, dd, dt, td, th, span, div, label, h1, h2, h3, h4, h5, h6) {
+    --tw-leading: 1.75;
+    line-height: 1.75;
+}
+
+/* reduceMotion — explicit opt-in. */
+:root[data-motion="reduce"] *,
+:root[data-motion="reduce"] *::before,
+:root[data-motion="reduce"] *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+}
+
+/**
+ * …and the OS-level preference, but ONLY while no explicit choice has been stored.
+ * Once the boot script writes data-motion (either "reduce" or "allow") the user's
+ * own decision governs — otherwise switching the pref back off would be inert for
+ * anyone whose OS asks for reduced motion.
+ */
+@media (prefers-reduced-motion: reduce) {
+    :root:not([data-motion]) *,
+    :root:not([data-motion]) *::before,
+    :root:not([data-motion]) *::after {
+        transition: none !important;
+        animation: none !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+/* underlineLinks — WCAG 1.4.1: do not rely on colour alone to mark a link.
+   The offset is not decoration: at 0 the rule collides with descenders and the
+   underline reads as strikethrough on `g`/`y`. It is also what the runtime block
+   emits, and the two halves of an axis have to say the same thing — a static
+   fallback that is a SUBSET of the runtime rule means the axis renders one way
+   before the provider mounts and another way after. */
+:root[data-underline]:not([data-underline="false"]) a {
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+}
+
+/**
+ * focusRing "strong" — a thick, high-contrast, keyboard-only ring.
+ * !important is required, not lazy: the input rule above (and plenty of JSX)
+ * carries `focus:outline-none`, which would otherwise erase this.
+ * "subtle" deliberately has no rule — it is the stock browser/Tailwind behaviour.
+ */
+:root[data-focus="strong"] :focus-visible {
+    outline: 3px solid var(--color-primary) !important;
+    outline-offset: 2px !important;
+    /* The halo is what keeps the ring visible when the focused control sits on a
+       surface close to --color-primary; the runtime block emits it too, and this
+       static half has to match it for the same reason as underlineLinks above. */
+    box-shadow: 0 0 0 5px color-mix(in oklab, var(--color-primary) 35%, transparent) !important;
 }

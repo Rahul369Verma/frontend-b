@@ -8,8 +8,10 @@ import {
     ResponsiveContainer, ReferenceLine, Legend,
 } from 'recharts';
 import { INSTRUMENT_CONFIG } from '../constants';
+import { useChartTheme } from '../theme/chartTheme.js';
+import { pollInterval } from '../hooks/usePolling.js';
+import { API_BASE } from '../config/api.js';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -38,7 +40,7 @@ function parseParityResults(logs) {
 
     // Regex parse of human-readable lines
     // "  PASS  RSI_14                      max_abs_diff=0.000421  (limit 0.001)  bars=49900"
-    const floatRe = /\s+(PASS|FAIL)\s+(\S+)\s+(\w+)=([\d.e+\-]+)\s+\(limit ([\d.e+\-]+)\)\s+bars=(\d+)/g;
+    const floatRe = /\s+(PASS|FAIL)\s+(\S+)\s+(\w+)=([\d.e+-]+)\s+\(limit ([\d.e+-]+)\)\s+bars=(\d+)/g;
     let m;
     while ((m = floatRe.exec(logs)) !== null) {
         const [, status, name, metric, value, threshold, bars] = m;
@@ -136,13 +138,13 @@ function KpiCard({ label, value, sub, color = 'indigo', pulse = false }) {
         rose:    'border-rose-500/30    bg-rose-500/5    text-rose-400',
         amber:   'border-amber-500/30   bg-amber-500/5   text-amber-400',
         indigo:  'border-indigo-500/30  bg-indigo-500/5  text-indigo-400',
-        slate:   'border-slate-600/40   bg-slate-800/40  text-slate-300',
+        slate:   'border-line-2/40   bg-slate-800/40  text-fg-3',
     };
     return (
         <div className={`rounded-xl border p-4 ${colors[color]}`}>
-            <div className="text-xs text-slate-500 uppercase tracking-wider font-bold mb-1">{label}</div>
+            <div className="text-xs text-fg-5 uppercase tracking-wider font-bold mb-1">{label}</div>
             <div className={`text-2xl font-bold font-mono ${pulse ? 'animate-pulse' : ''}`}>{value ?? '—'}</div>
-            {sub && <div className="text-[11px] text-slate-500 mt-0.5 truncate">{sub}</div>}
+            {sub && <div className="text-2xs text-fg-5 mt-0.5 truncate">{sub}</div>}
         </div>
     );
 }
@@ -152,10 +154,10 @@ function StatusBadge({ status }) {
         PASS: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
         FAIL: 'bg-rose-500/20    text-rose-300    border-rose-500/40',
         WARN: 'bg-amber-500/20   text-amber-300   border-amber-500/40',
-        SKIP: 'bg-slate-700/50   text-slate-400   border-slate-600/40',
+        SKIP: 'bg-slate-700/50   text-fg-4   border-line-2/40',
     };
     return (
-        <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded border ${map[status] || map.SKIP}`}>
+        <span className={`inline-flex items-center gap-1 text-3xs font-bold px-2 py-0.5 rounded border ${map[status] || map.SKIP}`}>
             {status === 'PASS' && <FaCheckCircle className="w-2.5 h-2.5" />}
             {status === 'FAIL' && <FaTimesCircle className="w-2.5 h-2.5" />}
             {status === 'WARN' && <FaExclamationTriangle className="w-2.5 h-2.5" />}
@@ -165,6 +167,11 @@ function StatusBadge({ status }) {
 }
 
 function ResultRow({ row, expanded, onToggle }) {
+    // Recharts cannot read var(), so the delta-overlay chart takes concrete
+    // strings for the active theme. Roles: the two curves are a 2-series
+    // CATEGORICAL pair, the ± threshold rules are a STATE level (status), and
+    // the y=0 baseline is the axis.
+    const ct = useChartTheme();
     const variant   = rowVariant(row);
     const chartData = expanded ? buildChartData(row) : null;
 
@@ -177,15 +184,15 @@ function ResultRow({ row, expanded, onToggle }) {
     return (
         <>
             <tr
-                className={`border-b border-slate-800 hover:bg-slate-800/40 cursor-pointer transition-colors ${rowBg}`}
+                className={`border-b border-line-0 hover:bg-slate-800/40 cursor-pointer transition-colors ${rowBg}`}
                 onClick={onToggle}
             >
-                <td className="px-4 py-2.5 font-mono text-xs text-slate-200">{row.name}</td>
-                <td className="px-4 py-2.5 font-mono text-xs text-slate-400">{row.metric}</td>
-                <td className="px-4 py-2.5 font-mono text-xs text-slate-300">
+                <td className="px-4 py-2.5 font-mono text-xs text-fg-2">{row.name}</td>
+                <td className="px-4 py-2.5 font-mono text-xs text-fg-4">{row.metric}</td>
+                <td className="px-4 py-2.5 font-mono text-xs text-fg-3">
                     {row.status === 'SKIP' ? '—' : row.value.toExponential(4)}
                 </td>
-                <td className="px-4 py-2.5 font-mono text-xs text-slate-300">
+                <td className="px-4 py-2.5 font-mono text-xs text-fg-3">
                     {row.status === 'SKIP' ? '—' : row.threshold.toExponential(4)}
                 </td>
                 <td className="px-4 py-2.5">
@@ -198,21 +205,21 @@ function ResultRow({ row, expanded, onToggle }) {
                     )}
                 </td>
                 <td className="px-4 py-2.5 text-right">
-                    {expanded ? <FaChevronUp className="w-3 h-3 text-slate-500 ml-auto" /> : <FaChevronDown className="w-3 h-3 text-slate-500 ml-auto" />}
+                    {expanded ? <FaChevronUp className="w-3 h-3 text-fg-5 ml-auto" /> : <FaChevronDown className="w-3 h-3 text-fg-5 ml-auto" />}
                 </td>
             </tr>
             {expanded && (
-                <tr className="bg-slate-900/60 border-b border-slate-800">
+                <tr className="bg-slate-900/60 border-b border-line-0">
                     <td colSpan={6} className="px-6 py-4">
                         {row.status === 'SKIP' ? (
-                            <p className="text-xs text-slate-500 italic">Skipped: {row.note || 'no reason given'}</p>
+                            <p className="text-xs text-fg-5 italic">Skipped: {row.note || 'no reason given'}</p>
                         ) : (
                             <div className="space-y-3">
                                 <div className="flex gap-6 text-xs">
-                                    <span className="text-slate-500">Delta (MAE): <span className="text-white font-mono">{row.value.toExponential(4)}</span></span>
-                                    <span className="text-slate-500">Limit: <span className="text-white font-mono">{row.threshold.toExponential(4)}</span></span>
-                                    <span className="text-slate-500">Bars: <span className="text-white font-mono">{row.bars.toLocaleString()}</span></span>
-                                    <span className="text-slate-500">Headroom: <span className={`font-mono ${row.threshold > 0 && row.value / row.threshold < 0.5 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                    <span className="text-fg-5">Delta (MAE): <span className="text-fg font-mono">{row.value.toExponential(4)}</span></span>
+                                    <span className="text-fg-5">Limit: <span className="text-fg font-mono">{row.threshold.toExponential(4)}</span></span>
+                                    <span className="text-fg-5">Bars: <span className="text-fg font-mono">{row.bars.toLocaleString()}</span></span>
+                                    <span className="text-fg-5">Headroom: <span className={`font-mono ${row.threshold > 0 && row.value / row.threshold < 0.5 ? 'text-emerald-400' : 'text-amber-400'}`}>
                                         {row.threshold > 0 ? `${(row.value / row.threshold * 100).toFixed(1)}% of limit` : '—'}
                                     </span></span>
                                 </div>
@@ -220,14 +227,14 @@ function ResultRow({ row, expanded, onToggle }) {
                                 {/* Tolerance gauge */}
                                 {row.threshold > 0 && (
                                     <div>
-                                        <div className="text-[10px] text-slate-600 mb-1">Tolerance gauge</div>
+                                        <div className="text-3xs text-fg-6 mb-1">Tolerance gauge</div>
                                         <div className="h-2 bg-slate-800 rounded-full w-full relative overflow-hidden">
                                             <div
                                                 className={`h-full rounded-full transition-all ${variant === 'fail' ? 'bg-rose-500' : variant === 'warn' ? 'bg-amber-500' : 'bg-emerald-500'}`}
                                                 style={{ width: `${Math.min(100, (row.value / row.threshold) * 100).toFixed(1)}%` }}
                                             />
                                         </div>
-                                        <div className="flex justify-between text-[10px] text-slate-600 mt-0.5">
+                                        <div className="flex justify-between text-3xs text-fg-6 mt-0.5">
                                             <span>0</span><span>limit ({row.threshold.toExponential(2)})</span>
                                         </div>
                                     </div>
@@ -235,26 +242,26 @@ function ResultRow({ row, expanded, onToggle }) {
 
                                 {/* Illustrative delta overlay chart */}
                                 <div>
-                                    <div className="text-[10px] text-slate-600 mb-1 flex items-center gap-2">
+                                    <div className="text-3xs text-fg-6 mb-1 flex items-center gap-2">
                                         Standard vs. Nitro delta — illustrative (bars 100+, warm-up skipped)
-                                        <span className="italic text-slate-700">Synthetic profile scaled to reported max_diff</span>
+                                        <span className="italic text-fg-6">Synthetic profile scaled to reported max_diff</span>
                                     </div>
                                     <div className="h-32">
                                         <ResponsiveContainer width="100%" height="100%">
                                             <LineChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                                                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                                                <XAxis dataKey="bar" tick={{ fontSize: 9, fill: '#475569' }} />
-                                                <YAxis tick={{ fontSize: 9, fill: '#475569' }} width={55} tickFormatter={v => v.toExponential(1)} />
+                                                <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
+                                                <XAxis dataKey="bar" tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} />
+                                                <YAxis tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} width={55} tickFormatter={v => v.toExponential(1)} />
                                                 <Tooltip
-                                                    contentStyle={{ background: '#0f172a', border: '1px solid #334155', fontSize: 10 }}
+                                                    contentStyle={ct.tooltipStyle({ fontSize: ct.type['3xs'] })}
                                                     formatter={v => v.toExponential(4)}
                                                 />
-                                                <ReferenceLine y={0} stroke="#334155" strokeDasharray="4 2" />
-                                                <ReferenceLine y={row.threshold}  stroke="#f59e0b" strokeDasharray="4 2" strokeOpacity={0.5} label={{ value: 'limit', fontSize: 8, fill: '#f59e0b' }} />
-                                                <ReferenceLine y={-row.threshold} stroke="#f59e0b" strokeDasharray="4 2" strokeOpacity={0.5} />
-                                                <Line type="monotone" dataKey="standard" stroke="#6366f1" dot={false} strokeWidth={1.5} name="Standard (ref=0)" />
-                                                <Line type="monotone" dataKey="nitro"    stroke="#f59e0b" dot={false} strokeWidth={1.5} name="Nitro delta" />
-                                                <Legend wrapperStyle={{ fontSize: 10 }} />
+                                                <ReferenceLine y={0} stroke={ct.axis} strokeDasharray="4 2" />
+                                                <ReferenceLine y={row.threshold}  stroke={ct.status.warning} strokeDasharray="4 2" strokeOpacity={0.5} label={{ value: 'limit', fontSize: ct.type['5xs'], fill: ct.status.warning }} />
+                                                <ReferenceLine y={-row.threshold} stroke={ct.status.warning} strokeDasharray="4 2" strokeOpacity={0.5} />
+                                                <Line type="monotone" dataKey="standard" stroke={ct.categorical[0]} dot={false} strokeWidth={1.5} name="Standard (ref=0)" />
+                                                <Line type="monotone" dataKey="nitro"    stroke={ct.categorical[1]} dot={false} strokeWidth={1.5} name="Nitro delta" />
+                                                <Legend wrapperStyle={{ fontSize: ct.type['3xs'] }} />
                                             </LineChart>
                                         </ResponsiveContainer>
                                     </div>
@@ -270,7 +277,7 @@ function ResultRow({ row, expanded, onToggle }) {
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 export default function ParityAuditDashboard() {
-    const [instrumentConfig, setInstrumentConfig] = useState(INSTRUMENT_CONFIG || {});
+    const [instrumentConfig] = useState(INSTRUMENT_CONFIG || {});
 
     // Audit config
     const [config, setConfig] = useState({
@@ -284,7 +291,7 @@ export default function ParityAuditDashboard() {
 
     // Audit state
     const [auditState, setAuditState]     = useState('idle');  // idle | running | done | failed
-    const [jobId,      setJobId]          = useState(null);
+    const [, setJobId] = useState(null);
     const [logs,       setLogs]           = useState('');
     const [results,    setResults]        = useState([]);
     const [kpis,       setKpis]           = useState(null);
@@ -314,12 +321,12 @@ export default function ParityAuditDashboard() {
 
     // Polling
     const stopPolling = useCallback(() => {
-        if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+        if (pollRef.current) { pollRef.current?.(); pollRef.current = null; }
     }, []);
 
     const startPolling = useCallback((jid) => {
         stopPolling();
-        pollRef.current = setInterval(async () => {
+        pollRef.current = pollInterval(async () => {
             try {
                 const res  = await fetch(`${API_BASE}/api/rl/parity/status?job_id=${encodeURIComponent(jid)}`);
                 const data = await res.json();
@@ -393,33 +400,33 @@ export default function ParityAuditDashboard() {
             {/* ── Header ── */}
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-xl font-bold text-white flex items-center gap-2">
+                    <h1 className="text-xl font-bold text-fg flex items-center gap-2">
                         <span className="text-amber-400">⚡</span> Parity Audit Dashboard
                     </h1>
-                    <p className="text-xs text-slate-500 mt-0.5">
+                    <p className="text-xs text-fg-5 mt-0.5">
                         Numerical consistency: Standard (pandas_ta/SB3) vs. Nitro (JAX/XLA) — first 100 warm-up bars skipped automatically
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
-                    {isDone  && <span className="text-[11px] text-emerald-400 font-semibold">✓ Audit complete</span>}
-                    {isFailed && <span className="text-[11px] text-rose-400 font-semibold">✗ Audit failed</span>}
-                    {isRunning && <span className="text-[11px] text-amber-400 animate-pulse">Syncing engines…</span>}
+                    {isDone  && <span className="text-2xs text-emerald-400 font-semibold">✓ Audit complete</span>}
+                    {isFailed && <span className="text-2xs text-rose-400 font-semibold">✗ Audit failed</span>}
+                    {isRunning && <span className="text-2xs text-amber-400 animate-pulse">Syncing engines…</span>}
                 </div>
             </div>
 
             {/* ── Config Panel ── */}
-            <div className="bg-slate-900/60 border border-slate-700 rounded-xl p-5 space-y-4">
-                <h2 className="text-xs text-slate-400 uppercase tracking-wider font-bold">Audit Configuration</h2>
+            <div className="bg-slate-900/60 border border-line rounded-xl p-5 space-y-4">
+                <h2 className="text-xs text-fg-4 uppercase tracking-wider font-bold">Audit Configuration</h2>
 
                 <div className="grid grid-cols-2 gap-4">
                     {/* Symbol */}
                     <div>
-                        <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">Symbol</label>
-                        <select
+                        <label htmlFor="parityauditdashboard-symbol-1" className="text-xs text-fg-4 uppercase tracking-wider font-bold block mb-1">Symbol</label>
+                        <select id="parityauditdashboard-symbol-1"
                             value={config.symbol}
                             onChange={e => setConfig({ ...config, symbol: e.target.value })}
                             disabled={isRunning}
-                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-amber-500 outline-none disabled:opacity-50"
+                            className="w-full bg-slate-900 border border-line rounded p-2 text-sm focus:border-amber-500 outline-none disabled:opacity-50"
                         >
                             {Object.keys(instrumentConfig).length === 0 && <option>Loading…</option>}
                             <optgroup label="── NSE / BSE Indices">
@@ -442,17 +449,17 @@ export default function ParityAuditDashboard() {
 
                     {/* Profile */}
                     <div>
-                        <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">
+                        <label htmlFor="parityauditdashboard-feature-profile-2" className="text-xs text-fg-4 uppercase tracking-wider font-bold block mb-1">
                             Feature Profile
-                            <span className="ml-2 text-[10px] text-amber-400/70 font-normal normal-case">
+                            <span className="ml-2 text-3xs text-amber-400/70 font-normal normal-case">
                                 {PROFILE_LABELS[config.profile]}
                             </span>
                         </label>
-                        <select
+                        <select id="parityauditdashboard-feature-profile-2"
                             value={config.profile}
                             onChange={e => setConfig({ ...config, profile: e.target.value })}
                             disabled={isRunning}
-                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-amber-500 outline-none disabled:opacity-50"
+                            className="w-full bg-slate-900 border border-line rounded p-2 text-sm focus:border-amber-500 outline-none disabled:opacity-50"
                         >
                             {Object.entries(PROFILE_LABELS).map(([val, label]) => (
                                 <option key={val} value={val}>{label}</option>
@@ -464,47 +471,47 @@ export default function ParityAuditDashboard() {
                 <div className="grid grid-cols-4 gap-4">
                     {/* Date range */}
                     <div>
-                        <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">Start Date</label>
-                        <input
+                        <label htmlFor="parityauditdashboard-start-date-3" className="text-xs text-fg-4 uppercase tracking-wider font-bold block mb-1">Start Date</label>
+                        <input id="parityauditdashboard-start-date-3"
                             type="date" value={config.start_date}
                             onChange={e => setConfig({ ...config, start_date: e.target.value })}
                             disabled={isRunning}
-                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-amber-500 outline-none disabled:opacity-50"
+                            className="w-full bg-slate-900 border border-line rounded p-2 text-sm focus:border-amber-500 outline-none disabled:opacity-50"
                         />
                     </div>
                     <div>
-                        <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">End Date</label>
-                        <input
+                        <label htmlFor="parityauditdashboard-end-date-4" className="text-xs text-fg-4 uppercase tracking-wider font-bold block mb-1">End Date</label>
+                        <input id="parityauditdashboard-end-date-4"
                             type="date" value={config.end_date}
                             onChange={e => setConfig({ ...config, end_date: e.target.value })}
                             disabled={isRunning}
-                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-amber-500 outline-none disabled:opacity-50"
+                            className="w-full bg-slate-900 border border-line rounded p-2 text-sm focus:border-amber-500 outline-none disabled:opacity-50"
                         />
                     </div>
                     {/* Warm-up skip */}
                     <div>
-                        <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">
+                        <label htmlFor="parityauditdashboard-warm-up-skip-5" className="text-xs text-fg-4 uppercase tracking-wider font-bold block mb-1">
                             Warm-up Skip
-                            <span className="ml-1 text-slate-600 font-normal normal-case">(bars)</span>
+                            <span className="ml-1 text-fg-6 font-normal normal-case">(bars)</span>
                         </label>
-                        <input
+                        <input id="parityauditdashboard-warm-up-skip-5"
                             type="number" min={50} max={500} value={config.skip}
                             onChange={e => setConfig({ ...config, skip: parseInt(e.target.value) || 100 })}
                             disabled={isRunning}
-                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-amber-500 outline-none disabled:opacity-50"
+                            className="w-full bg-slate-900 border border-line rounded p-2 text-sm focus:border-amber-500 outline-none disabled:opacity-50"
                         />
                     </div>
                     {/* Tolerance */}
                     <div>
-                        <label className="text-xs text-slate-400 uppercase tracking-wider font-bold block mb-1">
+                        <label htmlFor="parityauditdashboard-tolerance-6" className="text-xs text-fg-4 uppercase tracking-wider font-bold block mb-1">
                             Tolerance
-                            <span className="ml-1 text-slate-600 font-normal normal-case">(abs)</span>
+                            <span className="ml-1 text-fg-6 font-normal normal-case">(abs)</span>
                         </label>
-                        <select
+                        <select id="parityauditdashboard-tolerance-6"
                             value={config.tol}
                             onChange={e => setConfig({ ...config, tol: e.target.value })}
                             disabled={isRunning}
-                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-amber-500 outline-none disabled:opacity-50"
+                            className="w-full bg-slate-900 border border-line rounded p-2 text-sm focus:border-amber-500 outline-none disabled:opacity-50"
                         >
                             <option value="1e-4">1e-4 — Strict</option>
                             <option value="5e-4">5e-4</option>
@@ -515,7 +522,7 @@ export default function ParityAuditDashboard() {
                 </div>
 
                 {/* Warm-up note */}
-                <div className="flex items-start gap-2 text-[11px] text-amber-500/70 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2">
+                <div className="flex items-start gap-2 text-2xs text-amber-400/70 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2">
                     <FaExclamationTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
                     <span>
                         Warm-up bars are skipped before comparison. Wilder's smoothing (RSI, ATR, ADX) and rolling z-norm
@@ -570,21 +577,21 @@ export default function ParityAuditDashboard() {
 
             {/* ── Results Table ── */}
             {results.length > 0 && (
-                <div className="bg-slate-900/60 border border-slate-700 rounded-xl overflow-hidden">
+                <div className="bg-slate-900/60 border border-line rounded-xl overflow-hidden">
                     {/* Table toolbar */}
-                    <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-700 bg-slate-900/40 flex-wrap">
-                        <span className="text-xs text-slate-400 font-bold uppercase tracking-wider">Comparison Results</span>
+                    <div className="flex items-center gap-3 px-4 py-3 border-b border-line bg-slate-900/40 flex-wrap">
+                        <span className="text-xs text-fg-4 font-bold uppercase tracking-wider">Comparison Results</span>
                         <div className="flex-1" />
 
                         {/* Search */}
                         <div className="relative">
-                            <FaSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500" />
+                            <FaSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-fg-5" />
                             <input
                                 type="text"
                                 placeholder="Search feature…"
                                 value={searchTerm}
                                 onChange={e => setSearchTerm(e.target.value)}
-                                className="bg-slate-800 border border-slate-700 rounded pl-7 pr-3 py-1.5 text-xs focus:border-amber-500 outline-none w-36"
+                                className="bg-slate-800 border border-line rounded pl-7 pr-3 py-1.5 text-xs focus:border-amber-500 outline-none w-36"
                             />
                         </div>
 
@@ -594,10 +601,10 @@ export default function ParityAuditDashboard() {
                                 <button
                                     key={mode}
                                     onClick={() => setFilterMode(mode)}
-                                    className={`text-[10px] font-semibold px-2.5 py-1 rounded transition-colors ${
+                                    className={`text-3xs font-semibold px-2.5 py-1 rounded transition-colors ${
                                         filterMode === mode
                                             ? 'bg-amber-600 text-white'
-                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                            : 'bg-slate-800 text-fg-4 hover:bg-slate-700'
                                     }`}
                                 >
                                     <FaFilter className="inline w-2.5 h-2.5 mr-1" />{label}
@@ -610,19 +617,19 @@ export default function ParityAuditDashboard() {
                     <div className="overflow-x-auto">
                         <table className="w-full text-left">
                             <thead>
-                                <tr className="border-b border-slate-700 bg-slate-900/80">
-                                    <th className="px-4 py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Feature Name</th>
-                                    <th className="px-4 py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Metric</th>
-                                    <th className="px-4 py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Delta (MAE)</th>
-                                    <th className="px-4 py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Threshold</th>
-                                    <th className="px-4 py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Status</th>
+                                <tr className="border-b border-line bg-slate-900/80">
+                                    <th className="px-4 py-2.5 text-3xs font-bold text-fg-5 uppercase tracking-wider">Feature Name</th>
+                                    <th className="px-4 py-2.5 text-3xs font-bold text-fg-5 uppercase tracking-wider">Metric</th>
+                                    <th className="px-4 py-2.5 text-3xs font-bold text-fg-5 uppercase tracking-wider">Delta (MAE)</th>
+                                    <th className="px-4 py-2.5 text-3xs font-bold text-fg-5 uppercase tracking-wider">Threshold</th>
+                                    <th className="px-4 py-2.5 text-3xs font-bold text-fg-5 uppercase tracking-wider">Status</th>
                                     <th className="px-4 py-2.5" />
                                 </tr>
                             </thead>
                             <tbody>
                                 {filteredResults.length === 0 ? (
                                     <tr>
-                                        <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">
+                                        <td colSpan={6} className="px-4 py-8 text-center text-sm text-fg-5">
                                             No results match the current filter.
                                         </td>
                                     </tr>
@@ -639,7 +646,7 @@ export default function ParityAuditDashboard() {
                     </div>
 
                     {filteredResults.length > 0 && (
-                        <div className="px-4 py-2 border-t border-slate-800 text-[10px] text-slate-600">
+                        <div className="px-4 py-2 border-t border-line-0 text-3xs text-fg-6">
                             {filteredResults.length} row{filteredResults.length !== 1 ? 's' : ''} shown
                             {filterMode !== 'all' && ` (filtered from ${results.length} total)`}
                             {' · '}Click any row to expand the indicator delta chart.
@@ -650,18 +657,23 @@ export default function ParityAuditDashboard() {
 
             {/* ── Log Terminal ── */}
             {(logs || isRunning) && (
-                <div className="bg-slate-900/60 border border-slate-700 rounded-xl overflow-hidden">
-                    <div className="flex items-center gap-2 px-4 py-2.5 border-b border-slate-700 bg-slate-900/80">
-                        <FaTerminal className="w-3.5 h-3.5 text-slate-500" />
-                        <span className="text-xs text-slate-400 font-bold uppercase tracking-wider">Validation Log</span>
-                        {isRunning && <span className="text-[10px] text-amber-400 animate-pulse ml-auto">● Streaming</span>}
-                        {isDone   && <span className="text-[10px] text-emerald-400 ml-auto">● Completed</span>}
-                        {isFailed && <span className="text-[10px] text-rose-400 ml-auto">● Failed</span>}
+                <div className="bg-slate-900/60 border border-line rounded-xl overflow-hidden">
+                    <div className="flex items-center gap-2 px-4 py-2.5 border-b border-line bg-slate-900/80">
+                        <FaTerminal className="w-3.5 h-3.5 text-fg-5" />
+                        <span className="text-xs text-fg-4 font-bold uppercase tracking-wider">Validation Log</span>
+                        {isRunning && <span className="text-3xs text-amber-400 animate-pulse ml-auto">● Streaming</span>}
+                        {isDone   && <span className="text-3xs text-emerald-400 ml-auto">● Completed</span>}
+                        {isFailed && <span className="text-3xs text-rose-400 ml-auto">● Failed</span>}
                     </div>
+                    {/* bg-bg-2 (sunken-surface role), not bg-black: `--color-black` is pinned to
+                        #000 in every theme by design, so text-fg-3 on it collapses to 1.2-1.8:1
+                        on the light-mode themes. bg-2 keeps the log readable in all 12.
+                        `colorScheme:'dark'` is gone with it — cssVars.js now writes color-scheme
+                        on :root per theme mode, so a hardcoded 'dark' here would force a dark
+                        native scrollbar onto a light panel. */}
                     <div
                         ref={logRef}
-                        className="h-64 overflow-y-auto bg-black p-3 text-xs font-mono text-slate-300 whitespace-pre-wrap leading-relaxed"
-                        style={{ colorScheme: 'dark' }}
+                        className="h-64 overflow-y-auto bg-bg-2 p-3 text-xs font-mono text-fg-3 whitespace-pre-wrap leading-relaxed"
                     >
                         {logs || 'Waiting for output…'}
                         {isRunning && <span className="animate-pulse text-amber-400">█</span>}

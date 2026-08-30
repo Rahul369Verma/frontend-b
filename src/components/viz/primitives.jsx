@@ -1,8 +1,5 @@
 import React, { useState } from 'react';
-import {
-    SURFACE, SURFACE_SUNK, TEXT, GRID, CATEGORICAL, DIVERGING, STATUS, STATUS_ICON,
-    divergingRgba, inr,
-} from './tokens';
+import { STATUS_ICON, inr, useChartTheme } from './tokens';
 
 /**
  * Chart + dashboard primitives.
@@ -21,20 +18,29 @@ import {
  *     doing real work and the number is the CVD fallback
  *   • grid/axis rules are solid hairlines, one shade off the surface
  *   • every chart has a hover layer
+ *
+ * WHY EVERY MARK-DRAWING PRIMITIVE CALLS useChartTheme()
+ * These forms are inline `style` and SVG attributes, not Tailwind classes, so
+ * they get none of the free retheming the rest of the app gets from redefining
+ * `--color-*`. The hook hands back the ACTIVE theme's role table and re-renders
+ * the primitive when the theme changes, which is the only way a hand-built mark
+ * follows a theme switch. Primitives that draw no marks (Card, StatRow, Legend,
+ * Findings, Placeholder) deliberately do NOT call it — they are pure Tailwind
+ * and would only pay for a subscription they cannot use.
  */
 
 // ── Card ─────────────────────────────────────────────────────────────────────
 
 export function Card({ title, subtitle, right, children, className = '' }) {
     return (
-        <div className={`bg-surface border border-slate-700/60 rounded-lg ${className}`}>
+        <div className={`bg-surface border border-line/60 rounded-lg ${className}`}>
             {(title || right) && (
                 <div className="flex items-start justify-between gap-3 px-4 pt-3 pb-2">
                     <div className="min-w-0">
-                        {title && <h3 className="text-sm font-semibold text-slate-100">{title}</h3>}
-                        {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
+                        {title && <h3 className="text-sm font-semibold text-fg">{title}</h3>}
+                        {subtitle && <p className="text-xs text-fg-5 mt-0.5">{subtitle}</p>}
                     </div>
-                    {right && <div className="flex-shrink-0 text-xs text-slate-400">{right}</div>}
+                    {right && <div className="flex-shrink-0 text-xs text-fg-4">{right}</div>}
                 </div>
             )}
             <div className="px-4 pb-4">{children}</div>
@@ -45,12 +51,17 @@ export function Card({ title, subtitle, right, children, className = '' }) {
 // ── Status badge — icon + label, never colour alone ──────────────────────────
 
 export function StatusBadge({ level = 'info', children, title }) {
-    const color = STATUS[level] || TEXT.secondary;
+    const ct = useChartTheme();
+    const color = ct.status[level] || ct.text.secondary;
+    // alpha() rather than `${color}1f` — an 8-digit-hex suffix silently produces
+    // garbage the moment a token is not exactly 6 hex digits.
+    const tint = ct.alpha(color, 0.12);
+    const edge = ct.alpha(color, 0.33);
     return (
         <span
             title={title}
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium whitespace-nowrap"
-            style={{ color, backgroundColor: `${color}1f`, border: `1px solid ${color}55` }}
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium whitespace-nowrap"
+            style={{ color, backgroundColor: tint, border: `1px solid ${edge}` }}
         >
             <span aria-hidden="true">{STATUS_ICON[level] || STATUS_ICON.info}</span>
             <span>{children}</span>
@@ -61,15 +72,16 @@ export function StatusBadge({ level = 'info', children, title }) {
 // ── Stat tile — the right form for a single current value ────────────────────
 
 export function StatTile({ label, value, hint, tone = 'neutral', badge, hero = false }) {
+    const ct = useChartTheme();
     // Tone tints the VALUE text only. The sign is in the number itself, so the
     // colour is reinforcement, never the sole carrier.
-    const toneColor = tone === 'positive' ? DIVERGING.positive
-        : tone === 'negative' ? DIVERGING.negative
-        : TEXT.primary;
+    const toneColor = tone === 'positive' ? ct.diverging.positive
+        : tone === 'negative' ? ct.diverging.negative
+        : ct.text.primary;
     return (
-        <div className="bg-surface border border-slate-700/60 rounded-lg px-4 py-3 flex flex-col gap-1 min-w-0">
+        <div className="bg-surface border border-line/60 rounded-lg px-4 py-3 flex flex-col gap-1 min-w-0">
             <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] uppercase tracking-wide text-slate-500 truncate">{label}</span>
+                <span className="text-2xs uppercase tracking-wide text-fg-5 truncate">{label}</span>
                 {badge}
             </div>
             <span
@@ -79,7 +91,7 @@ export function StatTile({ label, value, hint, tone = 'neutral', badge, hero = f
             >
                 {value}
             </span>
-            {hint && <span className="text-[11px] text-slate-500 truncate" title={hint}>{hint}</span>}
+            {hint && <span className="text-2xs text-fg-5 truncate" title={hint}>{hint}</span>}
         </div>
     );
 }
@@ -92,22 +104,23 @@ export function StatRow({ children, cols = 4 }) {
 // ── Meter — one ratio against a limit (not a 2-slice pie) ────────────────────
 
 export function Meter({ value, max = 1, label, caption, tone = 'neutral' }) {
+    const ct = useChartTheme();
     const t = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0;
-    const fill = tone === 'critical' ? STATUS.critical
-        : tone === 'warning' ? STATUS.warning
-        : CATEGORICAL[0];
+    const fill = tone === 'critical' ? ct.status.critical
+        : tone === 'warning' ? ct.status.warning
+        : ct.categorical[0];
     return (
         <div className="space-y-1.5">
             <div className="flex items-baseline justify-between gap-2">
-                <span className="text-xs text-slate-400">{label}</span>
-                <span className="text-sm font-semibold tabular-nums text-slate-100">
+                <span className="text-xs text-fg-4">{label}</span>
+                <span className="text-sm font-semibold tabular-nums text-fg">
                     {(t * 100).toFixed(0)}%
                 </span>
             </div>
-            <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: SURFACE_SUNK }}>
+            <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: ct.surfaceSunk }}>
                 <div className="h-full rounded-full transition-all" style={{ width: `${t * 100}%`, backgroundColor: fill }} />
             </div>
-            {caption && <p className="text-[11px] text-slate-500">{caption}</p>}
+            {caption && <p className="text-2xs text-fg-5">{caption}</p>}
         </div>
     );
 }
@@ -123,8 +136,9 @@ export function DivergingBars({
     data = [], format = (v) => inr(v, { compact: true, sign: true }),
     height = 22, emptyText = 'No data', labelWidth = 116, valueWidth = 74,
 }) {
+    const ct = useChartTheme();
     const [hover, setHover] = useState(null);
-    if (!data.length) return <p className="text-xs text-slate-500 py-4 text-center">{emptyText}</p>;
+    if (!data.length) return <p className="text-xs text-fg-5 py-4 text-center">{emptyText}</p>;
 
     const maxAbs = Math.max(...data.map(d => Math.abs(Number(d.value) || 0)), 1);
 
@@ -147,32 +161,32 @@ export function DivergingBars({
                         onMouseEnter={() => setHover(i)}
                         onMouseLeave={() => setHover(null)}
                     >
-                        <span className="text-[11px] text-slate-300 truncate flex-shrink-0"
+                        <span className="text-2xs text-fg-3 truncate flex-shrink-0"
                               style={{ width: labelWidth }} title={d.label}>
                             {d.label}
                         </span>
                         <div className="relative flex-1 h-full min-w-0">
                             {/* zero rule — solid hairline, one shade off the surface */}
-                            <div className="absolute inset-y-0 left-1/2 w-px" style={{ backgroundColor: GRID }} />
+                            <div className="absolute inset-y-0 left-1/2 w-px" style={{ backgroundColor: ct.grid }} />
                             <div
                                 className="absolute top-1/2 -translate-y-1/2 h-3"
                                 style={{
                                     left: positive ? '50%' : `${50 - w}%`,
                                     width: `${w}%`,
-                                    backgroundColor: positive ? DIVERGING.positive : DIVERGING.negative,
+                                    backgroundColor: positive ? ct.diverging.positive : ct.diverging.negative,
                                     // 4px rounded data-end, square against the baseline
                                     borderRadius: positive ? '0 4px 4px 0' : '4px 0 0 4px',
                                     opacity: hover === null || hover === i ? 1 : 0.45,
                                 }}
                             />
                             {hover === i && d.hint && (
-                                <div className="absolute z-20 left-1/2 -translate-x-1/2 -top-1 -translate-y-full px-2 py-1 rounded text-[11px] whitespace-nowrap pointer-events-none border border-slate-600"
-                                     style={{ backgroundColor: BACKGROUND_TOOLTIP }}>
+                                <div className="absolute z-20 left-1/2 -translate-x-1/2 -top-1 -translate-y-full px-2 py-1 rounded text-2xs whitespace-nowrap pointer-events-none border border-line-2"
+                                     style={{ backgroundColor: ct.tooltip.background, color: ct.tooltip.text }}>
                                     {d.hint}
                                 </div>
                             )}
                         </div>
-                        <span className="text-[11px] tabular-nums text-slate-400 flex-shrink-0 text-right"
+                        <span className="text-2xs tabular-nums text-fg-4 flex-shrink-0 text-right"
                               style={{ width: valueWidth }}>
                             {format(v)}
                         </span>
@@ -183,8 +197,6 @@ export function DivergingBars({
     );
 }
 
-const BACKGROUND_TOOLTIP = '#111318';
-
 // ── Waterfall — how components sum to a total ────────────────────────────────
 
 /**
@@ -192,8 +204,9 @@ const BACKGROUND_TOOLTIP = '#111318';
  * @param {object} total { label, value }
  */
 export function Waterfall({ steps = [], total, format = (v) => inr(v, { compact: true, sign: true }) }) {
+    const ct = useChartTheme();
     const [hover, setHover] = useState(null);
-    if (!steps.length) return <p className="text-xs text-slate-500 py-4 text-center">No attribution available</p>;
+    if (!steps.length) return <p className="text-xs text-fg-5 py-4 text-center">No attribution available</p>;
 
     // Running cumulative positions.
     let run = 0;
@@ -222,18 +235,18 @@ export function Waterfall({ steps = [], total, format = (v) => inr(v, { compact:
                 const left = x(Math.min(b.from, b.to));
                 const width = Math.max(0.6, Math.abs(x(b.to) - x(b.from)));
                 const positive = b.value >= 0;
-                const color = positive ? DIVERGING.positive : DIVERGING.negative;
+                const color = positive ? ct.diverging.positive : ct.diverging.negative;
                 return (
                     <div key={b.label + i}
-                         className={`flex items-center gap-2 ${b.isTotal ? 'mt-2 pt-2 border-t border-slate-700' : ''}`}
+                         className={`flex items-center gap-2 ${b.isTotal ? 'mt-2 pt-2 border-t border-line' : ''}`}
                          style={{ height: 24 }}
                          onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
-                        <span className={`text-[11px] truncate flex-shrink-0 ${b.isTotal ? 'font-semibold text-slate-100' : 'text-slate-300'}`}
+                        <span className={`text-2xs truncate flex-shrink-0 ${b.isTotal ? 'font-semibold text-fg' : 'text-fg-3'}`}
                               style={{ width: LABEL_W }} title={b.label}>
                             {b.label}
                         </span>
                         <div className="relative flex-1 h-full min-w-0">
-                            <div className="absolute inset-y-0 w-px" style={{ left: `${x(0)}%`, backgroundColor: GRID }} />
+                            <div className="absolute inset-y-0 w-px" style={{ left: `${x(0)}%`, backgroundColor: ct.grid }} />
                             <div
                                 className="absolute top-1/2 -translate-y-1/2 h-3.5 rounded-[3px]"
                                 style={{
@@ -241,11 +254,11 @@ export function Waterfall({ steps = [], total, format = (v) => inr(v, { compact:
                                     backgroundColor: color,
                                     opacity: b.isTotal ? 1 : (hover === null || hover === i ? 0.9 : 0.4),
                                     // 2px surface ring keeps adjacent fills from merging
-                                    boxShadow: `0 0 0 2px ${SURFACE}`,
+                                    boxShadow: `0 0 0 2px ${ct.surface}`,
                                 }}
                             />
                         </div>
-                        <span className={`text-[11px] tabular-nums flex-shrink-0 text-right ${b.isTotal ? 'font-semibold text-slate-100' : 'text-slate-400'}`}
+                        <span className={`text-2xs tabular-nums flex-shrink-0 text-right ${b.isTotal ? 'font-semibold text-fg' : 'text-fg-4'}`}
                               style={{ width: VALUE_W }}>
                             {format(b.value)}
                         </span>
@@ -268,6 +281,7 @@ export function Heatmap({
     rowTitle = '', colTitle = '', format = (v) => inr(v, { compact: true, sign: true }),
     cellHint, scaleCaption = 'loss ← → profit',
 }) {
+    const ct = useChartTheme();
     const [hover, setHover] = useState(null);
     const values = [];
     rows.forEach(r => cols.forEach(c => {
@@ -279,15 +293,15 @@ export function Heatmap({
     return (
         <div className="overflow-x-auto">
             <div className="inline-block min-w-full">
-                {colTitle && <div className="text-[11px] text-slate-500 mb-1 text-center">{colTitle}</div>}
+                {colTitle && <div className="text-2xs text-fg-5 mb-1 text-center">{colTitle}</div>}
                 <table className="border-separate" style={{ borderSpacing: 2 }}>
                     <thead>
                         <tr>
-                            <th className="text-[10px] text-slate-500 font-normal px-1 text-right whitespace-nowrap">
+                            <th className="text-3xs text-fg-5 font-normal px-1 text-right whitespace-nowrap">
                                 {rowTitle}
                             </th>
                             {cols.map(c => (
-                                <th key={c} className="text-[10px] text-slate-400 font-normal px-1 whitespace-nowrap">
+                                <th key={c} className="text-3xs text-fg-4 font-normal px-1 whitespace-nowrap">
                                     {colLabel(c)}
                                 </th>
                             ))}
@@ -296,22 +310,28 @@ export function Heatmap({
                     <tbody>
                         {rows.map(r => (
                             <tr key={r}>
-                                <td className="text-[10px] text-slate-400 pr-2 text-right whitespace-nowrap tabular-nums">
+                                <td className="text-3xs text-fg-4 pr-2 text-right whitespace-nowrap tabular-nums">
                                     {rowLabel(r)}
                                 </td>
                                 {cols.map(c => {
                                     const v = valueAt(r, c);
                                     const key = `${r}|${c}`;
                                     const isHover = hover === key;
+                                    // The fill is a composite of a pole over the card, so on a
+                                    // LIGHT theme a full-magnitude cell lands mid-dark while the
+                                    // theme's ink is near-black. ink() measures the fill it was
+                                    // just handed and flips when the theme's own ink stops
+                                    // clearing 3:1 on it.
+                                    const fill = ct.divergingRgba(v, maxAbs);
                                     return (
                                         <td key={key} className="relative p-0">
                                             <div
-                                                className="px-2 py-1.5 rounded text-[11px] tabular-nums text-center whitespace-nowrap cursor-default transition-shadow"
+                                                className="px-2 py-1.5 rounded text-2xs tabular-nums text-center whitespace-nowrap cursor-default transition-shadow"
                                                 style={{
-                                                    backgroundColor: divergingRgba(v, maxAbs),
-                                                    color: TEXT.primary,
+                                                    backgroundColor: fill,
+                                                    color: ct.ink(fill),
                                                     minWidth: 62,
-                                                    boxShadow: isHover ? `0 0 0 2px ${CATEGORICAL[0]}` : 'none',
+                                                    boxShadow: isHover ? `0 0 0 2px ${ct.categorical[0]}` : 'none',
                                                 }}
                                                 onMouseEnter={() => setHover(key)}
                                                 onMouseLeave={() => setHover(null)}
@@ -321,8 +341,8 @@ export function Heatmap({
                                                 {Number.isFinite(v) ? format(v) : '—'}
                                             </div>
                                             {isHover && cellHint && (
-                                                <div className="absolute z-30 left-1/2 -translate-x-1/2 bottom-full mb-1 px-2 py-1 rounded text-[11px] whitespace-nowrap pointer-events-none border border-slate-600"
-                                                     style={{ backgroundColor: BACKGROUND_TOOLTIP }}>
+                                                <div className="absolute z-30 left-1/2 -translate-x-1/2 bottom-full mb-1 px-2 py-1 rounded text-2xs whitespace-nowrap pointer-events-none border border-line-2"
+                                                     style={{ backgroundColor: ct.tooltip.background, color: ct.tooltip.text }}>
                                                     {cellHint(r, c, v)}
                                                 </div>
                                             )}
@@ -334,10 +354,10 @@ export function Heatmap({
                     </tbody>
                 </table>
                 {/* Scale legend — required whenever colour encodes magnitude. */}
-                <div className="flex items-center gap-2 mt-2 text-[10px] text-slate-500">
+                <div className="flex items-center gap-2 mt-2 text-3xs text-fg-5">
                     <span>{format(-maxAbs)}</span>
                     <div className="flex-1 h-2 rounded" style={{
-                        background: `linear-gradient(to right, ${DIVERGING.negative}, ${SURFACE}, ${DIVERGING.positive})`,
+                        background: `linear-gradient(to right, ${ct.diverging.negative}, ${ct.surface}, ${ct.diverging.positive})`,
                         maxWidth: 220,
                     }} />
                     <span>{format(maxAbs)}</span>
@@ -351,16 +371,17 @@ export function Heatmap({
 // ── Table — always available behind every chart ──────────────────────────────
 
 export function DataTable({ columns, rows, empty = 'No rows', dense = false, maxHeight }) {
-    if (!rows || !rows.length) return <p className="text-xs text-slate-500 py-4 text-center">{empty}</p>;
+    const ct = useChartTheme();
+    if (!rows || !rows.length) return <p className="text-xs text-fg-5 py-4 text-center">{empty}</p>;
     return (
         <div className="overflow-auto" style={maxHeight ? { maxHeight } : undefined}>
             <table className="w-full text-xs">
-                <thead className="sticky top-0" style={{ backgroundColor: SURFACE }}>
-                    <tr className="text-left text-slate-500">
+                <thead className="sticky top-0" style={{ backgroundColor: ct.surface }}>
+                    <tr className="text-left text-fg-5">
                         {columns.map(c => (
                             <th key={c.key}
                                 className={`font-medium ${dense ? 'py-1' : 'py-1.5'} px-2 whitespace-nowrap ${c.align === 'right' ? 'text-right' : ''}`}
-                                style={{ borderBottom: `1px solid ${GRID}` }}>
+                                style={{ borderBottom: `1px solid ${ct.grid}` }}>
                                 {c.header}
                             </th>
                         ))}
@@ -372,7 +393,7 @@ export function DataTable({ columns, rows, empty = 'No rows', dense = false, max
                             {columns.map(c => (
                                 <td key={c.key}
                                     className={`${dense ? 'py-1' : 'py-1.5'} px-2 whitespace-nowrap ${c.align === 'right' ? 'text-right tabular-nums' : ''}`}
-                                    style={{ borderBottom: `1px solid ${GRID}55` }}>
+                                    style={{ borderBottom: `1px solid ${ct.gridSoft}` }}>
                                     {c.render ? c.render(r) : r[c.key]}
                                 </td>
                             ))}
@@ -391,7 +412,7 @@ export function Legend({ items }) {
     return (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2">
             {items.map(it => (
-                <span key={it.label} className="inline-flex items-center gap-1.5 text-[11px] text-slate-400">
+                <span key={it.label} className="inline-flex items-center gap-1.5 text-2xs text-fg-4">
                     <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: it.color }} />
                     {it.label}
                 </span>
@@ -403,8 +424,9 @@ export function Legend({ items }) {
 // ── Stacked share bar — part-to-whole for a small number of parts ────────────
 
 export function ShareBar({ parts = [], format = (v) => inr(v, { compact: true }) }) {
+    const ct = useChartTheme();
     const total = parts.reduce((a, p) => a + Math.abs(Number(p.value) || 0), 0);
-    if (!(total > 0)) return <p className="text-xs text-slate-500">Nothing on the book</p>;
+    if (!(total > 0)) return <p className="text-xs text-fg-5">Nothing on the book</p>;
     return (
         <div className="space-y-2">
             <div className="flex h-3 rounded overflow-hidden" style={{ gap: 2 }}>
@@ -413,16 +435,16 @@ export function ShareBar({ parts = [], format = (v) => inr(v, { compact: true })
                          title={`${p.label}: ${format(p.value)}`}
                          style={{
                              width: `${(Math.abs(p.value) / total) * 100}%`,
-                             backgroundColor: p.color || CATEGORICAL[i % CATEGORICAL.length],
+                             backgroundColor: p.color || ct.categorical[i % ct.categorical.length],
                          }} />
                 ))}
             </div>
             <div className="flex flex-wrap gap-x-4 gap-y-1">
                 {parts.map((p, i) => (
-                    <span key={p.label} className="inline-flex items-center gap-1.5 text-[11px] text-slate-400">
-                        <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: p.color || CATEGORICAL[i % CATEGORICAL.length] }} />
+                    <span key={p.label} className="inline-flex items-center gap-1.5 text-2xs text-fg-4">
+                        <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: p.color || ct.categorical[i % ct.categorical.length] }} />
                         {p.label}
-                        <span className="tabular-nums text-slate-300">{format(p.value)}</span>
+                        <span className="tabular-nums text-fg-3">{format(p.value)}</span>
                     </span>
                 ))}
             </div>
@@ -435,7 +457,7 @@ export function ShareBar({ parts = [], format = (v) => inr(v, { compact: true })
 export function Findings({ findings = [], emptyText = 'No issues detected in this window.' }) {
     if (!findings.length) {
         return (
-            <div className="flex items-center gap-2 text-xs text-slate-400 py-2">
+            <div className="flex items-center gap-2 text-xs text-fg-4 py-2">
                 <StatusBadge level="good">Clean</StatusBadge>
                 <span>{emptyText}</span>
             </div>
@@ -452,8 +474,8 @@ export function Findings({ findings = [], emptyText = 'No issues detected in thi
                         </StatusBadge>
                     </span>
                     <div className="min-w-0">
-                        <p className="text-xs text-slate-200 leading-snug">{f.message}</p>
-                        {f.action && <p className="text-[11px] text-slate-500 mt-0.5">→ {f.action}</p>}
+                        <p className="text-xs text-fg-2 leading-snug">{f.message}</p>
+                        {f.action && <p className="text-2xs text-fg-5 mt-0.5">→ {f.action}</p>}
                     </div>
                 </li>
             ))}
@@ -464,5 +486,5 @@ export function Findings({ findings = [], emptyText = 'No issues detected in thi
 // ── Empty / loading ──────────────────────────────────────────────────────────
 
 export function Placeholder({ children }) {
-    return <div className="text-center text-xs text-slate-500 py-8">{children}</div>;
+    return <div className="text-center text-xs text-fg-5 py-8">{children}</div>;
 }

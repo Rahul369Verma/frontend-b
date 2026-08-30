@@ -1,4 +1,5 @@
 import { INSTRUMENT_CONFIG } from '../constants';
+import { API_BASE } from '../config/api.js';
 
 /**
  * Get the target day of week for expiry for a given symbol
@@ -126,8 +127,7 @@ export const getExpiriesForSymbol = (symbol, nextCount = 4, pastCount = 1) => {
 export const fetchExpiriesForSymbol = async (symbol, nextCount = 4, pastCount = 1) => {
     if (!symbol) return [];
 
-    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-    const url = `${API_BASE}/api/expiry?symbol=${encodeURIComponent(symbol)}&count=${nextCount}&pastCount=${pastCount}`;
+        const url = `${API_BASE}/api/expiry?symbol=${encodeURIComponent(symbol)}&count=${nextCount}&pastCount=${pastCount}`;
 
     console.log(`[fetchExpiriesForSymbol] Fetching: ${url}`);
 

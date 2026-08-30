@@ -23,7 +23,16 @@ export default defineConfig([
       },
     },
     rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // `_`-prefixed means "deliberately unused". The config previously set only
+      // varsIgnorePattern, so an unused FUNCTION PARAMETER or CAUGHT ERROR could
+      // not be marked intentional at all — the convention existed but the linter
+      // did not honour it, which is why `catch (_) {}` still reported.
+      'no-unused-vars': ['error', {
+        varsIgnorePattern: '^[A-Z_]',
+        argsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_',
+        destructuredArrayIgnorePattern: '^_',
+      }],
     },
   },
 ])

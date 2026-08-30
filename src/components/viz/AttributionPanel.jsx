@@ -3,7 +3,7 @@ import {
     Card, StatTile, StatRow, Waterfall, DivergingBars, DataTable,
     Findings, StatusBadge, Placeholder,
 } from './primitives';
-import { inr, num, DIVERGING } from './tokens';
+import { inr, num, useChartTheme } from './tokens';
 
 /**
  * P&L attribution + transaction-cost analysis.
@@ -112,7 +112,7 @@ export default function AttributionPanel({ data, context = 'live' }) {
                 >
                     <Waterfall steps={steps} total={{ label: 'Net P&L', value: o.netPnl }} />
                     {o.fullAttribution === 0 && (
-                        <p className="text-[11px] text-slate-500 mt-3 leading-snug">
+                        <p className="text-2xs text-fg-5 mt-3 leading-snug">
                             No greek decomposition available for this window — these trades pre-date the
                             entry/exit risk snapshots, so only the cost analysis is shown. Trades closed
                             from now on will decompose fully.
@@ -135,7 +135,7 @@ export default function AttributionPanel({ data, context = 'live' }) {
                         />
                     </StatRow>
                     <div className="mt-4">
-                        <p className="text-[11px] text-slate-500 mb-2">Net P&L by underlying</p>
+                        <p className="text-2xs text-fg-5 mb-2">Net P&L by underlying</p>
                         <DivergingBars
                             data={underlyingRows.map(r => ({
                                 label: r.underlying.replace(/^[A-Z]+:|-INDEX$/g, ''),
@@ -153,8 +153,8 @@ export default function AttributionPanel({ data, context = 'live' }) {
                     <div className="flex gap-1">
                         {[['strategy', 'By strategy'], ['hour', 'By hour'], ['verdict', 'By verdict']].map(([k, lbl]) => (
                             <button key={k} onClick={() => setTab(k)}
-                                    className={`px-2 py-1 rounded text-[11px] transition ${
-                                        tab === k ? 'bg-slate-700 text-slate-100' : 'text-slate-500 hover:text-slate-300'}`}>
+                                    className={`px-2 py-1 rounded text-2xs transition ${
+                                        tab === k ? 'bg-slate-700 text-fg' : 'text-fg-5 hover:text-fg-3'}`}>
                                 {lbl}
                             </button>
                         ))}
@@ -185,7 +185,7 @@ export default function AttributionPanel({ data, context = 'live' }) {
                 )}
                 {tab === 'hour' && (
                     <>
-                        <p className="text-[11px] text-slate-500 mb-2">
+                        <p className="text-2xs text-fg-5 mb-2">
                             Net P&L by entry hour. A reliably negative window is a zero-effort improvement — stop trading it.
                         </p>
                         <DivergingBars
@@ -214,13 +214,13 @@ export default function AttributionPanel({ data, context = 'live' }) {
 }
 
 function Signed({ v, muted = false }) {
+    const ct = useChartTheme();
     const n = Number(v) || 0;
-    if (muted) {
-        return <span style={{ color: n >= 0 ? `${DIVERGING.positive}cc` : `${DIVERGING.negative}cc` }}>
-            {inr(n, { compact: true, sign: true })}
-        </span>;
-    }
-    return <span style={{ color: n >= 0 ? DIVERGING.positive : DIVERGING.negative }}>
+    const pole = n >= 0 ? ct.diverging.positive : ct.diverging.negative;
+    // `muted` is the greek-decomposition columns: same polarity, one step back in
+    // the reading order so the money columns still win the eye. 0.8 alpha rather
+    // than the old `${hex}cc` suffix, which only worked for 6-digit hex.
+    return <span style={{ color: muted ? ct.alpha(pole, 0.8) : pole }}>
         {inr(n, { compact: true, sign: true })}
     </span>;
 }
@@ -237,5 +237,5 @@ const VERDICT_TEXT = {
 };
 
 function VerdictLabel({ v }) {
-    return <span className="text-slate-300">{VERDICT_TEXT[v] || v}</span>;
+    return <span className="text-fg-3">{VERDICT_TEXT[v] || v}</span>;
 }

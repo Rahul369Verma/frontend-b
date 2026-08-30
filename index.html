@@ -4,7 +4,120 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <meta id="theme-color-meta" name="theme-color" content="#0e1117" />
+    <title>AlgoBot</title>
+    <!--
+      Zero-flash appearance boot.
+
+      WHY inline and why here: the theme lives in `:root[data-theme="…"]` rules that
+      ThemeProvider injects on mount, i.e. after React hydrates. Without this, a
+      returning user on a light theme gets a frame or two of the dark @theme defaults
+      — a full-page white->black->white flash. Running before <body> is parsed means
+      the very first paint already carries the right attributes.
+
+      Deliberately dependency-free, synchronous (no `defer`/`type=module`, both of
+      which would run too late) and wrapped in one try/catch: localStorage throws in
+      private/blocked contexts and a malformed payload must never white-screen the
+      app. Any failure just falls through to the dark defaults in index.css.
+
+      This only READS storage. Schema, defaults and validation belong to
+      src/theme/prefs.js; ThemeProvider re-applies (and corrects) everything on mount,
+      so anything this script cannot know cheaply is simply left unset.
+    -->
+    <script>
+      (function () {
+          try {
+              var root = document.documentElement;
+              var saved = null;
+              try {
+                  var raw = window.localStorage.getItem('algobot:appearance');
+                  if (raw) { saved = JSON.parse(raw); }
+              } catch (e) { /* unavailable or corrupt — use defaults */ }
+
+              var prefs = (saved && typeof saved.prefs === 'object' && saved.prefs) || {};
+
+              /* Theme id. 'midnight' is the documented default fallback — the only
+                 theme id allowed to appear outside themes.js. A first-time visitor
+                 who prefers light gets their light theme chosen by ThemeProvider
+                 from prefers-color-scheme; there is no stored theme to flash from. */
+              var theme = (saved && typeof saved.theme === 'string' && saved.theme) || 'midnight';
+              root.setAttribute('data-theme', theme);
+
+              /* The attribute above selects rules that DO NOT EXIST YET — they are
+                 injected by ThemeProvider once the bundle has parsed. Until then the
+                 page is painted by index.css's static defaults, which are the dark
+                 ones, so a returning user on a light theme still saw the flash this
+                 script is supposed to prevent (it was simply invisible while the
+                 default theme was dark).
+
+                 So the provider also persists the two resolved colours `body` reads,
+                 and they are applied here as inline custom properties — no palette
+                 maths, no imports, correct for all 12 themes. The provider removes
+                 them in its before-paint effect once the real stylesheet is in place,
+                 because an inline property would otherwise outrank the theme block
+                 forever. Values are hex-validated: this is attacker-writable storage,
+                 and `setProperty` is a CSS sink. */
+              var paint = (saved && typeof saved.paint === 'object' && saved.paint) || null;
+              if (paint) {
+                  if (/^#[0-9a-fA-F]{6}$/.test(paint.bg)) { root.style.setProperty('--color-background', paint.bg); }
+                  if (/^#[0-9a-fA-F]{6}$/.test(paint.fg)) { root.style.setProperty('--color-fg', paint.fg); }
+              }
+
+              /* Mode is a hint for mode-keyed CSS/JS, not for the palette (that is
+                 keyed on data-theme). Use the persisted mode when a writer stored it;
+                 otherwise fall back to the OS preference and let ThemeProvider fix it
+                 one tick later — nothing colour-critical depends on it. */
+              var mode = (saved && typeof saved.mode === 'string' && saved.mode) || null;
+              if (!mode && window.matchMedia) {
+                  mode = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+              }
+              if (mode) { root.setAttribute('data-theme-mode', mode); }
+
+              if (typeof prefs.contrast === 'string' && prefs.contrast) {
+                  root.setAttribute('data-contrast', prefs.contrast);
+              }
+              if (prefs.readingMode === true) {
+                  root.setAttribute('data-reading', 'true');
+              }
+              /* The other two pure-CSS toggles, so the attribute set this script
+                 writes is a strict subset of themeDataAttributes() rather than a
+                 different set. Underlines in particular are a WCAG 1.4.1 affordance
+                 and should not appear a frame late. (`data-theme-group` is left to
+                 the provider: nothing keys on it before hydration.) */
+              if (prefs.underlineLinks === true) {
+                  root.setAttribute('data-underline', 'true');
+              }
+              if (typeof prefs.focusRing === 'string' && prefs.focusRing) {
+                  root.setAttribute('data-focus', prefs.focusRing);
+              }
+              /* Only write data-motion when the user has actually chosen. Leaving it
+                 absent lets the prefers-reduced-motion block in index.css govern, and
+                 writing 'allow' is what lets someone override their OS setting. */
+              if (typeof prefs.reduceMotion === 'boolean') {
+                  root.setAttribute('data-motion', prefs.reduceMotion ? 'reduce' : 'allow');
+              }
+
+              /* fontScale is true zoom: layout is rem-based, so scaling the root
+                 font-size scales spacing and widths with the text. Clamped to the
+                 prefs.js range so a hand-edited payload cannot make the UI unusable.
+
+                 A PERCENTAGE, not `(16 * scale) + 'px'`. A percentage on :root
+                 resolves against the reader's own browser font-size preference, so
+                 the axis multiplies that preference; an absolute pixel value
+                 REPLACES it, which meant anyone whose browser default was above
+                 16px got smaller text the moment they nudged the control up. It
+                 does not compound with rem — rem is defined against the root's
+                 computed size, which this line produces exactly once. Must stay in
+                 step with rootFontSize() in src/theme/cssVars.js. */
+              var scale = Number(prefs.fontScale);
+              if (isFinite(scale) && scale > 0) {
+                  scale = Math.min(1.6, Math.max(0.85, scale));
+                  root.style.fontSize = (scale * 100) + '%';
+                  root.style.setProperty('--ui-font-scale', String(scale));
+              }
+          } catch (e) { /* never block first paint */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

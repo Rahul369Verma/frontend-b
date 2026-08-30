@@ -28,8 +28,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import axios from 'axios';
+import { API_URL } from '../config/api.js';
+import { useEscapeKey } from '../hooks/useEscapeKey.js';
+import { useConfirm } from './confirmContext.js';
 
-const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000') + '/api';
 
 // Fallback list — used only if /api/strategies/registry doesn't respond
 // (e.g. old backend image). Mirrors the canonical strategyMapper.STRATEGY_MAP.
@@ -110,6 +112,7 @@ function fmtDate(v) {
 }
 
 export default function DeploymentsPanel({ onTest, onSim, onManualTrade, sessionHealth, globalConfig }) {
+    const confirm = useConfirm();
     const navigate = useNavigate();
     // Open the analytics view (equity curve / calendar / trades / distribution)
     // scoped to this deployment. Carries deploymentId + strategy + label in the
@@ -138,11 +141,11 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
     // Defaults OPEN — this is the primary management surface.
     const [panelOpen, setPanelOpen] = useState(() => {
         try { const v = localStorage.getItem('dash:deploymentsOpen'); return v === null ? true : v === '1'; }
-        catch (_) { return true; }
+        catch { return true; }
     });
     const togglePanel = () => setPanelOpen(prev => {
         const next = !prev;
-        try { localStorage.setItem('dash:deploymentsOpen', next ? '1' : '0'); } catch (_) {}
+        try { localStorage.setItem('dash:deploymentsOpen', next ? '1' : '0'); } catch { /* localStorage unavailable (private mode / blocked cookies) — the preference just does not persist */ }
         return next;
     });
 
@@ -185,7 +188,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
         try {
             const s = await axios.get(`${API_URL}/deployments/pnl-summary`, { params: { windows: '7,30' } });
             setPnlSummary(s.data?.summary || {});
-        } catch (_) { /* badges simply show — */ }
+        } catch { /* badges simply show — */ }
     }, []);
 
     useEffect(() => { fetchAll(); }, [fetchAll]);
@@ -253,7 +256,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
             const confirmMsg = newMode === 'LIVE'
                 ? `Switch "${d.name}" to LIVE? Real orders will be placed at the broker.`
                 : `Switch "${d.name}" to PAPER?`;
-            if (!window.confirm(confirmMsg)) return;
+            if (!await confirm(confirmMsg)) return;
             await _mutate('Mode', () => axios.post(`${API_URL}/deployments/${d._id}/toggle-mode`, { tradeMode: newMode }));
         } finally { setBusyId(null); }
     };
@@ -267,14 +270,14 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
         const confirmMsg = next
             ? `Enable AI confirmation for "${d.name}"?\n\nEvery signal will be sent to the AI for a CONFIRM/REJECT verdict before entry, and its SL/TP may be applied (subject to the reward:risk floor).`
             : `Disable AI confirmation for "${d.name}"?\n\nSignals will go straight to execution with NO AI gate, using the strategy's own SL/TP.`;
-        if (!window.confirm(confirmMsg)) return;
+        if (!await confirm(confirmMsg)) return;
         setBusyId(d._id);
         try {
             await _mutate('AI toggle', () => axios.post(`${API_URL}/deployments/${d._id}/toggle-ai`, { enabled: next }));
         } finally { setBusyId(null); }
     };
     const remove = async (d) => {
-        if (!window.confirm(`Delete deployment "${d.name}"?\nEngine refuses if a position is still open on it.`)) return;
+        if (!await confirm({ title: 'Delete deployment', body: `Delete deployment "${d.name}"?\nEngine refuses if a position is still open on it.`, danger: true, confirmLabel: 'Delete deployment' })) return;
         setBusyId(d._id);
         try {
             await _mutate('Delete', () => axios.delete(`${API_URL}/deployments/${d._id}`));
@@ -282,7 +285,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
     };
 
     return (
-        <div className="bg-surface rounded-xl border border-slate-700 p-6">
+        <div className="bg-surface rounded-xl border border-line p-6">
             {/* ── Header (click the title to fold the whole panel) ─────────── */}
             <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                 <button
@@ -293,10 +296,10 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                     className="text-xl font-bold flex items-center gap-2 text-left hover:text-primary transition-colors"
                 >
                     {panelOpen
-                        ? <ChevronDown className="w-4 h-4 text-slate-400" />
-                        : <ChevronRight className="w-4 h-4 text-slate-400" />}
+                        ? <ChevronDown className="w-4 h-4 text-fg-4" />
+                        : <ChevronRight className="w-4 h-4 text-fg-4" />}
                     🧩 Multi-Strategy Deployments
-                    <span className="text-xs font-normal text-slate-500">
+                    <span className="text-xs font-normal text-fg-5">
                         ({counts.all}) · {Object.keys(bySymbol).length || 0} symbol{Object.keys(bySymbol).length === 1 ? '' : 's'}
                     </span>
                 </button>
@@ -308,7 +311,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                                 if (!allExpanded) for (const id of allIds) next[id] = true;
                                 setExpanded(next);
                             }}
-                            className="text-[11px] px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200"
+                            className="text-2xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-fg-2"
                         >
                             {allExpanded ? 'Collapse all' : 'Expand all'}
                         </button>
@@ -316,13 +319,13 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                     <button
                         onClick={fetchAll}
                         disabled={loading}
-                        className="text-[11px] px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-50"
+                        className="text-2xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-fg-3 disabled:opacity-50"
                     >
                         {loading ? '…' : 'Refresh'}
                     </button>
                     <button
                         onClick={() => { setCreateDefaults(null); setShowCreate(true); }}
-                        className="text-[11px] px-3 py-1 rounded bg-primary text-white font-semibold hover:opacity-90"
+                        className="text-2xs px-3 py-1 rounded bg-primary text-white font-semibold hover:opacity-90"
                     >
                         + Add Deployment
                     </button>
@@ -331,21 +334,26 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
 
             {panelOpen && (<>
             {/* ── Filter chips + search (parity with legacy) ───────────────── */}
+            {/* Tint fills below are `bg-{hue}-800/40`, not `-700/40`: 700 is the solid
+                role and holds a saturated mid-tone in both modes, but the 100-300 ink
+                band inverts to dark on light themes, so dark-on-mid collapsed to
+                4.45:1. 800 is the tint role and inverts with its ink. (The neutral
+                `bg-` chip below rides the separate fill ramp and is correct as-is.) */}
             {counts.all > 0 && (
                 <div className="flex items-center gap-2 flex-wrap mb-4">
                     {[
-                        { key: 'all',      label: 'All',      cls: 'bg-slate-700 text-slate-200' },
-                        { key: 'live',     label: 'Live',     cls: 'bg-red-700/40 text-red-200 border-red-700' },
-                        { key: 'paper',    label: 'Paper',    cls: 'bg-blue-700/40 text-blue-200 border-blue-700' },
-                        { key: 'inactive', label: 'Inactive', cls: 'bg-slate-700/40 text-slate-400 border-slate-600' },
+                        { key: 'all',      label: 'All',      cls: 'bg-slate-700 text-fg-2' },
+                        { key: 'live',     label: 'Live',     cls: 'bg-red-800/40 text-red-200 border-red-700' },
+                        { key: 'paper',    label: 'Paper',    cls: 'bg-blue-800/40 text-blue-200 border-blue-700' },
+                        { key: 'inactive', label: 'Inactive', cls: 'bg-slate-700/40 text-fg-4 border-line-2' },
                     ].map(chip => {
                         const active = modeFilter === chip.key;
                         return (
                             <button
                                 key={chip.key}
                                 onClick={() => setModeFilter(chip.key)}
-                                className={`text-[11px] px-2 py-1 rounded border ${
-                                    active ? chip.cls : 'bg-slate-800 text-slate-500 border-slate-700 hover:text-slate-300'
+                                className={`text-2xs px-2 py-1 rounded border ${
+                                    active ? chip.cls : 'bg-slate-800 text-fg-5 border-line hover:text-fg-3'
                                 }`}
                             >
                                 {chip.label} <span className="opacity-70">·{counts[chip.key]}</span>
@@ -357,7 +365,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                         placeholder="Search symbol, strategy or name…"
                         value={search}
                         onChange={e => setSearch(e.target.value)}
-                        className="flex-1 min-w-[200px] bg-slate-800 border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-200"
+                        className="flex-1 min-w-[200px] bg-slate-800 border border-line rounded px-2 py-1 text-2xs text-fg-2"
                     />
                 </div>
             )}
@@ -369,12 +377,12 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
             )}
 
             {counts.all === 0 && !loading && (
-                <div className="text-center py-8 text-slate-500 text-sm bg-slate-900/40 rounded border border-dashed border-slate-700">
+                <div className="text-center py-8 text-fg-5 text-sm bg-slate-900/40 rounded border border-dashed border-line">
                     No deployments yet. Click <b>+ Add Deployment</b> to wire up a strategy on a symbol.
                 </div>
             )}
             {counts.all > 0 && filtered.length === 0 && (
-                <div className="text-slate-500 text-sm italic p-4 text-center border border-dashed border-slate-700 rounded-lg">
+                <div className="text-fg-5 text-sm italic p-4 text-center border border-dashed border-line rounded-lg">
                     No deployments match the current filter.
                     <button
                         onClick={() => { setSearch(''); setModeFilter('all'); }}
@@ -388,17 +396,17 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                 {symbols.map(sym => {
                     const list = bySymbol[sym];
                     return (
-                        <div key={sym} className="rounded-lg border border-slate-800 bg-slate-900/30 p-3">
+                        <div key={sym} className="rounded-lg border border-line-0 bg-slate-900/30 p-3">
                             <div className="flex items-center justify-between mb-2 gap-2">
                                 <div className="flex items-center gap-2 min-w-0">
-                                    <span className="font-mono text-sm text-white truncate">{sym}</span>
-                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                                    <span className="font-mono text-sm text-fg truncate">{sym}</span>
+                                    <span className="text-3xs px-1.5 py-0.5 rounded bg-slate-800 text-fg-4">
                                         {list.length} deployment{list.length === 1 ? '' : 's'}
                                     </span>
                                 </div>
                                 <button
                                     onClick={() => { setCreateDefaults({ symbol: sym }); setShowCreate(true); }}
-                                    className="text-[10px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300"
+                                    className="text-3xs px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-fg-3"
                                     title={`Add another strategy on ${sym}`}
                                 >
                                     + Add to {sym.split(':').pop().replace('-INDEX', '')}
@@ -455,10 +463,10 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
 // stats = { pnl, trades, wins } or null (no closed tagged trades in window).
 function PnlBadge({ label, stats }) {
     const has = stats && stats.trades > 0;
-    const cls = !has ? 'text-slate-500 border-slate-700 bg-slate-800/40'
+    const cls = !has ? 'text-fg-5 border-line bg-slate-800/40'
         : stats.pnl > 0 ? 'text-emerald-300 border-emerald-700/50 bg-emerald-900/20'
         : stats.pnl < 0 ? 'text-red-300 border-red-700/50 bg-red-900/20'
-        : 'text-slate-300 border-slate-600 bg-slate-800/40';
+        : 'text-fg-3 border-line-2 bg-slate-800/40';
     const title = has
         ? `Last ${label} (this deployment): ${stats.trades} closed trade${stats.trades === 1 ? '' : 's'}, ${stats.wins} win${stats.wins === 1 ? '' : 's'}`
         : `No closed trades tagged to this deployment in the last ${label}`;
@@ -486,7 +494,7 @@ function DeploymentCard({
         <div className={`rounded-lg border overflow-hidden ${
             isActive
                 ? (isLive ? 'border-red-700/50 bg-red-950/10' : 'border-emerald-700/40 bg-emerald-950/10')
-                : 'border-slate-800 bg-slate-900/40 opacity-80'
+                : 'border-line-0 bg-slate-900/40 opacity-80'
         }`}>
             {/* ── Row 1: toggles + identity + action buttons ──────────────── */}
             <div className="px-3 py-2 flex items-center justify-between gap-2 flex-wrap">
@@ -504,8 +512,8 @@ function DeploymentCard({
                     </label>
 
                     {/* PAPER/LIVE toggle (switch — same style as legacy) */}
-                    <div className="flex items-center bg-slate-800/80 px-2 py-1 rounded border border-slate-600/50">
-                        <span className={`text-xs mr-2 font-bold ${isLive ? 'text-slate-400' : 'text-blue-400'}`}>PAPER</span>
+                    <div className="flex items-center bg-slate-800/80 px-2 py-1 rounded border border-line-2/50">
+                        <span className={`text-xs mr-2 font-bold ${isLive ? 'text-fg-4' : 'text-blue-400'}`}>PAPER</span>
                         <label className="relative inline-flex items-center cursor-pointer" title="Toggle Trade Mode (PAPER/LIVE) for THIS deployment only">
                             <input
                                 type="checkbox"
@@ -516,13 +524,13 @@ function DeploymentCard({
                             />
                             <div className="w-9 h-5 bg-blue-500/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-red-500/80"></div>
                         </label>
-                        <span className={`text-xs ml-2 font-bold ${isLive ? 'text-red-400' : 'text-slate-400'}`}>LIVE</span>
+                        <span className={`text-xs ml-2 font-bold ${isLive ? 'text-red-400' : 'text-fg-4'}`}>LIVE</span>
                     </div>
 
                     {/* AI confirmation toggle (switch — same affordance as PAPER/LIVE).
                         OFF means signals go straight to execution on the strategy's
                         own SL/TP, with no CONFIRM/REJECT gate and no AI bracket. */}
-                    <div className="flex items-center bg-slate-800/80 px-2 py-1 rounded border border-slate-600/50">
+                    <div className="flex items-center bg-slate-800/80 px-2 py-1 rounded border border-line-2/50">
                         <span className="text-xs mr-2" aria-hidden="true">🤖</span>
                         <label
                             className="relative inline-flex items-center cursor-pointer"
@@ -539,21 +547,26 @@ function DeploymentCard({
                             />
                             <div className="w-9 h-5 bg-slate-600 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-violet-500"></div>
                         </label>
-                        <span className={`text-xs ml-2 font-bold ${aiEnabled ? 'text-violet-300' : 'text-slate-500'}`}>AI</span>
+                        <span className={`text-xs ml-2 font-bold ${aiEnabled ? 'text-violet-300' : 'text-fg-5'}`}>AI</span>
                     </div>
 
                     {/* Identity — name is clickable → opens analytics for this deployment */}
                     <button
                         onClick={onResults}
-                        className="text-sm text-slate-100 font-semibold truncate hover:text-primary hover:underline text-left"
+                        className="text-sm text-fg font-semibold truncate hover:text-primary hover:underline text-left"
                         title={`View results & charts for "${d.name}"`}
                     >
                         {d.name}
                     </button>
-                    <span className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-gray-400" title={d.strategyName}>
+                    {/* A faint raised chip. `white/5` + `white/10` is a dark-mode-only idiom:
+                        on a light theme a 5% white wash over a white card is a literal no-op
+                        (1.00:1). fg/5 is the same thing expressed as INK-over-surface, so it
+                        is byte-identical in every dark theme and becomes a faint grey chip on
+                        the light ones. */}
+                    <span className="text-xs px-2 py-1 rounded bg-fg/5 border border-fg/10 text-fg-4" title={d.strategyName}>
                         {strategyLabel(strategies, d.strategyName)}
                     </span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300 font-mono">{resolution}m</span>
+                    <span className="text-3xs px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300 font-mono">{resolution}m</span>
                     {/* The 🤖 toggle above already shows whether AI is on; this badge
                         now carries only the extra detail it can't — that the AI's
                         SL/TP is being adopted (subject to the reward:risk floor). */}
@@ -566,10 +579,10 @@ function DeploymentCard({
                         </span>
                     )}
                     <span
-                        className="text-[10px] font-mono text-slate-500"
+                        className="text-3xs font-mono text-fg-5"
                         title={`Deployment ID: ${d._id}\nClick to copy`}
                         style={{ cursor: 'copy' }}
-                        onClick={() => { try { navigator.clipboard.writeText(d._id); } catch (_) {} }}
+                        onClick={() => { try { navigator.clipboard.writeText(d._id); } catch (err) { console.warn('Clipboard write failed (needs a secure context / permission):', err); } }}
                     >
                         {String(d._id).slice(-6).toUpperCase()}
                     </span>
@@ -584,7 +597,7 @@ function DeploymentCard({
                     {onResults && (
                         <button
                             onClick={onResults}
-                            className="px-3 py-1 bg-primary/15 hover:bg-primary/25 text-primary border border-primary/40 rounded text-xs font-semibold transition-colors"
+                            className="px-3 py-1 bg-primary/15 hover:bg-primary/25 text-primary-ink border border-primary/40 rounded text-xs font-semibold transition-colors"
                             title="Equity curve, calendar, trades table & PnL distribution for this deployment"
                         >
                             📊 Results
@@ -629,7 +642,7 @@ function DeploymentCard({
                     <button
                         onClick={onToggleEdit}
                         disabled={isBusy}
-                        className="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 disabled:opacity-50"
+                        className="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-fg-4 disabled:opacity-50"
                         title="Edit name / params (JSON)"
                     >
                         {isEditing ? '× Close' : 'Edit'}
@@ -647,19 +660,19 @@ function DeploymentCard({
 
             {/* ── AI Settings Summary strip (ported 1:1 from legacy) ───────── */}
             {aiEnabled && (
-                <div className="px-4 py-2 border-t border-violet-500/20 bg-violet-500/5 flex flex-wrap gap-2 text-[11px]">
+                <div className="px-4 py-2 border-t border-violet-500/20 bg-violet-500/5 flex flex-wrap gap-2 text-2xs">
                     <span className="text-violet-400 font-semibold">✨ AI Risk Filter:</span>
-                    <span className={`px-1.5 py-0.5 rounded ${params.ai_follow_sl_tp ? 'bg-green-500/20 text-green-300' : 'bg-slate-700 text-slate-400'}`}>
+                    <span className={`px-1.5 py-0.5 rounded ${params.ai_follow_sl_tp ? 'bg-green-500/20 text-green-300' : 'bg-slate-700 text-fg-4'}`}>
                         {params.ai_follow_sl_tp ? '✓ AI SL/TP' : 'Strategy SL/TP'}
                     </span>
                     {params.ai_follow_strategy_exits && (
                         <span className="px-1.5 py-0.5 rounded bg-green-500/20 text-green-300">✓ Strategy Exits</span>
                     )}
-                    <span className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-300">
+                    <span className="px-1.5 py-0.5 rounded bg-slate-700 text-fg-3">
                         Thresh: {Math.round((params.ai_confidence_threshold || 0.6) * 100)}%
                     </span>
                     {params.ai_models && (
-                        <span className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-400">
+                        <span className="px-1.5 py-0.5 rounded bg-slate-700 text-fg-4">
                             {Array.isArray(params.ai_models) ? params.ai_models.join(', ') : params.ai_models}
                         </span>
                     )}
@@ -669,7 +682,7 @@ function DeploymentCard({
                         const isBad = h && h.valid === false;
                         return (
                             <span
-                                className={`px-1.5 py-0.5 rounded ${isBad ? 'bg-red-700/60 text-red-100 ring-1 ring-red-400 animate-pulse' : 'bg-amber-700/40 text-amber-200'}`}
+                                className={`px-1.5 py-0.5 rounded ${isBad ? 'bg-red-800/60 text-red-100 ring-1 ring-red-400 animate-pulse' : 'bg-amber-800/40 text-amber-200'}`}
                                 title={
                                     `Model: ${params.claude_web_model || 'claude-web/claude-sonnet-4-6'}` +
                                     `\nBatch size: ${parseInt(params.claude_web_batch_size, 10) || 1}×` +
@@ -694,7 +707,7 @@ function DeploymentCard({
                         const isBad = h && h.valid === false;
                         return (
                             <span
-                                className={`px-1.5 py-0.5 rounded ${isBad ? 'bg-red-700/60 text-red-100 ring-1 ring-red-400 animate-pulse' : 'bg-cyan-700/40 text-cyan-200'}`}
+                                className={`px-1.5 py-0.5 rounded ${isBad ? 'bg-red-800/60 text-red-100 ring-1 ring-red-400 animate-pulse' : 'bg-cyan-800/40 text-cyan-200'}`}
                                 title={
                                     `Model: ${params.gemini_web_model || 'gemini-web/gemini-2.5-pro'}` +
                                     `\nBatch size: ${parseInt(params.gemini_web_batch_size, 10) || 1}×` +
@@ -716,7 +729,7 @@ function DeploymentCard({
                     })()}
                     {params.claude_thinking_enabled && (
                         <span
-                            className="px-1.5 py-0.5 rounded bg-orange-700/40 text-orange-200"
+                            className="px-1.5 py-0.5 rounded bg-orange-800/40 text-orange-200"
                             title={
                                 `Thinking budget: ${(parseInt(params.claude_thinking_budget, 10) || 32000).toLocaleString()} tokens` +
                                 `\nApplies to: Anthropic API + Claude.ai web (paprika_mode)` +
@@ -728,7 +741,7 @@ function DeploymentCard({
                     )}
                     {params.ai_fail_closed && (
                         <span
-                            className="px-1.5 py-0.5 rounded bg-red-700/40 text-red-200"
+                            className="px-1.5 py-0.5 rounded bg-red-800/40 text-red-200"
                             title="On AI timeout/error: REJECT the trade instead of falling back to threshold gate"
                         >
                             🛑 Fail-closed
@@ -736,7 +749,7 @@ function DeploymentCard({
                     )}
                     {params.ai_use_spot_exits && (
                         <span
-                            className="px-1.5 py-0.5 rounded bg-cyan-700/40 text-cyan-200"
+                            className="px-1.5 py-0.5 rounded bg-cyan-800/40 text-cyan-200"
                             title={
                                 `Live engine actively monitors the index and fires market exits when ` +
                                 `spot crosses AI's suggested SL/TP exactly.\n\n` +
@@ -749,7 +762,7 @@ function DeploymentCard({
                     )}
                     {params.ai_follow_strategy_exits === false && (
                         <span
-                            className="px-1.5 py-0.5 rounded bg-amber-700/50 text-amber-200 ring-1 ring-amber-500/40"
+                            className="px-1.5 py-0.5 rounded bg-amber-800/50 text-amber-200 ring-1 ring-amber-500/40"
                             title={
                                 `ai_follow_strategy_exits = FALSE → live rides positions to the AI SL/TP instead ` +
                                 `of following the strategy's exits (the same switch the backtest AI column uses).\n\n` +
@@ -764,7 +777,7 @@ function DeploymentCard({
                     )}
                     {params.use_ai_fair_entry && (
                         <span
-                            className="px-1.5 py-0.5 rounded bg-teal-700/40 text-teal-200"
+                            className="px-1.5 py-0.5 rounded bg-teal-800/40 text-teal-200"
                             title="AI suggests a fair-value spot level after breakout. Live: limit order at suggested premium. Paper: waits for LTP to pull back. Skips if not reached in 3 candles (~15 min)."
                         >
                             🎯 Fair Entry
@@ -772,7 +785,7 @@ function DeploymentCard({
                     )}
                     {params.enable_mastra_validator && (
                         <span
-                            className="px-1.5 py-0.5 rounded bg-purple-700/40 text-purple-200"
+                            className="px-1.5 py-0.5 rounded bg-purple-800/40 text-purple-200"
                             title="Mastra second-AI validator runs at trade execution time. Off by default; only matters if explicitly enabled."
                         >
                             🤖 Mastra Gate
@@ -782,7 +795,7 @@ function DeploymentCard({
             )}
 
             {/* ── Quick-stats strip — always visible (parity with legacy) ──── */}
-            <div className="px-4 py-2 border-t border-slate-700 bg-slate-900/40 flex flex-wrap gap-x-6 gap-y-1 text-[11px]">
+            <div className="px-4 py-2 border-t border-line bg-slate-900/40 flex flex-wrap gap-x-6 gap-y-1 text-2xs">
                 {(() => {
                     const quickKeys = [
                         { k: 'capital',          label: 'Capital',   prefix: '₹' },
@@ -801,8 +814,8 @@ function DeploymentCard({
                         }
                         return (
                             <div key={k} className="flex items-center gap-1">
-                                <span className="text-slate-500 uppercase text-[9px] tracking-wider">{label}</span>
-                                <span className="font-mono text-slate-200 font-bold">{prefix}{typeof val === 'number' ? val.toLocaleString() : val}</span>
+                                <span className="text-fg-5 uppercase text-4xs tracking-wider">{label}</span>
+                                <span className="font-mono text-fg-2 font-bold">{prefix}{typeof val === 'number' ? val.toLocaleString() : val}</span>
                             </div>
                         );
                     });
@@ -810,19 +823,19 @@ function DeploymentCard({
                 {/* Deployed = createdAt, Updated = updatedAt (bumped on every save/toggle). */}
                 {fmtDate(d.createdAt) && (
                     <div className="flex items-center gap-1" title={`Deployed on ${new Date(d.createdAt).toString()}`}>
-                        <span className="text-slate-500 uppercase text-[9px] tracking-wider">Deployed</span>
-                        <span className="font-mono text-slate-300">{fmtDate(d.createdAt)}</span>
+                        <span className="text-fg-5 uppercase text-4xs tracking-wider">Deployed</span>
+                        <span className="font-mono text-fg-3">{fmtDate(d.createdAt)}</span>
                     </div>
                 )}
                 {fmtDate(d.updatedAt) && (
                     <div className="flex items-center gap-1" title={`Last updated ${new Date(d.updatedAt).toString()}`}>
-                        <span className="text-slate-500 uppercase text-[9px] tracking-wider">Updated</span>
-                        <span className="font-mono text-slate-300">{fmtDate(d.updatedAt)}</span>
+                        <span className="text-fg-5 uppercase text-4xs tracking-wider">Updated</span>
+                        <span className="font-mono text-fg-3">{fmtDate(d.updatedAt)}</span>
                     </div>
                 )}
                 <button
                     onClick={onToggleExpand}
-                    className="ml-auto text-[10px] px-2 py-0.5 rounded bg-slate-700/60 hover:bg-slate-700 text-slate-300"
+                    className="ml-auto text-3xs px-2 py-0.5 rounded bg-slate-700/60 hover:bg-slate-700 text-fg-3"
                 >
                     {isExpanded ? '▲ Hide details' : '▼ Show all params'}
                 </button>
@@ -830,7 +843,7 @@ function DeploymentCard({
 
             {/* ── All-params grid — collapsed by default (parity with legacy) ── */}
             {isExpanded && (
-                <div className="p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 border-t border-slate-800">
+                <div className="p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 border-t border-line-0">
                     {Object.entries(params).map(([key, val]) => {
                         if (key === 'strategyName' || key === 'resolution') return null; // in header
                         if (AI_PARAM_KEYS.includes(key)) return null; // in AI strip
@@ -845,17 +858,17 @@ function DeploymentCard({
                         if (isGlobalOverride && globalConfig && globalConfig[key] != null && globalConfig[key] !== val) {
                             displayVal = globalConfig[key];
                             overrideTag = (
-                                <span className="text-[9px] text-amber-400 font-normal ml-1" title={`Stored on deployment: ₹${val}. Engine uses global setting (₹${globalConfig[key]}).`}>
+                                <span className="text-4xs text-amber-400 font-normal ml-1" title={`Stored on deployment: ₹${val}. Engine uses global setting (₹${globalConfig[key]}).`}>
                                     (global ↑ from ₹{val})
                                 </span>
                             );
                         }
                         return (
                             <div key={key} className="overflow-hidden">
-                                <p className="text-slate-500 text-[10px] uppercase font-bold tracking-wider mb-0.5">
+                                <p className="text-fg-5 text-3xs uppercase font-bold tracking-wider mb-0.5">
                                     {key.replace(/_/g, ' ')}{overrideTag}
                                 </p>
-                                <p className={`font-mono text-sm truncate ${isKey ? 'text-white font-bold' : 'text-slate-300'} ${typeof val === 'boolean' ? (val ? 'text-green-400' : 'text-red-400') : ''}`} title={String(displayVal)}>
+                                <p className={`font-mono text-sm truncate ${isKey ? 'text-fg font-bold' : 'text-fg-3'} ${typeof val === 'boolean' ? (val ? 'text-green-400' : 'text-red-400') : ''}`} title={String(displayVal)}>
                                     {String(displayVal)}
                                 </p>
                             </div>
@@ -877,6 +890,7 @@ function DeploymentCard({
 }
 
 function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreated }) {
+    useEscapeKey(onClose);
     const stratList = (strategies && strategies.length) ? strategies : KNOWN_STRATEGIES_FALLBACK;
     const [symbol, setSymbol] = useState(defaults?.symbol || KNOWN_SYMBOLS[0]);
     const [strategyName, setStrategyName] = useState(stratList[0]?.id || stratList[0]);
@@ -931,12 +945,12 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
     return (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
             <div
-                className="bg-surface rounded-xl border border-slate-700 p-5 w-full max-w-md max-h-[90vh] overflow-y-auto"
+                className="bg-surface rounded-xl border border-line p-5 w-full max-w-md max-h-[90vh] overflow-y-auto"
                 onClick={(e) => e.stopPropagation()}
             >
                 <div className="flex items-center justify-between mb-3">
                     <h4 className="font-bold text-lg">New Deployment</h4>
-                    <button onClick={onClose} className="text-slate-400 hover:text-white">×</button>
+                    <button onClick={onClose} className="text-fg-4 hover:text-fg">×</button>
                 </div>
                 {err && <div className="mb-2 px-2 py-1 rounded bg-rose-950/40 border border-rose-700 text-rose-200 text-xs">{err}</div>}
                 <div className="space-y-2 text-sm">
@@ -944,7 +958,7 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
                         <label className="block bg-blue-950/30 border border-blue-800/50 rounded p-2">
                             <span className="text-xs font-bold text-blue-300">📂 Start from Saved Config <span className="font-normal text-blue-400/70">(from Backtest → Save)</span></span>
                             <select
-                                className="mt-1 w-full bg-slate-900 border border-blue-700/50 rounded px-2 py-1 text-white"
+                                className="mt-1 w-full bg-slate-900 border border-blue-700/50 rounded px-2 py-1 text-fg"
                                 value={sourceConfigId}
                                 onChange={(e) => applySavedConfig(e.target.value)}
                             >
@@ -958,14 +972,14 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
                         </label>
                     )}
                     <label className="block">
-                        <span className="text-xs text-slate-400">Symbol</span>
-                        <select className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white" value={symbol} onChange={(e) => setSymbol(e.target.value)}>
+                        <span className="text-xs text-fg-4">Symbol</span>
+                        <select className="mt-0.5 w-full bg-slate-900 border border-line rounded px-2 py-1 text-fg" value={symbol} onChange={(e) => setSymbol(e.target.value)}>
                             {KNOWN_SYMBOLS.map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
                     </label>
                     <label className="block">
-                        <span className="text-xs text-slate-400">Strategy</span>
-                        <select className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white" value={strategyName} onChange={(e) => setStrategyName(e.target.value)}>
+                        <span className="text-xs text-fg-4">Strategy</span>
+                        <select className="mt-0.5 w-full bg-slate-900 border border-line rounded px-2 py-1 text-fg" value={strategyName} onChange={(e) => setStrategyName(e.target.value)}>
                             {stratList.map(s => {
                                 const id = s?.id || s;
                                 const label = s?.label || s;
@@ -974,18 +988,18 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
                         </select>
                     </label>
                     <label className="block">
-                        <span className="text-xs text-slate-400">Resolution (minutes)</span>
-                        <select className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white" value={resolution} onChange={(e) => setResolution(e.target.value)}>
+                        <span className="text-xs text-fg-4">Resolution (minutes)</span>
+                        <select className="mt-0.5 w-full bg-slate-900 border border-line rounded px-2 py-1 text-fg" value={resolution} onChange={(e) => setResolution(e.target.value)}>
                             {RESOLUTIONS.map(r => <option key={r} value={r}>{r}m</option>)}
                         </select>
                     </label>
                     <label className="block">
-                        <span className="text-xs text-slate-400">Display name (optional)</span>
-                        <input className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white" placeholder={`${symbol} · ${strategyName} · ${resolution}m`} value={name} onChange={(e) => setName(e.target.value)} />
+                        <span className="text-xs text-fg-4">Display name (optional)</span>
+                        <input className="mt-0.5 w-full bg-slate-900 border border-line rounded px-2 py-1 text-fg" placeholder={`${symbol} · ${strategyName} · ${resolution}m`} value={name} onChange={(e) => setName(e.target.value)} />
                     </label>
                     <label className="block">
-                        <span className="text-xs text-slate-400">Mode</span>
-                        <select className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white" value={tradeMode} onChange={(e) => setTradeMode(e.target.value)}>
+                        <span className="text-xs text-fg-4">Mode</span>
+                        <select className="mt-0.5 w-full bg-slate-900 border border-line rounded px-2 py-1 text-fg" value={tradeMode} onChange={(e) => setTradeMode(e.target.value)}>
                             <option value="PAPER">PAPER</option>
                             <option value="LIVE">LIVE</option>
                         </select>
@@ -995,9 +1009,9 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
                         <span className="text-xs">Activate immediately</span>
                     </label>
                     <label className="block">
-                        <span className="text-xs text-slate-400">Extra params (JSON; <code>resolution</code> auto-injected)</span>
+                        <span className="text-xs text-fg-4">Extra params (JSON; <code>resolution</code> auto-injected)</span>
                         <textarea
-                            className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white font-mono text-[11px]"
+                            className="mt-0.5 w-full bg-slate-900 border border-line rounded px-2 py-1 text-fg font-mono text-2xs"
                             rows={6}
                             placeholder='{"ema_short": 5, "ema_long": 7}'
                             value={paramsJson}
@@ -1006,7 +1020,7 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
                     </label>
                 </div>
                 <div className="flex justify-end gap-2 mt-3">
-                    <button onClick={onClose} className="px-3 py-1 text-xs rounded bg-slate-800 text-slate-300 hover:bg-slate-700">Cancel</button>
+                    <button onClick={onClose} className="px-3 py-1 text-xs rounded bg-slate-800 text-fg-3 hover:bg-slate-700">Cancel</button>
                     <button
                         onClick={submit}
                         disabled={submitting}
@@ -1039,23 +1053,23 @@ function EditDeployment({ deployment, onClose, onSaved }) {
         } finally { setBusy(false); }
     };
     return (
-        <div className="m-3 mt-0 p-2 rounded border border-slate-700 bg-slate-950/50 text-xs space-y-2">
+        <div className="m-3 mt-0 p-2 rounded border border-line bg-slate-950/50 text-xs space-y-2">
             {err && <div className="px-2 py-1 rounded bg-rose-950/40 border border-rose-700 text-rose-200">{err}</div>}
             <label className="block">
-                <span className="text-[10px] text-slate-500">Name</span>
-                <input className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white" value={name} onChange={(e) => setName(e.target.value)} />
+                <span className="text-3xs text-fg-5">Name</span>
+                <input className="mt-0.5 w-full bg-slate-900 border border-line rounded px-2 py-1 text-fg" value={name} onChange={(e) => setName(e.target.value)} />
             </label>
             <label className="block">
-                <span className="text-[10px] text-slate-500">Params JSON</span>
+                <span className="text-3xs text-fg-5">Params JSON</span>
                 <textarea
-                    className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white font-mono text-[10px]"
+                    className="mt-0.5 w-full bg-slate-900 border border-line rounded px-2 py-1 text-fg font-mono text-3xs"
                     rows={8}
                     value={paramsJson}
                     onChange={(e) => setParamsJson(e.target.value)}
                 />
             </label>
             <div className="flex justify-end gap-2">
-                <button onClick={onClose} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700">Cancel</button>
+                <button onClick={onClose} className="px-2 py-0.5 rounded bg-slate-800 text-fg-3 hover:bg-slate-700">Cancel</button>
                 <button onClick={save} disabled={busy} className="px-2 py-0.5 rounded bg-primary text-white disabled:opacity-50">
                     {busy ? 'Saving…' : 'Save'}
                 </button>

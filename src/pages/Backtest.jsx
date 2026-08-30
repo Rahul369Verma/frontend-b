@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
 import { Play, Activity, ChevronDown, ChevronUp, Bot, Copy, Check, Square, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useGlobalState } from '../context/GlobalContext';
 import CollapsibleCard from '../components/CollapsibleCard';
 import AttributionPanel from '../components/viz/AttributionPanel';
+import { useChartTheme } from '../theme/chartTheme.js';
 
-const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
 
 // ── Enum params → dropdown options ───────────────────────────────────────
 // Keyed by strategyId → { paramKey: [option, ...] }. Any param listed here
@@ -46,6 +46,9 @@ const COUNCIL_MEMBER_OPTIONS = [
 import { useLocation } from 'react-router-dom';
 import { INSTRUMENT_CONFIG, MARKET_TIMINGS } from '../constants';
 import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
+import { API_URL } from '../config/api.js';
+import { useEscapeKey } from '../hooks/useEscapeKey.js';
+import { useConfirm } from '../components/confirmContext.js';
 
 // Fallback model list — used only if /api/ai-confirmation/models fails.
 // Live list comes from Python's MODEL_REGISTRY via the API.
@@ -83,7 +86,7 @@ function modelGroupFor(id) {
 function modelBadgeFor(id) {
     if (!id) return null;
     if (id === 'auto-confirmed (signal cap)') {
-        return { short: 'auto-cap', cls: 'italic text-slate-500', vendor: 'auto' };
+        return { short: 'auto-cap', cls: 'italic text-fg-5', vendor: 'auto' };
     }
     if (id.startsWith('claude-web/')) {
         return {
@@ -120,10 +123,14 @@ function modelBadgeFor(id) {
             vendor: 'google',
         };
     }
-    return { short: id, cls: 'bg-slate-800 text-slate-300', vendor: 'other' };
+    return { short: id, cls: 'bg-slate-800 text-fg-3', vendor: 'other' };
 }
 
 export default function Backtest() {
+  const confirm = useConfirm();
+  // Chart colours for the ACTIVE theme. Recharts writes them into SVG
+  // attributes and into plain style objects, so they cannot be var().
+  const ct = useChartTheme();
   const { backtestParams: params, setBacktestParams: setParams, backtestResult: result, setBacktestResult: setResult } = useGlobalState();
   const location = useLocation();
   const [loading, setLoading] = useState(false);
@@ -131,12 +138,12 @@ export default function Backtest() {
   // Persisted so a backtest re-run keeps the same layout.
   const [configCollapsed, setConfigCollapsed] = useState(() => {
     try { return localStorage.getItem('backtest:configCollapsed') === '1'; }
-    catch (_) { return false; }
+    catch { return false; }
   });
   const toggleConfigCollapsed = () => {
     setConfigCollapsed(prev => {
       const next = !prev;
-      try { localStorage.setItem('backtest:configCollapsed', next ? '1' : '0'); } catch (_) {}
+      try { localStorage.setItem('backtest:configCollapsed', next ? '1' : '0'); } catch { /* localStorage unavailable (private mode / blocked cookies) — the preference just does not persist */ }
       return next;
     });
   };
@@ -177,6 +184,13 @@ export default function Backtest() {
       error: null,
       elapsedMs: 0,
   });
+  // Escape closes the Ask-AI modal. The hook has to live at the component's top
+  // level — the `onClose` used by the markup is defined inside a render block,
+  // where a hook call would be conditional and illegal.
+  useEscapeKey(
+      () => setAskAiModal({ open: false, step: 'config', mode: 'params', model: '', result: null, applyMap: {}, error: null, elapsedMs: 0 }),
+      askAiModal.open,
+  );
   const [showAiSim, setShowAiSim] = useState(false);
   const [backtestResultId, setBacktestResultId] = useState(null);
   // Cache of resims keyed by mode. Modes:
@@ -190,14 +204,6 @@ export default function Backtest() {
   const [aiSlTpView, setAiSlTpView] = useState('ai_both');
   // Derived: existing renders read `aiResimMap`; point it at the active variant.
   const aiResimMap = resimVariants[aiSlTpView] || null;
-  // Setter wrapper so the initial resim (runAccurateResim) can stash its result by mode key.
-  const setAiResimMap = useCallback((map, modeKey) => {
-    if (!modeKey) return;
-    setResimVariants(prev => ({ ...prev, [modeKey]: map }));
-  }, []);
-  // Legacy alt map — no longer used; kept null so old references don't error.
-  const aiResimAltMap = null;
-  const aiResimAltLoading = false;
   // Preserved AI decisions for on-demand alt resim (populated when AI job completes)
   const allAiDecisionsRef = useRef({});
   // Prompt copy feedback: key = 'first_<idx>', value = 'copying'|'done'|'error'
@@ -377,13 +383,6 @@ export default function Backtest() {
   const selectResimView = async (mode) => {
     setAiSlTpView(mode);
     if (!resimVariants[mode]) await fetchResimVariant(mode);
-  };
-
-  // Back-compat shim — old `runAltResim` call sites still exist; redirect to new system.
-  const runAltResim = async () => {
-    const current = aiSlTpView;
-    const next = current === 'ai_both' ? 'strategy' : 'ai_both';
-    await selectResimView(next);
   };
 
   useEffect(() => {
@@ -674,7 +673,6 @@ export default function Backtest() {
    */
   const submitAskAi = async (chosenModel, mode = 'params') => {
       const modelId = resolveAskAiModel(chosenModel);
-      const isWebModel = modelId.startsWith('claude-web/') || modelId.startsWith('gemini-web/');
       const currentTunable = buildAskAiPayload();
       const isReview = mode === 'review';
       const reviewSummary = isReview ? buildStrategyReviewSummary() : null;
@@ -837,7 +835,7 @@ export default function Backtest() {
 
   const handleSaveDefault = async () => {
     if (!params.strategy) return alert("Please select a strategy first.");
-    const confirm = window.confirm(`Are you sure you want to update GLOBAL DEFAULTS for ${params.strategy}? This will affect all new backtests.`);
+    const confirm = await confirm(`Are you sure you want to update GLOBAL DEFAULTS for ${params.strategy}? This will affect all new backtests.`);
     if (!confirm) return;
 
     // Filter out system params
@@ -921,11 +919,11 @@ export default function Backtest() {
     if (!params.symbol) return alert("Please select a symbol.");
     // Warn if format is incorrect
     if (!params.symbol.includes(':')) {
-        const proceed = window.confirm(`⚠️ Symbol '${params.symbol}' does not look like a Fyers symbol (e.g., NSE:NIFTYBANK-INDEX). \n\nThe backend will reject this. Do you want to try anyway?`);
+        const proceed = await confirm(`⚠️ Symbol '${params.symbol}' does not look like a Fyers symbol (e.g., NSE:NIFTYBANK-INDEX). \n\nThe backend will reject this. Do you want to try anyway?`);
         if (!proceed) return;
     }
 
-    const confirm = window.confirm(`Are you sure you want to DEPLOY this configuration for ${params.symbol} to the Live Bot?`);
+    const confirm = await confirm(`Are you sure you want to DEPLOY this configuration for ${params.symbol} to the Live Bot?`);
     if (!confirm) return;
 
     // MERGE DEFAULTS: Ensure we save the EXACT snapshot of what the user sees
@@ -1054,12 +1052,12 @@ export default function Backtest() {
     // 1. Tell the server to abort the engine loop (also cancels the AI confirmation job server-side).
     if (backtestJobId) {
       try { await axios.post(`${API_URL}/engine/backtest/cancel/${backtestJobId}`); }
-      catch (_) { /* server may have just finished — ignore */ }
+      catch { /* server may have just finished — ignore */ }
     }
     // 2. Belt-and-braces: cancel AI confirmation directly in case the run/response already returned an ai_job_id.
     if (aiJobId) {
       try { await axios.post(`${API_URL}/ai-confirmation/cancel/${aiJobId}`); }
-      catch (_) {}
+      catch (err) { console.warn('Failed to cancel the AI confirmation job; it may still be running server-side:', err); }
     }
     // 3. Stop frontend polling immediately so the UI reflects the cancel.
     setAiPolling(false);
@@ -1258,9 +1256,9 @@ export default function Backtest() {
   return (
     <div className="p-8 space-y-8">
       <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold text-white">Backtest Strategy</h1>
+        <h1 className="text-3xl font-bold text-fg">Backtest Strategy</h1>
         <button 
-            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded border border-slate-700 text-sm transition-colors"
+            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-fg-3 px-3 py-2 rounded border border-line text-sm transition-colors"
             onClick={() => {
                 const json = prompt("Paste Parameters JSON here:");
                 if (json) {
@@ -1297,29 +1295,29 @@ export default function Backtest() {
       <div className={`grid grid-cols-1 gap-8 ${configCollapsed ? 'lg:grid-cols-[3rem_1fr]' : 'lg:grid-cols-3'}`}>
         {/* Controls — collapsible left panel */}
         {configCollapsed ? (
-          <div className="bg-surface rounded-xl border border-slate-700 flex flex-col items-center py-4 sticky top-4 h-fit">
+          <div className="bg-surface rounded-xl border border-line flex flex-col items-center py-4 sticky top-4 h-fit">
             <button
               onClick={toggleConfigCollapsed}
               title="Expand Configuration"
-              className="text-slate-400 hover:text-white hover:bg-slate-800 rounded p-2 transition-colors"
+              className="text-fg-4 hover:text-fg hover:bg-slate-800 rounded p-2 transition-colors"
             >
               <PanelLeftOpen className="w-5 h-5" />
             </button>
             <div
-              className="mt-4 text-[10px] text-slate-500 font-semibold tracking-widest"
+              className="mt-4 text-3xs text-fg-5 font-semibold tracking-widest"
               style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
             >
               CONFIGURATION
             </div>
           </div>
         ) : (
-        <div className="bg-surface p-6 rounded-xl border border-slate-700 space-y-6 sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto">
+        <div className="bg-surface p-6 rounded-xl border border-line space-y-6 sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto">
           <div className="flex items-center justify-between">
             <h3 className="text-xl font-bold">Configuration</h3>
             <button
               onClick={toggleConfigCollapsed}
               title="Collapse Configuration"
-              className="text-slate-400 hover:text-white hover:bg-slate-800 rounded p-1.5 transition-colors"
+              className="text-fg-4 hover:text-fg hover:bg-slate-800 rounded p-1.5 transition-colors"
             >
               <PanelLeftClose className="w-5 h-5" />
             </button>
@@ -1328,10 +1326,10 @@ export default function Backtest() {
           <div className="space-y-4">
              {/* Saved Config Loader (Backtest Only) */}
              {savedConfigs.length > 0 && (
-                 <div className="bg-slate-800 p-3 rounded border border-slate-600">
-                     <label className="block text-xs font-bold text-blue-400 mb-2">📂 Load Saved Config (Backtest)</label>
-                     <select 
-                         className="w-full bg-slate-900 border border-slate-500 rounded p-2 text-white text-sm"
+                 <div className="bg-slate-800 p-3 rounded border border-line-2">
+                     <label htmlFor="backtest-load-saved-config-backtest-1" className="block text-xs font-bold text-blue-400 mb-2">📂 Load Saved Config (Backtest)</label>
+                     <select id="backtest-load-saved-config-backtest-1" 
+                         className="w-full bg-slate-900 border border-line-3 rounded p-2 text-fg text-sm"
                          onChange={(e) => {
                              const cfg = savedConfigs.find(c => c._id === e.target.value);
                              if (cfg) {
@@ -1357,10 +1355,10 @@ export default function Backtest() {
 
              {/* Live Bot Config Loader */}
              {liveConfigs.length > 0 && (
-                 <div className="bg-slate-800 p-3 rounded border border-slate-600">
-                     <label className="block text-xs font-bold text-green-400 mb-2">📂 Load Deployed Strategy (Live Bot)</label>
-                     <select
-                         className="w-full bg-slate-900 border border-slate-500 rounded p-2 text-white text-sm"
+                 <div className="bg-slate-800 p-3 rounded border border-line-2">
+                     <label htmlFor="backtest-load-deployed-strategy-live--2" className="block text-xs font-bold text-green-400 mb-2">📂 Load Deployed Strategy (Live Bot)</label>
+                     <select id="backtest-load-deployed-strategy-live--2"
+                         className="w-full bg-slate-900 border border-line-3 rounded p-2 text-fg text-sm"
                          onChange={(e) => {
                              // Keyed by _key (deployment _id, or symbol for legacy
                              // fallback rows) — symbol alone collides now that
@@ -1402,9 +1400,9 @@ export default function Backtest() {
              )}
 
             <div>
-              <label className="block text-sm font-medium text-slate-400 mb-1">Strategy</label>
-              <select 
-                className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+              <label htmlFor="backtest-strategy-3" className="block text-sm font-medium text-fg-4 mb-1">Strategy</label>
+              <select id="backtest-strategy-3" 
+                className="w-full bg-slate-900 border border-line rounded p-2 text-fg"
                 value={params.strategy || 'mta_ema_crossover'}
                 onChange={handleStrategyChange}
               >
@@ -1461,12 +1459,12 @@ export default function Backtest() {
                 return (
                     <div>
                         <div className="flex items-center justify-between mb-1">
-                            <label className="block text-sm font-medium text-slate-400">⭐ Load Best Params</label>
+                            <label className="block text-sm font-medium text-fg-4">⭐ Load Best Params</label>
                             <button type="button" onClick={reloadPresets} title="Reload presets from backend"
-                                className="text-[11px] px-1.5 py-0.5 rounded border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500">↻</button>
+                                className="text-2xs px-1.5 py-0.5 rounded border border-line text-fg-4 hover:text-fg hover:border-line-3">↻</button>
                         </div>
                         <select
-                            className="w-full bg-slate-900 border border-amber-700/50 rounded p-2 text-white disabled:opacity-60"
+                            className="w-full bg-slate-900 border border-amber-700/50 rounded p-2 text-fg disabled:opacity-60"
                             value={appliedId}
                             disabled={list.length === 0}
                             onChange={e => {
@@ -1493,16 +1491,16 @@ export default function Backtest() {
                             ))}
                         </select>
                         {applied && (
-                            <div className={`text-[11px] mt-1 leading-relaxed ${applied.evidence === 'validated' ? 'text-emerald-400/90' : 'text-slate-400'}`}>
+                            <div className={`text-2xs mt-1 leading-relaxed ${applied.evidence === 'validated' ? 'text-emerald-400/90' : 'text-fg-4'}`}>
                                 <span className="font-bold">{applied.evidence === 'validated' ? '✓ Validated on archives: ' : '≈ Principled (backtest before deploying): '}</span>
                                 {applied.desc}
                                 <div className="mt-1 flex flex-wrap gap-1">
-                                    <span className="text-slate-500 font-bold">Applied:</span>
+                                    <span className="text-fg-5 font-bold">Applied:</span>
                                     {Object.entries(applied.params).length === 0 && (
-                                        <span className="text-slate-500">restored strategy defaults (no overrides)</span>
+                                        <span className="text-fg-5">restored strategy defaults (no overrides)</span>
                                     )}
                                     {Object.entries(applied.params).map(([k, v]) => (
-                                        <span key={k} className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-amber-200/90 font-mono text-[10px]">
+                                        <span key={k} className="px-1.5 py-0.5 rounded bg-slate-800 border border-line text-amber-200/90 font-mono text-3xs">
                                             {k}={String(v)}
                                         </span>
                                     ))}
@@ -1510,16 +1508,16 @@ export default function Backtest() {
                             </div>
                         )}
                         {!applied && list.length > 0 && (
-                            <div className="text-[10px] text-slate-500 mt-1">✓ = measured on the 5m archives (charges on) · ≈ = principled variant, backtest first</div>
+                            <div className="text-3xs text-fg-5 mt-1">✓ = measured on the 5m archives (charges on) · ≈ = principled variant, backtest first</div>
                         )}
                     </div>
                 );
             })()}
 
             <div>
-              <label className="block text-sm font-medium text-slate-400 mb-1">Resolution (Timeframe)</label>
-              <select 
-                className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+              <label htmlFor="backtest-resolution-timeframe-4" className="block text-sm font-medium text-fg-4 mb-1">Resolution (Timeframe)</label>
+              <select id="backtest-resolution-timeframe-4" 
+                className="w-full bg-slate-900 border border-line rounded p-2 text-fg"
                 value={params.resolution || '5'}
                 onChange={e => {
                     const val = e.target.value;
@@ -1541,8 +1539,8 @@ export default function Backtest() {
             {/* AI Confirmation (Universal) */}
             <div className="bg-purple-900/10 border border-purple-800/30 p-2 rounded mt-2 space-y-2">
                  <div className="flex items-center justify-between">
-                     <label className="text-sm text-purple-200">🤖 AI Confirmation</label>
-                     <input
+                     <label htmlFor="backtest-ai-confirmation-5" className="text-sm text-purple-200">🤖 AI Confirmation</label>
+                     <input id="backtest-ai-confirmation-5"
                         type="checkbox"
                         className="w-4 h-4 accent-purple-500"
                         checked={params.use_ai_confirmation || false}
@@ -1551,11 +1549,11 @@ export default function Backtest() {
                  </div>
                  {params.use_ai_confirmation && (
                      <div className="mt-2 flex items-center justify-between">
-                         <label className="text-xs text-slate-400">Min Conf (%)</label>
-                         <input
+                         <label htmlFor="backtest-min-conf-6" className="text-xs text-fg-4">Min Conf (%)</label>
+                         <input id="backtest-min-conf-6"
                             type="number"
                             step="5"
-                            className="w-16 bg-slate-900 border border-slate-700 rounded p-1 text-xs text-white text-right"
+                            className="w-16 bg-slate-900 border border-line rounded p-1 text-xs text-fg text-right"
                             value={(params.ai_confidence_threshold || 0.60) * 100}
                             onChange={e => setParams({...params, ai_confidence_threshold: parseFloat(e.target.value) / 100})}
                          />
@@ -1566,7 +1564,7 @@ export default function Backtest() {
                  <div className="border-t border-purple-800/20 pt-2 flex items-center justify-between">
                      <div>
                          <label className="text-sm text-purple-200">✨ Gemini Risk Filter</label>
-                         <p className="text-[10px] text-slate-500 leading-tight">Batch confirms signals via Gemma 3 27B</p>
+                         <p className="text-3xs text-fg-5 leading-tight">Batch confirms signals via Gemma 3 27B</p>
                      </div>
                      <input
                         type="checkbox"
@@ -1578,9 +1576,9 @@ export default function Backtest() {
             </div>
             
             <div>
-              <label className="block text-sm font-medium text-slate-400 mb-1">Symbol</label>
-              <select 
-                className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+              <label htmlFor="backtest-symbol-7" className="block text-sm font-medium text-fg-4 mb-1">Symbol</label>
+              <select id="backtest-symbol-7" 
+                className="w-full bg-slate-900 border border-line rounded p-2 text-fg"
                 value={params.symbol}
                 onChange={e => {
                   const newSymbol = e.target.value;
@@ -1637,25 +1635,25 @@ export default function Backtest() {
               <input 
                   type="text" 
                   placeholder="Or Type Custom Symbol..." 
-                  className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-xs mt-2"
+                  className="w-full bg-slate-900 border border-line rounded p-2 text-xs mt-2"
                   onChange={(e) => setParams({...params, symbol: e.target.value})}
               />
             </div>
 
             {/* Broker / Data Source Selector */}
             <div className="bg-slate-800 p-3 rounded border border-blue-900/50">
-              <label className="block text-xs font-bold text-blue-300 mb-2">
+              <label htmlFor="backtest-data-broker-8" className="block text-xs font-bold text-blue-300 mb-2">
                 📡 Data Broker
               </label>
-              <select
-                className="w-full bg-slate-900 border border-blue-800 rounded p-2 text-white text-sm"
+              <select id="backtest-data-broker-8"
+                className="w-full bg-slate-900 border border-blue-800 rounded p-2 text-fg text-sm"
                 value={params.broker || 'fyers'}
                 onChange={e => setParams({...params, broker: e.target.value})}
               >
                 <option value="fyers">🔵 Fyers (NSE/BSE/MCX)</option>
                 <option value="angel_one">🟠 Angel One (Free — Recommended for MCX)</option>
               </select>
-              <p className="text-[10px] mt-1 leading-relaxed" style={{color: params.symbol?.startsWith('MCX:') ? '#fbbf24' : '#64748b'}}>
+              <p className="text-3xs mt-1 leading-relaxed" style={{color: params.symbol?.startsWith('MCX:') ? ct.status.warning : ct.text.secondary}}>
                 {params.symbol?.startsWith('MCX:')
                   ? '⚡ MCX symbol auto-routes to Angel One (contract rolling + tvDatafeed fallback)'
                   : (params.broker || 'fyers') === 'angel_one'
@@ -1668,19 +1666,19 @@ export default function Backtest() {
             {/* 1. General Settings */}
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-slate-400 mb-1">Start Date</label>
-                <input 
+                <label htmlFor="backtest-start-date-9" className="block text-sm font-medium text-fg-4 mb-1">Start Date</label>
+                <input id="backtest-start-date-9" 
                   type="date" 
-                  className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                  className="w-full bg-slate-900 border border-line rounded p-2 text-fg"
                   value={params.start_date}
                   onChange={e => setParams({...params, start_date: e.target.value})}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-400 mb-1">End Date</label>
-                <input 
+                <label htmlFor="backtest-end-date-10" className="block text-sm font-medium text-fg-4 mb-1">End Date</label>
+                <input id="backtest-end-date-10" 
                   type="date" 
-                  className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                  className="w-full bg-slate-900 border border-line rounded p-2 text-fg"
                   value={params.end_date}
                   onChange={e => setParams({...params, end_date: e.target.value})}
                 />
@@ -1689,9 +1687,9 @@ export default function Backtest() {
 
             <div className="grid grid-cols-1 gap-4 mt-4">
                 <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-1">Backtest Mode</label>
-                    <select 
-                        className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                    <label htmlFor="backtest-backtest-mode-11" className="block text-sm font-medium text-fg-4 mb-1">Backtest Mode</label>
+                    <select id="backtest-backtest-mode-11" 
+                        className="w-full bg-slate-900 border border-line rounded p-2 text-fg"
                         value={params.backtest_mode || 'Simulated Premium'}
                         onChange={e => setParams({...params, backtest_mode: e.target.value})}
                     >
@@ -1700,9 +1698,9 @@ export default function Backtest() {
                     </select>
                 </div>
                 <div>
-                    <label className="block text-sm font-medium text-blue-400 mb-1">Data Source (Indices)</label>
-                    <select 
-                        className="w-full bg-slate-900 border border-blue-900 rounded p-2 text-white"
+                    <label htmlFor="backtest-data-source-indices-12" className="block text-sm font-medium text-blue-400 mb-1">Data Source (Indices)</label>
+                    <select id="backtest-data-source-indices-12" 
+                        className="w-full bg-slate-900 border border-blue-900 rounded p-2 text-fg"
                         value={params.dataSource || 'AUTO'}
                         onChange={e => setParams({...params, dataSource: e.target.value})}
                     >
@@ -1721,7 +1719,7 @@ export default function Backtest() {
                              {params.backtest_mode === 'Real Option Data' ? 'Options Expiry Date' : 'Futures Expiry Date'}
                          </label>
                          <select 
-                             className="w-full bg-slate-900 border border-purple-900 rounded p-2 text-white"
+                             className="w-full bg-slate-900 border border-purple-900 rounded p-2 text-fg"
                              value={params.futures_expiry || ''}
                              onChange={e => setParams({...params, futures_expiry: e.target.value})}
                          >
@@ -1730,7 +1728,7 @@ export default function Backtest() {
                                  <option key={exp.date} value={exp.date}>{exp.label}</option>
                              ))}
                          </select>
-                         <div className="text-[10px] text-gray-500 mt-1">
+                         <div className="text-3xs text-fg-5 mt-1">
                              Force a specific contract (e.g. 26FEB) regardless of backtest dates.
                          </div>
                      </div>
@@ -1738,9 +1736,9 @@ export default function Backtest() {
                 
                 {/* TRADING MODE (BUY v/s SELL) */}
                 <div>
-                     <label className="block text-sm font-medium text-purple-400 mb-1">Trading Mode</label>
-                     <select 
-                        className="w-full bg-slate-900 border border-purple-900 rounded p-2 text-white"
+                     <label htmlFor="backtest-trading-mode-13" className="block text-sm font-medium text-purple-400 mb-1">Trading Mode</label>
+                     <select id="backtest-trading-mode-13" 
+                        className="w-full bg-slate-900 border border-purple-900 rounded p-2 text-fg"
                         value={params.trade_mode || 'BUY'}
                         onChange={e => setParams({...params, trade_mode: e.target.value})}
                      >
@@ -1781,31 +1779,31 @@ export default function Backtest() {
                         <div className="bg-slate-800/50 p-3 rounded border border-purple-500/30">
                             <div className="flex items-center justify-between mb-2">
                                 <span className="text-xs font-semibold text-purple-300">Auto-Derived Selling Inputs</span>
-                                <span className="text-[10px] text-purple-400/70">Live values are recomputed per trade from spot + Black-Scholes</span>
+                                <span className="text-3xs text-purple-400/70">Live values are recomputed per trade from spot + Black-Scholes</span>
                             </div>
                             <div className={`grid gap-2 ${isHedged ? 'grid-cols-4' : 'grid-cols-3'}`}>
                                 <div className="bg-slate-900/60 border border-purple-700/40 rounded p-2">
-                                    <div className="text-[10px] uppercase tracking-wide text-purple-400">Lot Size</div>
-                                    <div className="text-sm font-mono text-white">{cfg.lotSize ?? '—'}</div>
+                                    <div className="text-3xs uppercase tracking-wide text-purple-400">Lot Size</div>
+                                    <div className="text-sm font-mono text-fg">{cfg.lotSize ?? '—'}</div>
                                 </div>
                                 <div className="bg-slate-900/60 border border-purple-700/40 rounded p-2">
-                                    <div className="text-[10px] uppercase tracking-wide text-purple-400">Margin / Lot</div>
-                                    <div className="text-sm font-mono text-white">{fmtINR(marginPerLot)}</div>
-                                    <div className="text-[9px] text-slate-500">
+                                    <div className="text-3xs uppercase tracking-wide text-purple-400">Margin / Lot</div>
+                                    <div className="text-sm font-mono text-fg">{fmtINR(marginPerLot)}</div>
+                                    <div className="text-4xs text-fg-5">
                                         {isMcx ? 'MCX SPAN+Exposure' : pct ? `${(pct * 100).toFixed(0)}% × notional` : '—'}
                                         {isHedged && !isMcx ? ' × 0.25' : ''}
                                     </div>
                                 </div>
                                 <div className="bg-slate-900/60 border border-purple-700/40 rounded p-2">
-                                    <div className="text-[10px] uppercase tracking-wide text-purple-400">Theta</div>
-                                    <div className="text-sm font-mono text-white">BS</div>
-                                    <div className="text-[9px] text-slate-500">Decay baked into BS premium evolution</div>
+                                    <div className="text-3xs uppercase tracking-wide text-purple-400">Theta</div>
+                                    <div className="text-sm font-mono text-fg">BS</div>
+                                    <div className="text-4xs text-fg-5">Decay baked into BS premium evolution</div>
                                 </div>
                                 {isHedged && (
                                     <div className="bg-slate-900/60 border border-purple-700/40 rounded p-2">
-                                        <label className="text-[10px] uppercase tracking-wide text-purple-400 block mb-1">Hedge Width</label>
-                                        <select
-                                            className="w-full bg-slate-900 border border-purple-700/40 rounded px-1 py-0.5 text-xs text-white"
+                                        <label htmlFor="backtest-hedge-width-14" className="text-3xs uppercase tracking-wide text-purple-400 block mb-1">Hedge Width</label>
+                                        <select id="backtest-hedge-width-14"
+                                            className="w-full bg-slate-900 border border-purple-700/40 rounded px-1 py-0.5 text-xs text-fg"
                                             value={hedgeWidth}
                                             onChange={e => setParams({ ...params, hedge_width: parseInt(e.target.value) })}
                                         >
@@ -1815,13 +1813,13 @@ export default function Backtest() {
                                             <option value={4}>4 steps</option>
                                             <option value={5}>5 steps</option>
                                         </select>
-                                        <div className="text-[9px] text-slate-500 mt-0.5">
+                                        <div className="text-4xs text-fg-5 mt-0.5">
                                             Long leg = {cfg.strikeStep ? `${hedgeWidth * cfg.strikeStep} pts away` : 'auto'}
                                         </div>
                                     </div>
                                 )}
                             </div>
-                            <div className="text-[10px] text-slate-400 mt-2 leading-relaxed">
+                            <div className="text-3xs text-fg-4 mt-2 leading-relaxed">
                                 ⚙️ Margin, theta and hedge cost are now derived from the symbol + Black-Scholes — no
                                 manual inputs needed. The engine recomputes margin at the actual entry spot, prices
                                 the hedge leg via BS at entry, and lets the BS premium curve carry theta decay
@@ -1831,7 +1829,7 @@ export default function Backtest() {
                     );
                 })()}
                 
-                 <div className="col-span-1 lg:col-span-1 flex items-center gap-3 bg-slate-800 p-2 rounded border border-slate-700 mt-0 h-10">
+                 <div className="col-span-1 lg:col-span-1 flex items-center gap-3 bg-slate-800 p-2 rounded border border-line mt-0 h-10">
                     <input 
                         type="checkbox" 
                         id="holding_enabled"
@@ -1839,75 +1837,75 @@ export default function Backtest() {
                         checked={params.holding_enabled || false}
                         onChange={e => setParams({...params, holding_enabled: e.target.checked})}
                     />
-                    <label htmlFor="holding_enabled" className="text-xs font-bold text-slate-300 cursor-pointer select-none">
-                        Positional <span className="text-slate-500 font-normal">(Carry Over)</span>
+                    <label htmlFor="holding_enabled" className="text-xs font-bold text-fg-3 cursor-pointer select-none">
+                        Positional <span className="text-fg-5 font-normal">(Carry Over)</span>
                     </label>
                 </div>
             </div>
 
             {/* 2. Risk & Sizing */}
-            <div className="border-t border-slate-700 pt-4 space-y-4">
-                <h4 className="text-sm font-bold text-slate-300">🛡️ Risk & Sizing</h4>
+            <div className="border-t border-line pt-4 space-y-4">
+                <h4 className="text-sm font-bold text-fg-3">🛡️ Risk & Sizing</h4>
                 
                 <div className="grid grid-cols-2 gap-4">
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1">Starting Capital (₹)</label>
-                        <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                        <label htmlFor="backtest-starting-capital-15" className="block text-xs text-fg-4 mb-1">Starting Capital (₹)</label>
+                        <input id="backtest-starting-capital-15" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                             value={params.capital}
                             onChange={e => setParams({...params, capital: e.target.value})} />
                     </div>
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1">Lot Size (Total Qty)</label>
-                        <input type="number" 
+                        <label htmlFor="backtest-lot-size-total-qty-16" className="block text-xs text-fg-4 mb-1">Lot Size (Total Qty)</label>
+                        <input id="backtest-lot-size-total-qty-16" type="number" 
                             step={instrumentConfig[params.symbol]?.lotSize || 1} 
                             min={instrumentConfig[params.symbol]?.lotSize || 1}
-                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                            className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                             value={params.lot_size}
                             onChange={e => setParams({...params, lot_size: parseInt(e.target.value)})} />
-                        <span className="text-[10px] text-slate-500">
+                        <span className="text-3xs text-fg-5">
                            Multiple of {instrumentConfig[params.symbol]?.lotSize || '1'}
                         </span>
                     </div>
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1">Max Daily Loss (₹)</label>
-                        <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                        <label htmlFor="backtest-max-daily-loss-17" className="block text-xs text-fg-4 mb-1">Max Daily Loss (₹)</label>
+                        <input id="backtest-max-daily-loss-17" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                             value={params.max_daily_loss || 2000}
                             onChange={e => setParams({...params, max_daily_loss: e.target.value})} />
                     </div>
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1">Max Single Loss (₹)</label>
-                        <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                        <label htmlFor="backtest-max-single-loss-18" className="block text-xs text-fg-4 mb-1">Max Single Loss (₹)</label>
+                        <input id="backtest-max-single-loss-18" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                             value={params.max_single_trade_loss || 2000}
                             onChange={e => setParams({...params, max_single_trade_loss: e.target.value})} />
                     </div>
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1">Max Trades / Day</label>
-                        <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                        <label htmlFor="backtest-max-trades-day-19" className="block text-xs text-fg-4 mb-1">Max Trades / Day</label>
+                        <input id="backtest-max-trades-day-19" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                             value={params.max_trades_per_day || 10}
                             onChange={e => setParams({...params, max_trades_per_day: parseInt(e.target.value)})} />
                     </div>
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1">Trade Start Time</label>
-                        <input type="time" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                        <label htmlFor="backtest-trade-start-time-20" className="block text-xs text-fg-4 mb-1">Trade Start Time</label>
+                        <input id="backtest-trade-start-time-20" type="time" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                             value={params.trade_start_time || "09:30"}
                             onChange={e => setParams({...params, trade_start_time: e.target.value})} />
                     </div>
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1">Trade End Time</label>
-                        <input type="time" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                        <label htmlFor="backtest-trade-end-time-21" className="block text-xs text-fg-4 mb-1">Trade End Time</label>
+                        <input id="backtest-trade-end-time-21" type="time" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                             value={params.trade_end_time || "15:00"}
                             onChange={e => setParams({...params, trade_end_time: e.target.value})} />
                     </div>
                     {/* Execution Friction */}
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1">Slippage (%)</label>
-                        <input type="number" step="0.01" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                        <label htmlFor="backtest-slippage-22" className="block text-xs text-fg-4 mb-1">Slippage (%)</label>
+                        <input id="backtest-slippage-22" type="number" step="0.01" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                             value={params.slippage_percent || 0.05}
                             onChange={e => setParams({...params, slippage_percent: e.target.value})} />
                     </div>
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1">Brokerage/Order (₹)</label>
-                        <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                        <label htmlFor="backtest-brokerage-order-23" className="block text-xs text-fg-4 mb-1">Brokerage/Order (₹)</label>
+                        <input id="backtest-brokerage-order-23" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                             value={params.brokerage_per_order || 20}
                             onChange={e => setParams({...params, brokerage_per_order: e.target.value})} />
                     </div>
@@ -1915,8 +1913,8 @@ export default function Backtest() {
             </div>
 
             {/* 3. Exit & SL/TP (ATR) */}
-            <div className="border-t border-slate-700 pt-4 space-y-4">
-                <h4 className="text-sm font-bold text-slate-300">🎯 Exit & SL/TP (ATR)</h4>
+            <div className="border-t border-line pt-4 space-y-4">
+                <h4 className="text-sm font-bold text-fg-3">🎯 Exit & SL/TP (ATR)</h4>
                 
                 {params.strategy === 'rl_agent' && (
                     <div className="col-span-2 flex items-start gap-2 bg-violet-900/20 border border-violet-700/40 rounded p-3 mb-2">
@@ -1929,8 +1927,8 @@ export default function Backtest() {
                 <div className="grid grid-cols-2 gap-4">
                     {params.strategy !== 'rl_agent' && (
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1">Stop-Loss Type</label>
-                        <select className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                        <label htmlFor="backtest-stop-loss-type-24" className="block text-xs text-fg-4 mb-1">Stop-Loss Type</label>
+                        <select id="backtest-stop-loss-type-24" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                             value={params.sl_type || 'ATR'}
                             onChange={e => setParams({...params, sl_type: e.target.value})}
                         >
@@ -1942,8 +1940,8 @@ export default function Backtest() {
                     </div>
                     )}
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1">Strike Selection</label>
-                        <select className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                        <label htmlFor="backtest-strike-selection-25" className="block text-xs text-fg-4 mb-1">Strike Selection</label>
+                        <select id="backtest-strike-selection-25" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                             value={params.strike_selection || 'ATM'}
                             onChange={e => setParams({...params, strike_selection: e.target.value})}
                         >
@@ -1956,16 +1954,16 @@ export default function Backtest() {
                     {/* SL/TP Reference Chart — Spot ATR vs Swing Structure */}
                     {params.strategy !== 'rl_agent' && params.backtest_mode !== 'Real Option Data' && (
                       <div className="col-span-2">
-                        <label className="block text-xs text-slate-400 mb-1">SL/TP Reference Chart</label>
-                        <select
-                          className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                        <label htmlFor="backtest-sl-tp-reference-chart-26" className="block text-xs text-fg-4 mb-1">SL/TP Reference Chart</label>
+                        <select id="backtest-sl-tp-reference-chart-26"
+                          className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                           value={params.sl_tp_type || 'SPOT_ATR'}
                           onChange={e => setParams({...params, sl_tp_type: e.target.value})}
                         >
                           <option value="SPOT_ATR">Spot Index — ATR Based (Standard)</option>
                           <option value="SPOT_SWING">Spot Index — Swing Structure</option>
                         </select>
-                        <p className="text-[10px] text-slate-500 mt-0.5">
+                        <p className="text-3xs text-fg-5 mt-0.5">
                           {params.sl_tp_type === 'SPOT_SWING'
                             ? 'SL at last swing low/high; TP at R:R multiple — all prices in index terms'
                             : 'SL & TP set via ATR multiplier on the underlying index chart'}
@@ -1977,16 +1975,16 @@ export default function Backtest() {
                     {params.sl_tp_type === 'SPOT_SWING' && params.strategy !== 'rl_agent' && (
                       <>
                         <div>
-                          <label className="block text-xs text-slate-400 mb-1">Swing Lookback (candles)</label>
-                          <input type="number" min="3" max="50"
-                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                          <label htmlFor="backtest-swing-lookback-candles-27" className="block text-xs text-fg-4 mb-1">Swing Lookback (candles)</label>
+                          <input id="backtest-swing-lookback-candles-27" type="number" min="3" max="50"
+                            className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                             value={params.swing_lookback || 10}
                             onChange={e => setParams({...params, swing_lookback: parseInt(e.target.value) || 10})} />
                         </div>
                         <div>
-                          <label className="block text-xs text-slate-400 mb-1">Risk : Reward Ratio</label>
-                          <input type="number" step="0.5" min="1"
-                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                          <label htmlFor="backtest-risk-reward-ratio-28" className="block text-xs text-fg-4 mb-1">Risk : Reward Ratio</label>
+                          <input id="backtest-risk-reward-ratio-28" type="number" step="0.5" min="1"
+                            className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                             value={params.rr_ratio || 2.0}
                             onChange={e => setParams({...params, rr_ratio: parseFloat(e.target.value) || 2.0})} />
                         </div>
@@ -1997,14 +1995,14 @@ export default function Backtest() {
                     {params.sl_type === 'FIXED' && !params.use_dynamic_sl && (
                         <>
                             <div>
-                                <label className="block text-xs text-slate-400 mb-1">Fixed SL (Pts)</label>
-                                <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                <label htmlFor="backtest-fixed-sl-pts-29" className="block text-xs text-fg-4 mb-1">Fixed SL (Pts)</label>
+                                <input id="backtest-fixed-sl-pts-29" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                     value={params.fixed_sl_points || 40}
                                     onChange={e => setParams({...params, fixed_sl_points: e.target.value})} />
                             </div>
                             <div>
-                                <label className="block text-xs text-slate-400 mb-1">Fixed TP (Pts)</label>
-                                <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                <label htmlFor="backtest-fixed-tp-pts-30" className="block text-xs text-fg-4 mb-1">Fixed TP (Pts)</label>
+                                <input id="backtest-fixed-tp-pts-30" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                     value={params.fixed_tp_points || 100}
                                     onChange={e => setParams({...params, fixed_tp_points: e.target.value})} />
                             </div>
@@ -2015,24 +2013,24 @@ export default function Backtest() {
                     {(params.strategy === 'rl_agent' || params.sl_type === 'ATR' || params.use_dynamic_sl) && (
                       <>
                         <div>
-                            <label className="block text-xs text-slate-400 mb-1">ATR Period</label>
-                            <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                            <label htmlFor="backtest-atr-period-31" className="block text-xs text-fg-4 mb-1">ATR Period</label>
+                            <input id="backtest-atr-period-31" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                 value={params.atr_period || 14}
                                 onChange={e => setParams({...params, atr_period: parseInt(e.target.value) || 14})} />
                         </div>
                             <div>
-                                <label className="block text-xs text-slate-400 mb-1">
+                                <label className="block text-xs text-fg-4 mb-1">
                                     {params.strategy === 'rl_agent' ? 'ATR TP Mult (Legacy Fallback)' : 'ATR TP Multiplier'}
                                 </label>
-                                <input type="number" step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                <input type="number" step="0.1" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                     value={params.atr_tp_mult || 3.5}
                                     onChange={e => setParams({...params, atr_tp_mult: parseFloat(e.target.value)})} />
                             </div>
                             <div>
-                                <label className="block text-xs text-slate-400 mb-1">
+                                <label className="block text-xs text-fg-4 mb-1">
                                     {params.strategy === 'rl_agent' ? 'ATR SL Mult (Legacy Fallback)' : params.sl_type === 'STRATEGY' ? 'ATR SL Mult (Fallback)' : 'ATR SL Multiplier'}
                                 </label>
-                                <input type="number" step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                <input type="number" step="0.1" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                     value={params.atr_sl_mult || 1.8}
                                     onChange={e => setParams({...params, atr_sl_mult: parseFloat(e.target.value)})} />
                             </div>
@@ -2041,26 +2039,26 @@ export default function Backtest() {
                     
                     {params.strategy === 'rl_agent' && (
                         <div className="col-span-2 flex items-center justify-between bg-blue-900/20 p-2 rounded border border-blue-800/50 mt-1">
-                            <label className="text-sm text-blue-300 font-bold">Use Smart Volatility SL (Advanced)</label>
-                            <input type="checkbox" className="w-4 h-4 accent-blue-500"
+                            <label htmlFor="backtest-use-smart-volatility-sl-adva-32" className="text-sm text-blue-300 font-bold">Use Smart Volatility SL (Advanced)</label>
+                            <input id="backtest-use-smart-volatility-sl-adva-32" type="checkbox" className="w-4 h-4 accent-blue-500"
                                 checked={params.use_dynamic_sl || false}
                                 onChange={e => setParams({...params, use_dynamic_sl: e.target.checked})} />
                         </div>
                     )}
                     <div>
-                        <label className="block text-xs text-slate-400 mb-1" title="Reject trades with Stop Loss tighter than this value">
+                        <label htmlFor="backtest-minimum-sl-points-33" className="block text-xs text-fg-4 mb-1" title="Reject trades with Stop Loss tighter than this value">
                             Minimum SL Points
                         </label>
-                        <input type="number" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                        <input id="backtest-minimum-sl-points-33" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                             value={params.min_sl_points !== undefined ? params.min_sl_points : 5}
                             onChange={e => setParams({...params, min_sl_points: parseInt(e.target.value)})} />
                     </div>
 
                     {/* Trailing SL Control */}
-                    <div className="col-span-2 flex items-center justify-between mt-2 bg-slate-800/50 p-2 rounded border border-slate-700/50">
+                    <div className="col-span-2 flex items-center justify-between mt-2 bg-slate-800/50 p-2 rounded border border-line/50">
                          <div className="flex flex-col">
-                             <label className="text-xs text-slate-300 font-medium">Trailing Stop-Loss</label>
-                             <span className="text-[10px] text-slate-500">Move SL to Break-even & Trail</span>
+                             <label className="text-xs text-fg-3 font-medium">Trailing Stop-Loss</label>
+                             <span className="text-3xs text-fg-5">Move SL to Break-even & Trail</span>
                          </div>
                          <div className="flex items-center gap-3">
                              <input type="checkbox"
@@ -2070,9 +2068,9 @@ export default function Backtest() {
                              />
                              {params.use_trailing_sl && (
                                  <div className="flex items-center gap-1">
-                                     <span className="text-[10px] text-slate-400">Mult:</span>
+                                     <span className="text-3xs text-fg-4">Mult:</span>
                                      <input type="number" step="0.1"
-                                         className="w-16 bg-slate-900 border border-slate-700 rounded p-1 text-xs text-white"
+                                         className="w-16 bg-slate-900 border border-line rounded p-1 text-xs text-fg"
                                          value={params.trailing_sl_mult || 1.5}
                                          onChange={e => setParams({...params, trailing_sl_mult: parseFloat(e.target.value)})}
                                      />
@@ -2085,14 +2083,14 @@ export default function Backtest() {
 
 
             {/* AI Confirmation Section */}
-            <div className="border-t border-slate-700 pt-4 space-y-3">
+            <div className="border-t border-line pt-4 space-y-3">
                 {/* ── Internal ML model filter ── */}
                 <div>
                     <div className="flex items-center justify-between mb-2">
-                        <h4 className="text-sm font-bold text-slate-300 flex items-center gap-2">
+                        <h4 className="text-sm font-bold text-fg-3 flex items-center gap-2">
                             <Activity className="w-4 h-4 text-purple-400" />
                             AI Confirmation
-                            <span className="text-[10px] bg-purple-900/40 text-purple-300 px-1 rounded ml-1">Beta</span>
+                            <span className="text-3xs bg-purple-900/40 text-purple-300 px-1 rounded ml-1">Beta</span>
                         </h4>
                         <input
                           type="checkbox"
@@ -2105,9 +2103,9 @@ export default function Backtest() {
                     {params.use_ai_confirmation && (
                         <div className="bg-slate-800/50 p-3 rounded border border-purple-900/30 space-y-3">
                              <div>
-                                 <label className="block text-xs text-slate-400 mb-1">Select AI Model</label>
-                                 <select
-                                    className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                 <label htmlFor="backtest-select-ai-model-34" className="block text-xs text-fg-4 mb-1">Select AI Model</label>
+                                 <select id="backtest-select-ai-model-34"
+                                    className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                     value={params.modelName || ''}
                                     onChange={e => setParams({...params, modelName: e.target.value})}
                                  >
@@ -2118,17 +2116,17 @@ export default function Backtest() {
                                          </option>
                                      ))}
                                  </select>
-                                 <div className="text-[10px] text-slate-500 mt-1">
+                                 <div className="text-3xs text-fg-5 mt-1">
                                      Select a specific trained model or leave Auto to find model by symbol.
                                  </div>
                              </div>
 
                              <div className="flex items-center justify-between">
-                                 <label className="text-xs text-slate-400">Min Confidence (%)</label>
-                                 <input
+                                 <label htmlFor="backtest-min-confidence-35" className="text-xs text-fg-4">Min Confidence (%)</label>
+                                 <input id="backtest-min-confidence-35"
                                     type="number"
                                     step="5"
-                                    className="w-16 bg-slate-900 border border-slate-700 rounded p-1 text-xs text-white text-right"
+                                    className="w-16 bg-slate-900 border border-line rounded p-1 text-xs text-fg text-right"
                                     value={(params.ai_confidence_threshold || 0.60) * 100}
                                     onChange={e => setParams({...params, ai_confidence_threshold: parseFloat(e.target.value) / 100})}
                                  />
@@ -2143,9 +2141,9 @@ export default function Backtest() {
                         <div>
                             <h4 className="text-sm font-bold text-purple-300 flex items-center gap-1">
                                 ✨ AI Risk Filter
-                                <span className="text-[10px] bg-purple-900/50 text-purple-400 px-1 rounded ml-1">Multi-Model</span>
+                                <span className="text-3xs bg-purple-900/50 text-purple-400 px-1 rounded ml-1">Multi-Model</span>
                             </h4>
-                            <p className="text-[10px] text-slate-500 mt-0.5 leading-tight">
+                            <p className="text-3xs text-fg-5 mt-0.5 leading-tight">
                                 Confirms every signal via AI before PnL. Select multiple models to split<br/>
                                 signals across them in parallel — faster than a single model for large runs.
                             </p>
@@ -2161,7 +2159,7 @@ export default function Backtest() {
 
                     {params.enable_ai_confirmation && (
                         <div className="mt-2 pt-2 border-t border-purple-900/30 space-y-3">
-                            <div className="flex items-center gap-1.5 text-[10px] text-amber-400/80">
+                            <div className="flex items-center gap-1.5 text-3xs text-amber-400/80">
                                 <span>⚠</span>
                                 <span>Ensure <code className="bg-slate-900 px-1 rounded">GOOGLE_AI_STUDIO_API_KEY</code> is set in <code className="bg-slate-900 px-1 rounded">.env</code>.</span>
                             </div>
@@ -2169,9 +2167,9 @@ export default function Backtest() {
                             {/* Model multi-select */}
                             <div>
                                 <div className="flex items-center justify-between mb-1.5">
-                                    <label className="text-[10px] text-slate-300 font-medium">Select Models</label>
+                                    <label className="text-3xs text-fg-3 font-medium">Select Models</label>
                                     {(params.ai_models || []).length > 1 && (
-                                        <span className="text-[10px] text-green-400">
+                                        <span className="text-3xs text-green-400">
                                             ⚡ Parallel — signals split across {(params.ai_models || []).length} models
                                         </span>
                                     )}
@@ -2185,7 +2183,7 @@ export default function Backtest() {
                                             if (m.group !== lastGroup) {
                                                 lastGroup = m.group;
                                                 rows.push(
-                                                    <div key={`g-${m.group}`} className="px-2 pt-2 pb-0.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+                                                    <div key={`g-${m.group}`} className="px-2 pt-2 pb-0.5 text-3xs font-semibold text-fg-5 uppercase tracking-wide">
                                                         {m.group}
                                                     </div>
                                                 );
@@ -2207,8 +2205,8 @@ export default function Backtest() {
                                                             setParams({...params, ai_models: updated});
                                                         }}
                                                     />
-                                                    <span className={selected ? 'text-purple-200' : 'text-slate-400'}>{m.label}</span>
-                                                    <span className="text-[10px] text-slate-600 ml-auto">{m.quota}</span>
+                                                    <span className={selected ? 'text-purple-200' : 'text-fg-4'}>{m.label}</span>
+                                                    <span className="text-3xs text-fg-6 ml-auto">{m.quota}</span>
                                                 </label>
                                             );
                                         });
@@ -2216,10 +2214,10 @@ export default function Backtest() {
                                     })()}
                                 </div>
                                 {(params.ai_models || []).length === 0 && (
-                                    <p className="text-[10px] text-red-400 mt-1">⚠ Select at least one model</p>
+                                    <p className="text-3xs text-red-400 mt-1">⚠ Select at least one model</p>
                                 )}
                                 {(params.ai_models || []).length > 1 && (
-                                    <p className="text-[10px] text-green-400/80 mt-1">
+                                    <p className="text-3xs text-green-400/80 mt-1">
                                         ~{Math.ceil(100 / (params.ai_models || []).length)}% of signals per model — total time ≈ single-model time.
                                     </p>
                                 )}
@@ -2228,35 +2226,35 @@ export default function Backtest() {
                             {/* Max signals cap + Parallel workers — side by side */}
                             <div className="grid grid-cols-2 gap-3">
                                 <div>
-                                    <label className="block text-[10px] text-slate-400 mb-1">
+                                    <label htmlFor="backtest-max-signals-to-evaluate-36" className="block text-3xs text-fg-4 mb-1">
                                         Max signals to evaluate
-                                        <span className="text-slate-500 ml-1">(blank = all)</span>
+                                        <span className="text-fg-5 ml-1">(blank = all)</span>
                                     </label>
-                                    <input
+                                    <input id="backtest-max-signals-to-evaluate-36"
                                         type="number"
                                         min="1"
                                         placeholder="e.g. 50"
-                                        className="w-full bg-slate-900 border border-purple-800/40 rounded p-1.5 text-white text-xs"
+                                        className="w-full bg-slate-900 border border-purple-800/40 rounded p-1.5 text-fg text-xs"
                                         value={params.ai_max_signals || ''}
                                         onChange={e => setParams({...params, ai_max_signals: e.target.value ? parseInt(e.target.value) : null})}
                                     />
-                                    <p className="text-[10px] text-slate-500 mt-0.5">Others are auto-confirmed when cap is set.</p>
+                                    <p className="text-3xs text-fg-5 mt-0.5">Others are auto-confirmed when cap is set.</p>
                                 </div>
                                 <div>
-                                    <label className="block text-[10px] text-slate-400 mb-1">
+                                    <label htmlFor="backtest-parallel-workers-37" className="block text-3xs text-fg-4 mb-1">
                                         Parallel workers
-                                        <span className="text-slate-500 ml-1">(per model)</span>
+                                        <span className="text-fg-5 ml-1">(per model)</span>
                                     </label>
-                                    <input
+                                    <input id="backtest-parallel-workers-37"
                                         type="number"
                                         min="1"
                                         max="10"
                                         placeholder="1"
-                                        className="w-full bg-slate-900 border border-purple-800/40 rounded p-1.5 text-white text-xs"
+                                        className="w-full bg-slate-900 border border-purple-800/40 rounded p-1.5 text-fg text-xs"
                                         value={params.ai_concurrency || 1}
                                         onChange={e => setParams({...params, ai_concurrency: Math.max(1, parseInt(e.target.value) || 1)})}
                                     />
-                                    <p className="text-[10px] text-slate-500 mt-0.5">
+                                    <p className="text-3xs text-fg-5 mt-0.5">
                                         {(params.ai_concurrency || 1) > 1
                                             ? <span className="text-amber-400/80">⚡ {params.ai_concurrency}× faster — use only for Claude/unlimited models</span>
                                             : 'Safe for all models. Increase for Claude (no quota).'}
@@ -2287,29 +2285,29 @@ export default function Backtest() {
                                             });
                                         }}
                                     />
-                                    <span className="text-[12px] text-amber-200 font-semibold">
+                                    <span className="text-xs text-amber-200 font-semibold">
                                         🍪 Use Claude.ai Web Session (Team plan — no API credits needed)
                                     </span>
                                 </label>
                                 {!!params.use_claude_web_session && (
                                     <>
-                                        <p className="text-[10px] text-red-300/80 leading-snug">
+                                        <p className="text-3xs text-red-300/80 leading-snug">
                                             ⚠️ <b>Violates Anthropic ToS.</b> Risk of Claude.ai account suspension.
                                             Forced serial (1 call at a time) to reduce detection. No key rotation.
                                             Re-paste sessionKey when it expires (typically every few weeks).
                                         </p>
                                         {/* Cookies are managed globally — single source of truth in Settings.
                                             Update once, every backtest and every deployed strategy picks up the new value. */}
-                                        <div className="text-[10px] text-slate-400 bg-slate-900/40 border border-slate-700 rounded p-2">
+                                        <div className="text-3xs text-fg-4 bg-slate-900/40 border border-line rounded p-2">
                                             🍪 Cookies (<code>sessionKey</code> + <code>org_id</code>) are managed globally in{' '}
                                             <a href="/settings" className="text-amber-300 underline hover:text-amber-200">Settings → AI Web Cookies</a>.
                                             Update there once; every backtest and deployed strategy uses the same values.
                                         </div>
                                         <div className="grid grid-cols-1 gap-2">
                                             <div>
-                                                <label className="block text-[10px] text-amber-300 mb-1">Claude model</label>
-                                                <select
-                                                    className="w-full bg-slate-900 border border-amber-700/40 rounded p-1.5 text-white text-xs"
+                                                <label htmlFor="backtest-claude-model-38" className="block text-3xs text-amber-300 mb-1">Claude model</label>
+                                                <select id="backtest-claude-model-38"
+                                                    className="w-full bg-slate-900 border border-amber-700/40 rounded p-1.5 text-fg text-xs"
                                                     value={params.claude_web_model || 'claude-web/claude-sonnet-4-6'}
                                                     onChange={e => setParams({
                                                         ...params,
@@ -2328,8 +2326,8 @@ export default function Backtest() {
                                         </div>
                                         {/* Batched-call control — only meaningful for Claude.ai web (serial-only path) */}
                                         <div>
-                                            <label className="block text-[10px] text-amber-300 mb-1">
-                                                Batch size <span className="text-slate-500">(signals per request, 1–10)</span>
+                                            <label className="block text-3xs text-amber-300 mb-1">
+                                                Batch size <span className="text-fg-5">(signals per request, 1–10)</span>
                                             </label>
                                             <div className="flex items-center gap-2">
                                                 <input
@@ -2345,7 +2343,7 @@ export default function Backtest() {
                                                     {parseInt(params.claude_web_batch_size, 10) || 1}×
                                                 </span>
                                             </div>
-                                            <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+                                            <p className="text-3xs text-fg-5 mt-1 leading-snug">
                                                 {(() => {
                                                     const b = parseInt(params.claude_web_batch_size, 10) || 1;
                                                     if (b === 1) return '🐢 Serial mode — one signal per request. Accurate but slowest. Use for small backtests.';
@@ -2355,7 +2353,7 @@ export default function Backtest() {
                                                     return '⚠️ Aggressive — max speed but more context-bleed / token-cap risk. Auto-fallback to serial on parse failure.';
                                                 })()}
                                             </p>
-                                            <p className="text-[10px] text-slate-500 italic mt-0.5">
+                                            <p className="text-3xs text-fg-5 italic mt-0.5">
                                                 Each batch sends N signals in one request with independence-framed prompt. On malformed JSON the engine auto-falls-back to single-call mode for that batch.
                                             </p>
                                         </div>
@@ -2384,29 +2382,29 @@ export default function Backtest() {
                                             });
                                         }}
                                     />
-                                    <span className="text-[12px] text-cyan-200 font-semibold">
+                                    <span className="text-xs text-cyan-200 font-semibold">
                                         🍪 Use Gemini Web Session (consumer plan — no API credits needed)
                                     </span>
                                 </label>
                                 {!!params.use_gemini_web_session && (
                                     <>
-                                        <p className="text-[10px] text-red-300/80 leading-snug">
+                                        <p className="text-3xs text-red-300/80 leading-snug">
                                             ⚠️ <b>Violates Google ToS.</b> Risk of Google account suspension.
                                             Forced serial (1 call at a time) to reduce detection. No key rotation.
                                             <code className="bg-slate-900 px-1">__Secure-1PSIDTS</code> rotates every
                                             few hours — re-paste when calls start erroring.
                                         </p>
                                         {/* Cookies are managed globally — single source of truth in Settings. */}
-                                        <div className="text-[10px] text-slate-400 bg-slate-900/40 border border-slate-700 rounded p-2">
+                                        <div className="text-3xs text-fg-4 bg-slate-900/40 border border-line rounded p-2">
                                             🍪 Cookies (<code>__Secure-1PSID</code> / <code>__Secure-1PSIDTS</code> / <code>__Secure-1PSIDCC</code>) are managed globally in{' '}
                                             <a href="/settings" className="text-cyan-300 underline hover:text-cyan-200">Settings → AI Web Cookies</a>.
                                             Update there once; every backtest and deployed strategy uses the same values.
                                         </div>
                                         <div className="grid grid-cols-1 gap-2">
                                             <div>
-                                                <label className="block text-[10px] text-cyan-300 mb-1">Gemini model</label>
-                                                <select
-                                                    className="w-full bg-slate-900 border border-cyan-700/40 rounded p-1.5 text-white text-xs"
+                                                <label htmlFor="backtest-gemini-model-39" className="block text-3xs text-cyan-300 mb-1">Gemini model</label>
+                                                <select id="backtest-gemini-model-39"
+                                                    className="w-full bg-slate-900 border border-cyan-700/40 rounded p-1.5 text-fg text-xs"
                                                     value={params.gemini_web_model || 'gemini-web/gemini-2.5-pro'}
                                                     onChange={e => setParams({
                                                         ...params,
@@ -2426,8 +2424,8 @@ export default function Backtest() {
                                             </div>
                                         </div>
                                         <div>
-                                            <label className="block text-[10px] text-cyan-300 mb-1">
-                                                Batch size <span className="text-slate-500">(signals per request, 1–10)</span>
+                                            <label className="block text-3xs text-cyan-300 mb-1">
+                                                Batch size <span className="text-fg-5">(signals per request, 1–10)</span>
                                             </label>
                                             <div className="flex items-center gap-2">
                                                 <input
@@ -2443,7 +2441,7 @@ export default function Backtest() {
                                                     {parseInt(params.gemini_web_batch_size, 10) || 1}×
                                                 </span>
                                             </div>
-                                            <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+                                            <p className="text-3xs text-fg-5 mt-1 leading-snug">
                                                 {(() => {
                                                     const b = parseInt(params.gemini_web_batch_size, 10) || 1;
                                                     if (b === 1) return '🐢 Serial mode — one signal per request. Accurate but slowest.';
@@ -2476,13 +2474,13 @@ export default function Backtest() {
                                                     claude_thinking_enabled: e.target.checked,
                                                 })}
                                             />
-                                            <span className="text-[12px] text-orange-200 font-semibold">
+                                            <span className="text-xs text-orange-200 font-semibold">
                                                 🧠 Claude Extended Thinking (slower, better-reasoned)
                                             </span>
                                         </label>
                                         {!!params.claude_thinking_enabled && (
                                             <>
-                                                <p className="text-[10px] text-slate-400 leading-snug">
+                                                <p className="text-3xs text-fg-4 leading-snug">
                                                     Claude runs an internal reasoning pass before answering.
                                                     Applies to <b>both</b> Anthropic API <i>and</i> Claude.ai web sessions.
                                                     For web sessions we send <code className="bg-slate-900 px-1">effort</code>{' '}
@@ -2490,11 +2488,11 @@ export default function Backtest() {
                                                     (matches claude.ai's UI dropdown for Opus 4.8).
                                                 </p>
                                                 <div>
-                                                    <label className="block text-[10px] text-orange-300 mb-1">
-                                                        Thinking effort <span className="text-slate-500">(higher = more reasoning, slower)</span>
+                                                    <label htmlFor="backtest-thinking-effort-40" className="block text-3xs text-orange-300 mb-1">
+                                                        Thinking effort <span className="text-fg-5">(higher = more reasoning, slower)</span>
                                                     </label>
-                                                    <select
-                                                        className="w-full bg-slate-900 border border-orange-700/40 rounded p-1.5 text-white text-xs"
+                                                    <select id="backtest-thinking-effort-40"
+                                                        className="w-full bg-slate-900 border border-orange-700/40 rounded p-1.5 text-fg text-xs"
                                                         value={params.claude_effort || 'high'}
                                                         onChange={e => {
                                                             const eff = e.target.value;
@@ -2516,12 +2514,12 @@ export default function Backtest() {
                                                         <option value="xhigh">🚀 X-High — very deep (~48k tokens)</option>
                                                         <option value="max">🔥 Max — heaviest (~64k tokens)</option>
                                                     </select>
-                                                    <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+                                                    <p className="text-3xs text-fg-5 mt-1 leading-snug">
                                                         Web session: sent as <code>effort</code> on conversation create (Opus 4.8 honours it).
                                                         Anthropic API: mapped to <code>budget_tokens</code> for the thinking block.
                                                     </p>
                                                 </div>
-                                                <p className="text-[10px] text-amber-400/80 leading-snug">
+                                                <p className="text-3xs text-amber-400/80 leading-snug">
                                                     ⚠️ When thinking is on, temperature is forced to 1.0 (the API requires it).
                                                     Decisions may vary slightly between runs — that's expected.
                                                 </p>
@@ -2539,8 +2537,8 @@ export default function Backtest() {
                                     checked={!!params.ai_fail_closed}
                                     onChange={e => setParams({ ...params, ai_fail_closed: e.target.checked })}
                                 />
-                                <span className="text-[11px] text-slate-300 font-medium">Fail-closed on AI errors</span>
-                                <span className="text-[10px] text-slate-500">
+                                <span className="text-2xs text-fg-3 font-medium">Fail-closed on AI errors</span>
+                                <span className="text-3xs text-fg-5">
                                     {params.ai_fail_closed
                                         ? '🛑 AI timeout/error in LIVE → reject the trade (safer)'
                                         : '⚠️ AI timeout/error in LIVE → fall back to threshold gate (default)'}
@@ -2560,15 +2558,15 @@ export default function Backtest() {
                                     checked={!!params.ai_enable_web_research}
                                     onChange={e => setParams({ ...params, ai_enable_web_research: e.target.checked })}
                                 />
-                                <span className="text-[11px] text-slate-300 font-medium">🌐 Live web research (Claude web only)</span>
-                                <span className="text-[10px] text-slate-500">
+                                <span className="text-2xs text-fg-3 font-medium">🌐 Live web research (Claude web only)</span>
+                                <span className="text-3xs text-fg-5">
                                     {params.ai_enable_web_research
                                         ? '🔎 AI looks up VIX + news + global cues before judging (+30–60s)'
                                         : 'Technical context only — fast, deterministic'}
                                 </span>
                             </label>
                             {params.ai_enable_web_research && !params.use_claude_web_session && (
-                                <p className="ml-6 text-[10px] text-amber-400/80 leading-snug">
+                                <p className="ml-6 text-3xs text-amber-400/80 leading-snug">
                                     ⚠ Web research needs Claude.ai web session. Anthropic API + Gemini paths
                                     will ignore this flag. Enable a <code>claude-web/*</code> model + paste a
                                     sessionKey to use it.
@@ -2591,20 +2589,20 @@ export default function Backtest() {
                                         checked={!!params.ai_inflight_review_enabled}
                                         onChange={e => setParams({ ...params, ai_inflight_review_enabled: e.target.checked })}
                                     />
-                                    <span className="text-[11px] text-cyan-200 font-bold">
+                                    <span className="text-2xs text-cyan-200 font-bold">
                                         🔄 In-flight AI review (live engine only, AUTONOMOUS)
                                     </span>
                                 </label>
                                 {!!params.ai_inflight_review_enabled && (
                                     <>
-                                        <p className="ml-6 text-[10px] text-slate-400 leading-snug">
+                                        <p className="ml-6 text-3xs text-fg-4 leading-snug">
                                             Every <b>{params.ai_inflight_review_interval_min || 15} min</b> the AI re-evaluates each
                                             ACTIVE position and may auto-tighten SL, extend TP, or close early.
                                             Telegram fires on every action so you stay informed.
                                             Doesn't run in backtest.
                                         </p>
                                         <div className="ml-6 flex items-center gap-2">
-                                            <span className="text-[10px] text-slate-400">Review every</span>
+                                            <span className="text-3xs text-fg-4">Review every</span>
                                             <input
                                                 type="number"
                                                 min="5"
@@ -2615,11 +2613,11 @@ export default function Backtest() {
                                                     ...params,
                                                     ai_inflight_review_interval_min: Math.max(5, Math.min(60, parseInt(e.target.value, 10) || 15)),
                                                 })}
-                                                className="w-16 bg-slate-900 border border-cyan-700/40 rounded p-1 text-white text-xs text-center"
+                                                className="w-16 bg-slate-900 border border-cyan-700/40 rounded p-1 text-fg text-xs text-center"
                                             />
-                                            <span className="text-[10px] text-slate-400">minutes (5–60)</span>
+                                            <span className="text-3xs text-fg-4">minutes (5–60)</span>
                                         </div>
-                                        <p className="ml-6 text-[10px] text-amber-400/80 leading-snug">
+                                        <p className="ml-6 text-3xs text-amber-400/80 leading-snug">
                                             ⚠ <b>Autonomous mode</b>: AI suggestions are applied without confirmation.
                                             Sanity-checked (correct side of entry, valid levels) but otherwise trusted.
                                             Watch the Live Activity Feed for actions logged with <code>phase=in_trade</code>.
@@ -2637,8 +2635,8 @@ export default function Backtest() {
                                         checked={!!params.ai_use_spot_exits}
                                         onChange={e => setParams({ ...params, ai_use_spot_exits: e.target.checked })}
                                     />
-                                    <span className="text-[11px] text-cyan-200 font-medium">🎯 AI Spot-Level Exits (LIVE)</span>
-                                    <span className="text-[10px] text-slate-500">
+                                    <span className="text-2xs text-cyan-200 font-medium">🎯 AI Spot-Level Exits (LIVE)</span>
+                                    <span className="text-3xs text-fg-5">
                                         {params.ai_use_spot_exits
                                             ? 'Engine fires market exit when index crosses AI level. Broker SL is wider safety net.'
                                             : 'Default — broker SL = exact AI level converted via 0.5 delta.'}
@@ -2646,17 +2644,17 @@ export default function Backtest() {
                                 </label>
                                 {!!params.ai_use_spot_exits && (
                                     <div className="ml-6 flex items-center gap-2">
-                                        <label className="text-[10px] text-cyan-300">Safety buffer:</label>
-                                        <input
+                                        <label htmlFor="backtest-safety-buffer-41" className="text-3xs text-cyan-300">Safety buffer:</label>
+                                        <input id="backtest-safety-buffer-41"
                                             type="number"
                                             min="1.0"
                                             max="3.0"
                                             step="0.1"
-                                            className="w-16 bg-slate-900 border border-cyan-700/40 rounded p-1 text-white text-[11px] text-right"
+                                            className="w-16 bg-slate-900 border border-cyan-700/40 rounded p-1 text-fg text-2xs text-right"
                                             value={params.ai_sl_safety_buffer ?? 1.5}
                                             onChange={e => setParams({ ...params, ai_sl_safety_buffer: parseFloat(e.target.value) || 1.5 })}
                                         />
-                                        <span className="text-[10px] text-slate-500 leading-tight">
+                                        <span className="text-3xs text-fg-5 leading-tight">
                                             × the AI SL distance — the broker SL fires at this wider buffer in case of engine
                                             crash / disconnect. 1.5 = broker SL fires at 1.5× AI's level (good default).
                                             Set higher for more headroom during volatile sessions.
@@ -2673,8 +2671,8 @@ export default function Backtest() {
                                     checked={!!params.enable_mastra_validator}
                                     onChange={e => setParams({ ...params, enable_mastra_validator: e.target.checked })}
                                 />
-                                <span className="text-[11px] text-slate-300 font-medium">Mastra second-AI validator</span>
-                                <span className="text-[10px] text-slate-500">
+                                <span className="text-2xs text-fg-3 font-medium">Mastra second-AI validator</span>
+                                <span className="text-3xs text-fg-5">
                                     {params.enable_mastra_validator
                                         ? '🤖 Mastra Gemini re-validates each trade at execution time (extra gate)'
                                         : 'Off — live matches backtest (primary AI only). Recommended.'}
@@ -2682,7 +2680,7 @@ export default function Backtest() {
                             </label>
 
                             <div className="flex flex-col gap-1.5 border-l-2 border-violet-700/30 pl-3">
-                                <span className="text-[10px] text-slate-500 uppercase tracking-wide">Apply AI levels (independent)</span>
+                                <span className="text-3xs text-fg-5 uppercase tracking-wide">Apply AI levels (independent)</span>
                                 <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
                                     <input
                                         type="checkbox"
@@ -2695,8 +2693,8 @@ export default function Backtest() {
                                             ai_follow_sl_tp: e.target.checked && (params.ai_follow_tp === true),
                                         })}
                                     />
-                                    <span className="text-[11px] text-slate-300 font-medium">Follow AI SL</span>
-                                    <span className="text-[10px] text-slate-500">
+                                    <span className="text-2xs text-fg-3 font-medium">Follow AI SL</span>
+                                    <span className="text-3xs text-fg-5">
                                         {params.ai_follow_sl === true
                                             ? 'Use AI-suggested stop-loss (wide safety net)'
                                             : 'Use strategy stop-loss'}
@@ -2713,8 +2711,8 @@ export default function Backtest() {
                                             ai_follow_sl_tp: e.target.checked && (params.ai_follow_sl === true),
                                         })}
                                     />
-                                    <span className="text-[11px] text-slate-300 font-medium">Follow AI TP</span>
-                                    <span className="text-[10px] text-slate-500">
+                                    <span className="text-2xs text-fg-3 font-medium">Follow AI TP</span>
+                                    <span className="text-3xs text-fg-5">
                                         {params.ai_follow_tp === true
                                             ? 'Use AI-suggested take-profit (realistic target)'
                                             : 'Use strategy take-profit'}
@@ -2727,14 +2725,14 @@ export default function Backtest() {
                                         checked={params.use_ai_fair_entry === true}
                                         onChange={e => setParams({ ...params, use_ai_fair_entry: e.target.checked })}
                                     />
-                                    <span className="text-[11px] text-slate-300 font-medium">AI Fair Value Entry</span>
-                                    <span className="text-[10px] text-slate-500">
+                                    <span className="text-2xs text-fg-3 font-medium">AI Fair Value Entry</span>
+                                    <span className="text-3xs text-fg-5">
                                         {params.use_ai_fair_entry === true
                                             ? 'Wait ≤15 min for spot to retest AI entry level; skip if not reached'
                                             : 'Enter at signal candle (no fair-value wait)'}
                                     </span>
                                 </label>
-                                <p className="text-[10px] text-slate-500 italic">
+                                <p className="text-3xs text-fg-5 italic">
                                     After AI completes, toggle the chart view to compare all 4 combinations.
                                 </p>
                             </div>
@@ -2746,15 +2744,15 @@ export default function Backtest() {
                                     checked={params.ai_follow_strategy_exits === true}
                                     onChange={e => setParams({ ...params, ai_follow_strategy_exits: e.target.checked })}
                                 />
-                                <span className="text-[11px] text-slate-300 font-medium">Follow Strategy Exits</span>
-                                <span className="text-[10px] text-slate-500">
+                                <span className="text-2xs text-fg-3 font-medium">Follow Strategy Exits</span>
+                                <span className="text-3xs text-fg-5">
                                     {params.ai_follow_strategy_exits === true
                                         ? 'Simulation honours strategy exit signals — resim stops when strategy closed'
                                         : 'Simulation holds until SL/TP hit (ignores strategy exit time)'}
                                 </span>
                             </label>
 
-                            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-slate-400">
+                            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-3xs text-fg-4">
                                 <span>• Anonymised OHLCV (T-0 … T-25)</span>
                                 <span>• RSI / ATR / ADX context</span>
                                 <span>• Suggests SL &amp; TP levels</span>
@@ -2765,17 +2763,17 @@ export default function Backtest() {
             </div>
 
             {/* 4. Strategy Specific Params */}
-            <div className="border-t border-slate-700 pt-4 space-y-4">
-                <h4 className="text-sm font-bold text-slate-300">⚡ Strategy Parameters</h4>
+            <div className="border-t border-line pt-4 space-y-4">
+                <h4 className="text-sm font-bold text-fg-3">⚡ Strategy Parameters</h4>
                 
                 <div className="grid grid-cols-2 gap-4">
                     {/* Explicit ORB Inputs for Better UX (Dropdown) */}
                     {params.strategy === 'orb_breakout' && (
                         <>
                              <div className="col-span-1">
-                                <label className="block text-xs text-slate-400 mb-1">Range Duration</label>
-                                <select 
-                                    className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                <label htmlFor="backtest-range-duration-42" className="block text-xs text-fg-4 mb-1">Range Duration</label>
+                                <select id="backtest-range-duration-42" 
+                                    className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                     value={params.range_duration_min || 30}
                                     onChange={e => setParams({...params, range_duration_min: parseInt(e.target.value)})}
                                 >
@@ -2786,8 +2784,8 @@ export default function Backtest() {
                                 </select>
                              </div>
                              <div className="col-span-1">
-                                 <label className="block text-xs text-slate-400 mb-1">Breakout Buffer %</label>
-                                 <input type="number" step="0.01" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                 <label htmlFor="backtest-breakout-buffer-43" className="block text-xs text-fg-4 mb-1">Breakout Buffer %</label>
+                                 <input id="backtest-breakout-buffer-43" type="number" step="0.01" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                     value={params.breakout_buffer_pct}
                                     onChange={e => setParams({...params, breakout_buffer_pct: e.target.value})} />
                              </div>
@@ -2797,16 +2795,16 @@ export default function Backtest() {
                     {/* Breakout Strategy Specific */}
                     {params.strategy === 'breakout_range' && (
                         <div className="col-span-2 bg-slate-800/50 p-2 rounded border border-blue-900/30 mb-2">
-                             <label className="block text-xs text-blue-300 mb-1 font-bold">Breakout Range Mode</label>
-                             <select 
-                                 className="w-full bg-slate-900 border border-blue-900/50 rounded p-2 text-white text-sm"
+                             <label htmlFor="backtest-breakout-range-mode-44" className="block text-xs text-blue-300 mb-1 font-bold">Breakout Range Mode</label>
+                             <select id="backtest-breakout-range-mode-44" 
+                                 className="w-full bg-slate-900 border border-blue-900/50 rounded p-2 text-fg text-sm"
                                  value={params.breakout_mode || 'ORB'}
                                  onChange={e => setParams({...params, breakout_mode: e.target.value})}
                              >
                                  <option value="ORB">Opening Range Breakout (ORB)</option>
                                  <option value="DYNAMIC">Dynamic (Donchian / Recent High-Low)</option>
                              </select>
-                             <div className="text-[10px] text-slate-500 mt-1">
+                             <div className="text-3xs text-fg-5 mt-1">
                                  {params.breakout_mode === 'ORB' ? 'Trades breakouts of the initial market range (e.g. first 30m).' : 'Trades breakouts of dynamic High/Low channels (Donchian).'}
                              </div>
                         </div>
@@ -2815,9 +2813,9 @@ export default function Backtest() {
                     {/* RL Agent Target Model Dropdown — hidden when Ensemble Mode is active */}
                     {params.strategy === 'rl_agent' && !params.use_ensemble && (
                         <div className="col-span-2">
-                             <label className="block text-xs text-blue-300 mb-1 font-bold">Target RL Model</label>
-                             <select 
-                                 className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                             <label htmlFor="backtest-target-rl-model-45" className="block text-xs text-blue-300 mb-1 font-bold">Target RL Model</label>
+                             <select id="backtest-target-rl-model-45" 
+                                 className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                  value={params.model_file || ''}
                                  onChange={e => setParams({...params, model_file: e.target.value})}
                              >
@@ -2834,7 +2832,7 @@ export default function Backtest() {
                                      return opts;
                                  })}
                              </select>
-                             <div className="text-[10px] text-slate-500 mt-1">
+                             <div className="text-3xs text-fg-5 mt-1">
                                  Select the specific AI model weights to trade natively. Stop Losses are managed purely by the Neural Network.
                              </div>
                         </div>
@@ -2847,27 +2845,27 @@ export default function Backtest() {
                                 <div className="text-xs font-bold text-orange-400 mb-2">⚡ RL Safety Controls</div>
                                 <div className="grid grid-cols-2 gap-2">
                                     <div>
-                                        <label className="block text-xs text-slate-400 mb-1">⏰ Max Hold Candles</label>
-                                        <input type="number" step="1" min="0"
-                                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                        <label htmlFor="backtest-max-hold-candles-46" className="block text-xs text-fg-4 mb-1">⏰ Max Hold Candles</label>
+                                        <input id="backtest-max-hold-candles-46" type="number" step="1" min="0"
+                                            className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                             value={params.max_hold_candles ?? 20}
                                             onChange={e => setParams({...params, max_hold_candles: parseInt(e.target.value) || 0})}
                                         />
-                                        <div className="text-[10px] text-slate-500 mt-1">Force exit after N candles. 0 = disabled. (20 = ~100 min on 5m)</div>
+                                        <div className="text-3xs text-fg-5 mt-1">Force exit after N candles. 0 = disabled. (20 = ~100 min on 5m)</div>
                                     </div>
                                     <div>
-                                        <label className="block text-xs text-slate-400 mb-1">🛑 Adverse Exit (ATR×)</label>
-                                        <input type="number" step="0.5" min="0"
-                                            className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                        <label htmlFor="backtest-adverse-exit-atr-47" className="block text-xs text-fg-4 mb-1">🛑 Adverse Exit (ATR×)</label>
+                                        <input id="backtest-adverse-exit-atr-47" type="number" step="0.5" min="0"
+                                            className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                             value={params.adverse_atr_mult ?? 3.0}
                                             onChange={e => setParams({...params, adverse_atr_mult: parseFloat(e.target.value) || 3.0})}
                                         />
-                                        <div className="text-[10px] text-slate-500 mt-1">Exit if spot moves N×ATR against position. Prevents slow-bleed losses.</div>
+                                        <div className="text-3xs text-fg-5 mt-1">Exit if spot moves N×ATR against position. Prevents slow-bleed losses.</div>
                                     </div>
                                     <div className="col-span-2 flex items-center justify-between pt-1">
                                         <div>
-                                            <span className="text-xs text-slate-400">Enable Adverse Spot Move Stop</span>
-                                            <div className="text-[10px] text-slate-500">Catches trades the SL misses (slow drift, open all day)</div>
+                                            <span className="text-xs text-fg-4">Enable Adverse Spot Move Stop</span>
+                                            <div className="text-3xs text-fg-5">Catches trades the SL misses (slow drift, open all day)</div>
                                         </div>
                                         <input type="checkbox"
                                             checked={params.adverse_exit_enabled ?? true}
@@ -2888,8 +2886,8 @@ export default function Backtest() {
                                     {/* Daily Profit Lock */}
                                     <div className="col-span-2 flex items-center justify-between">
                                         <div>
-                                            <span className="text-xs text-slate-300 font-medium">Daily Profit Lock</span>
-                                            <div className="text-[10px] text-slate-500">Stop entering new trades after hitting daily gain target</div>
+                                            <span className="text-xs text-fg-3 font-medium">Daily Profit Lock</span>
+                                            <div className="text-3xs text-fg-5">Stop entering new trades after hitting daily gain target</div>
                                         </div>
                                         <input type="checkbox"
                                             checked={params.enable_daily_profit_lock ?? true}
@@ -2898,20 +2896,20 @@ export default function Backtest() {
                                     </div>
                                     {(params.enable_daily_profit_lock ?? true) && (
                                         <div>
-                                            <label className="block text-xs text-slate-400 mb-1">Lock After Gain (%)</label>
-                                            <input type="number" step="0.1" min="0.1" max="10"
-                                                className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                            <label htmlFor="backtest-lock-after-gain-48" className="block text-xs text-fg-4 mb-1">Lock After Gain (%)</label>
+                                            <input id="backtest-lock-after-gain-48" type="number" step="0.1" min="0.1" max="10"
+                                                className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                                 value={params.daily_profit_lock_pct ?? 0.5}
                                                 onChange={e => setParams({...params, daily_profit_lock_pct: parseFloat(e.target.value) || 0.5})}
                                             />
-                                            <div className="text-[10px] text-slate-500 mt-1">e.g. 0.5 = lock after 0.5% daily gain</div>
+                                            <div className="text-3xs text-fg-5 mt-1">e.g. 0.5 = lock after 0.5% daily gain</div>
                                         </div>
                                     )}
                                     {/* Daily Loss Filter */}
                                     <div className="col-span-2 flex items-center justify-between pt-1 border-t border-teal-900/30">
                                         <div>
-                                            <span className="text-xs text-slate-300 font-medium">Daily Loss Filter</span>
-                                            <div className="text-[10px] text-slate-500">Block low-quality entries after consecutive daily losses</div>
+                                            <span className="text-xs text-fg-3 font-medium">Daily Loss Filter</span>
+                                            <div className="text-3xs text-fg-5">Block low-quality entries after consecutive daily losses</div>
                                         </div>
                                         <input type="checkbox"
                                             checked={params.enable_daily_loss_filter ?? true}
@@ -2920,9 +2918,9 @@ export default function Backtest() {
                                     </div>
                                     {(params.enable_daily_loss_filter ?? true) && (
                                         <div>
-                                            <label className="block text-xs text-slate-400 mb-1">Max Losses Before Block</label>
-                                            <select
-                                                className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                            <label htmlFor="backtest-max-losses-before-block-49" className="block text-xs text-fg-4 mb-1">Max Losses Before Block</label>
+                                            <select id="backtest-max-losses-before-block-49"
+                                                className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                                 value={params.max_daily_losses ?? 3}
                                                 onChange={e => setParams({...params, max_daily_losses: parseInt(e.target.value)})}
                                             >
@@ -2932,7 +2930,7 @@ export default function Backtest() {
                                                 <option value={4}>4 losses → block entries</option>
                                                 <option value={99}>Disabled (no cap)</option>
                                             </select>
-                                            <div className="text-[10px] text-slate-500 mt-1">After this many intra-day losses, new entries are blocked for the day</div>
+                                            <div className="text-3xs text-fg-5 mt-1">After this many intra-day losses, new entries are blocked for the day</div>
                                         </div>
                                     )}
                                 </div>
@@ -2953,10 +2951,10 @@ export default function Backtest() {
                                 </div>
                                 {params.use_ensemble && (
                                     <div>
-                                        <label className="block text-xs text-slate-400 mb-1">Select 2+ Models for Majority Vote</label>
-                                        <div className="max-h-40 overflow-y-auto bg-slate-900 border border-slate-700 rounded p-2 space-y-1">
+                                        <label className="block text-xs text-fg-4 mb-1">Select 2+ Models for Majority Vote</label>
+                                        <div className="max-h-40 overflow-y-auto bg-slate-900 border border-line rounded p-2 space-y-1">
                                             {rlModels.length === 0 && (
-                                                <div className="text-xs text-slate-500 italic">No models available. Train or upload models first.</div>
+                                                <div className="text-xs text-fg-5 italic">No models available. Train or upload models first.</div>
                                             )}
                                             {rlModels.flatMap((m, idx) => {
                                                 const variants = [
@@ -2966,7 +2964,7 @@ export default function Backtest() {
                                                 return variants.map(({ file, tag }) => {
                                                     const selected = (params.ensemble_models || []).includes(file);
                                                     return (
-                                                        <label key={`${idx}_${tag}`} className={`flex items-center gap-2 text-xs p-1 rounded cursor-pointer hover:bg-slate-800 ${selected ? 'bg-purple-900/30 text-purple-300' : 'text-slate-300'}`}>
+                                                        <label key={`${idx}_${tag}`} className={`flex items-center gap-2 text-xs p-1 rounded cursor-pointer hover:bg-slate-800 ${selected ? 'bg-purple-900/30 text-purple-300' : 'text-fg-3'}`}>
                                                             <input type="checkbox"
                                                                 checked={selected}
                                                                 onChange={e => {
@@ -2977,17 +2975,17 @@ export default function Backtest() {
                                                                     setParams({...params, ensemble_models: updated});
                                                                 }}
                                                             />
-                                                            <span>{m.model_name || m.symbol} <span className="text-slate-500">({tag})</span></span>
-                                                            <span className="text-slate-600 ml-auto text-[10px]">{file}</span>
+                                                            <span>{m.model_name || m.symbol} <span className="text-fg-5">({tag})</span></span>
+                                                            <span className="text-fg-6 ml-auto text-3xs">{file}</span>
                                                         </label>
                                                     );
                                                 });
                                             })}
                                         </div>
                                         {(params.ensemble_models || []).length > 0 && (params.ensemble_models || []).length < 2 && (
-                                            <div className="text-[10px] text-orange-400 mt-1">⚠ Select at least 2 models for ensemble voting to work.</div>
+                                            <div className="text-3xs text-orange-400 mt-1">⚠ Select at least 2 models for ensemble voting to work.</div>
                                         )}
-                                        <div className="text-[10px] text-slate-500 mt-1">
+                                        <div className="text-3xs text-fg-5 mt-1">
                                             Ensemble runs all selected models on the same candles, then takes a majority vote on direction. Improves accuracy by reducing single-model bias.
                                         </div>
                                     </div>
@@ -3028,31 +3026,31 @@ export default function Backtest() {
                             };
                             return (
                                 <div key={key} className="col-span-2">
-                                    <label className="block text-xs text-slate-400 mb-1">{label} <span className="text-slate-600">({selected.length} voting)</span></label>
+                                    <label className="block text-xs text-fg-4 mb-1">{label} <span className="text-fg-6">({selected.length} voting)</span></label>
                                     <div className="flex flex-wrap gap-1.5">
                                         {COUNCIL_MEMBER_OPTIONS.map(id => {
                                             const on = selected.includes(id);
                                             return (
                                                 <button key={id} type="button" onClick={() => toggle(id)}
-                                                    className={`text-[11px] px-2 py-1 rounded border ${on ? 'bg-purple-700/40 border-purple-500 text-purple-100' : 'bg-slate-900 border-slate-700 text-slate-500'}`}>
+                                                    className={`text-2xs px-2 py-1 rounded border ${on ? 'bg-purple-800/40 border-purple-500 text-purple-100' : 'bg-slate-900 border-line text-fg-5'}`}>
                                                     {on ? '✓ ' : ''}{id}
                                                 </button>
                                             );
                                         })}
                                     </div>
-                                    <div className="text-[10px] text-slate-500 mt-1">Members that vote each bar; a trade needs ≥ Min Votes members agreeing on direction.</div>
+                                    <div className="text-3xs text-fg-5 mt-1">Members that vote each bar; a trade needs ≥ Min Votes members agreeing on direction.</div>
                                 </div>
                             );
                         }
 
                         return (
                             <div key={key} className={isBool ? "col-span-2 flex items-center justify-between" : ""}>
-                                <label className={isBool ? "text-sm text-slate-400" : "block text-xs text-slate-400 mb-1"}>{label}</label>
+                                <label className={isBool ? "text-sm text-fg-4" : "block text-xs text-fg-4 mb-1"}>{label}</label>
                                 {isBool ? (
                                     <input type="checkbox" checked={params[key] ?? val}
                                         onChange={e => setParams({...params, [key]: e.target.checked})} />
                                 ) : enumOpts ? (
-                                    <select className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                    <select className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                         value={params[key] ?? val}
                                         onChange={e => setParams({...params, [key]: e.target.value})}>
                                         {enumOpts.map((opt, i) => (
@@ -3060,7 +3058,7 @@ export default function Backtest() {
                                         ))}
                                     </select>
                                 ) : (
-                                    <input type={typeof val === 'string' ? "text" : "number"} step="0.1" className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                    <input type={typeof val === 'string' ? "text" : "number"} step="0.1" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                         value={params[key] ?? val}
                                         onChange={e => {
                                             let v = e.target.value;
@@ -3083,28 +3081,28 @@ export default function Backtest() {
                 its own row at the top so it doesn't compete with Save/Deploy. */}
             <button
                 onClick={() => setAskAiModal(m => ({ ...m, open: true, step: 'config', mode: 'params', error: null, result: null }))}
-                className="col-span-2 bg-violet-700/30 hover:bg-violet-700/50 text-xs py-2 rounded text-violet-100 border border-violet-700 shadow-sm font-bold flex items-center justify-center gap-2"
+                className="col-span-2 bg-violet-800/30 hover:bg-violet-800/50 text-xs py-2 rounded text-violet-100 border border-violet-700 shadow-sm font-bold flex items-center justify-center gap-2"
                 title="Have the AI suggest optimal parameter values for this strategy + symbol"
             >
                 🤖 Ask AI for Parameter Suggestions
             </button>
             <button
                 onClick={handleSaveDefault}
-                className="bg-gray-700 hover:bg-gray-600 text-xs py-2 rounded text-gray-300 border border-gray-600"
+                className="bg-gray-700 hover:bg-gray-600 text-xs py-2 rounded text-fg-3 border border-line-2"
                 title="Update Global Strategy Defaults with these values"
             >
                 💾 Save as Default
             </button>
             <button 
                 onClick={handleSaveConfig}
-                className="bg-purple-800 hover:bg-purple-700 text-xs py-2 rounded text-purple-100 border border-purple-700 shadow-sm"
+                className="bg-purple-800 hover:bg-purple-800 text-xs py-2 rounded text-purple-100 border border-purple-700 shadow-sm"
                 title="Save this specific config for later"
             >
                 📁 Save Config
             </button>
             <button 
                 onClick={handleDeployLive}
-                className="bg-green-800 hover:bg-green-700 text-xs py-2 rounded text-green-100 border border-green-700 shadow-sm"
+                className="bg-green-800 hover:bg-green-800 text-xs py-2 rounded text-green-100 border border-green-700 shadow-sm"
                 title="Configure Live Bot for this symbol"
             >
                 🚀 Deploy Live
@@ -3115,7 +3113,7 @@ export default function Backtest() {
         )}
 
         {/* Results */}
-        <div className={`${configCollapsed ? '' : 'lg:col-span-2'} bg-surface p-6 rounded-xl border border-slate-700 min-h-[500px]`}>
+        <div className={`${configCollapsed ? '' : 'lg:col-span-2'} bg-surface p-6 rounded-xl border border-line min-h-[500px]`}>
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-xl font-bold">Results</h3>
             {loading ? (
@@ -3162,7 +3160,7 @@ export default function Backtest() {
                   storageKey="backtest:attribution"
                   defaultOpen
                   bodyClassName="px-4 pb-4 pt-0"
-                  summary={<span className="text-xs text-slate-500">
+                  summary={<span className="text-xs text-fg-5">
                     where the money comes from, and whether costs leave any of it
                   </span>}
                 >
@@ -3172,32 +3170,32 @@ export default function Backtest() {
 
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 <div className="p-4 bg-slate-800 rounded-lg">
-                  <p className="text-slate-400 text-sm">Total P&L</p>
-                  <p className={`text-xl font-bold ${result.metrics.totalPnL >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                  <p className="text-fg-4 text-sm">Total P&L</p>
+                  <p className={`text-xl font-bold ${result.metrics.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                     ₹{result.metrics.totalPnL.toFixed(2)}
                   </p>
                 </div>
                 <div className="p-4 bg-slate-800 rounded-lg">
-                  <p className="text-slate-400 text-sm">Avg PnL / Trade</p>
-                  <p className={`text-xl font-bold ${result.metrics.avgPnL >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                  <p className="text-fg-4 text-sm">Avg PnL / Trade</p>
+                  <p className={`text-xl font-bold ${result.metrics.avgPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                     ₹{result.metrics.avgPnL}
                   </p>
                 </div>
                 <div className="p-4 bg-slate-800 rounded-lg">
-                  <p className="text-slate-400 text-sm">Win Rate</p>
-                  <p className="text-xl font-bold text-white">{result.metrics.winRate}%</p>
+                  <p className="text-fg-4 text-sm">Win Rate</p>
+                  <p className="text-xl font-bold text-fg">{result.metrics.winRate}%</p>
                 </div>
                 <div className="p-4 bg-slate-800 rounded-lg">
-                  <p className="text-slate-400 text-sm">Total Trades</p>
-                  <p className="text-xl font-bold text-white">{result.metrics.totalTrades}</p>
+                  <p className="text-fg-4 text-sm">Total Trades</p>
+                  <p className="text-xl font-bold text-fg">{result.metrics.totalTrades}</p>
                 </div>
                 <div className="p-4 bg-slate-800 rounded-lg">
-                  <p className="text-slate-400 text-sm">Max Drawdown</p>
-                  <p className="text-xl font-bold text-red-500">{result.metrics.maxDrawdown}%</p>
+                  <p className="text-fg-4 text-sm">Max Drawdown</p>
+                  <p className="text-xl font-bold text-red-400">{result.metrics.maxDrawdown}%</p>
                 </div>
                 <div className="p-4 bg-slate-800 rounded-lg">
-                  <p className="text-slate-400 text-sm">Sharpe Ratio</p>
-                  <p className={`text-xl font-bold ${result.metrics.sharpeRatio >= 1 ? 'text-green-500' : result.metrics.sharpeRatio > 0 ? 'text-yellow-500' : 'text-red-500'}`}>
+                  <p className="text-fg-4 text-sm">Sharpe Ratio</p>
+                  <p className={`text-xl font-bold ${result.metrics.sharpeRatio >= 1 ? 'text-green-400' : result.metrics.sharpeRatio > 0 ? 'text-yellow-400' : 'text-red-400'}`}>
                     {result.metrics.sharpeRatio}
                   </p>
                 </div>
@@ -3207,7 +3205,7 @@ export default function Backtest() {
               <div className="flex justify-end">
                 <button
                   onClick={() => setAskAiModal(m => ({ ...m, open: true, step: 'config', mode: 'review', error: null, result: null }))}
-                  className="bg-violet-700/30 hover:bg-violet-700/50 text-xs py-2 px-3 rounded text-violet-100 border border-violet-700 font-bold flex items-center gap-2"
+                  className="bg-violet-800/30 hover:bg-violet-800/50 text-xs py-2 px-3 rounded text-violet-100 border border-violet-700 font-bold flex items-center gap-2"
                   title="Send these results + the current params to the AI for a strategy critique and concrete improvement ideas"
                 >
                   🤖 Ask AI to Improve This Strategy
@@ -3235,13 +3233,13 @@ export default function Backtest() {
                     </div>
                   )}
                   <button
-                    className="ml-1 px-2.5 py-1 text-xs bg-red-800/60 hover:bg-red-700 text-red-200 rounded border border-red-600/50 transition-colors whitespace-nowrap"
+                    className="ml-1 px-2.5 py-1 text-xs bg-red-800/60 hover:bg-red-800 text-red-200 rounded border border-red-600/50 transition-colors whitespace-nowrap"
                     title="Stop AI processing — keeps decisions received so far"
                     onClick={async () => {
                       setAiPolling(false);
                       if (aiJobId) {
                         try { await axios.post(`${API_URL}/ai-confirmation/cancel/${aiJobId}`); }
-                        catch (_) {}
+                        catch (err) { console.warn('Failed to cancel the AI confirmation job; it may still be running server-side:', err); }
                       }
                     }}
                   >
@@ -3261,11 +3259,17 @@ export default function Backtest() {
                       <Bot className="w-4 h-4" />
                       AI Strategy Analysis
                     </div>
-                    {aiPanelOpen ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                    {aiPanelOpen ? <ChevronUp className="w-4 h-4 text-fg-4" /> : <ChevronDown className="w-4 h-4 text-fg-4" />}
                   </button>
                   {aiPanelOpen && (
-                    <div className="px-5 pb-5 pt-1 border-t border-slate-700">
-                      <div className="prose prose-invert prose-sm max-w-none text-slate-300 leading-relaxed whitespace-pre-wrap text-sm">
+                    <div className="px-5 pb-5 pt-1 border-t border-line">
+                      {/* `prose prose-invert prose-sm` was here and generated nothing —
+                          @tailwindcss/typography is not a dependency. Removed rather than
+                          left inert: `prose-invert` hard-pins DARK prose colours, so the
+                          day someone installs the plugin this block would stop following
+                          the theme on all six light palettes. The styling it was reaching
+                          for is already present as real tokens. */}
+                      <div className="max-w-none text-fg-3 leading-relaxed whitespace-pre-wrap text-sm">
                         {result.ai_summary}
                       </div>
                     </div>
@@ -3280,21 +3284,25 @@ export default function Backtest() {
                 const hasFveData  = result.trades.some(t => t.aiConfirmation?.suggested_entry_spot != null);
                 const chartData = showAiSim && aiSimData ? aiSimData.curve : result.equityCurve;
                 const isComparison = showAiSim && !!aiSimData;
+                // Fills are `bg-{hue}-800/60`, not `-700/60`: 700 is the solid role and
+                // stays mid-tone in BOTH modes, while the 200 ink band inverts to dark on
+                // light themes — dark-on-mid measured 2.91-3.05:1 on the warm light
+                // themes. 800 is the tint role and inverts with the ink. Worst now 7.93.
                 const viewModes = [
-                  { key: 'strategy', label: 'Strategy', enabled: true,                                    color: 'bg-slate-600 text-white' },
-                  { key: 'ai_sl',    label: 'AI SL',    enabled: hasAiSlData,                             color: 'bg-amber-700/60 text-amber-200' },
-                  { key: 'ai_tp',    label: 'AI TP',    enabled: hasAiTpData,                             color: 'bg-sky-700/60 text-sky-200' },
-                  { key: 'ai_both',  label: 'AI SL+TP', enabled: hasAiSlData && hasAiTpData,             color: 'bg-violet-700/60 text-violet-200' },
-                  { key: 'ai_fve',   label: 'AI FVE',   enabled: hasAiSlData && hasAiTpData, needsData: !hasFveData, color: 'bg-teal-700/60 text-teal-200',
+                  { key: 'strategy', label: 'Strategy', enabled: true,                                    color: 'bg-slate-600 text-fg' },
+                  { key: 'ai_sl',    label: 'AI SL',    enabled: hasAiSlData,                             color: 'bg-amber-800/60 text-amber-200' },
+                  { key: 'ai_tp',    label: 'AI TP',    enabled: hasAiTpData,                             color: 'bg-sky-800/60 text-sky-200' },
+                  { key: 'ai_both',  label: 'AI SL+TP', enabled: hasAiSlData && hasAiTpData,             color: 'bg-violet-800/60 text-violet-200' },
+                  { key: 'ai_fve',   label: 'AI FVE',   enabled: hasAiSlData && hasAiTpData, needsData: !hasFveData, color: 'bg-teal-800/60 text-teal-200',
                     title: hasFveData ? 'AI SL+TP with Fair Value Entry — skips trades where spot never retraced to AI entry level within 15 min' : 'No fair entry data yet — re-run AI confirmation to populate' },
                 ];
                 return (
                 <div className="bg-slate-800 rounded-lg p-4">
                   <div className="flex items-center justify-between mb-3">
-                    <h4 className="text-slate-400">Equity Curve</h4>
+                    <h4 className="text-fg-4">Equity Curve</h4>
                     <div className="flex items-center gap-2">
                       {showAiSim && hasAiSimAvail && (
-                        <div className="flex items-center rounded border border-slate-600 overflow-hidden text-xs">
+                        <div className="flex items-center rounded border border-line-2 overflow-hidden text-xs">
                           {viewModes.filter(m => m.enabled).map((m, i) => {
                             const isActive = aiSlTpView === m.key;
                             const isLoading = resimVariantLoading === m.key;
@@ -3302,7 +3310,7 @@ export default function Backtest() {
                             return (
                               <button
                                 key={m.key}
-                                className={`px-2.5 py-1 transition-colors ${i > 0 ? 'border-l border-slate-600' : ''} ${m.needsData ? 'text-slate-600 cursor-not-allowed' : isActive ? m.color : 'text-slate-400 hover:text-slate-200'}`}
+                                className={`px-2.5 py-1 transition-colors ${i > 0 ? 'border-l border-line-2' : ''} ${m.needsData ? 'text-fg-6 cursor-not-allowed' : isActive ? m.color : 'text-fg-4 hover:text-fg-2'}`}
                                 onClick={() => !m.needsData && selectResimView(m.key)}
                                 title={m.title || (isCached ? `View ${m.label} simulation` : `Compute and view ${m.label} simulation`)}
                                 disabled={m.needsData}
@@ -3316,7 +3324,7 @@ export default function Backtest() {
                       )}
                       {hasAiSimAvail && (
                         <button
-                          className={`text-xs px-3 py-1 rounded border transition-colors ${showAiSim ? 'bg-green-800/60 border-green-600 text-green-200' : 'bg-slate-700 border-slate-600 text-slate-300 hover:border-green-600 hover:text-green-300'}`}
+                          className={`text-xs px-3 py-1 rounded border transition-colors ${showAiSim ? 'bg-green-800/60 border-green-600 text-green-200' : 'bg-slate-700 border-line-2 text-fg-3 hover:border-green-600 hover:text-green-300'}`}
                           onClick={() => { setShowAiSim(s => !s); }}
                         >
                           📊 {showAiSim ? 'AI View ✓' : 'Compare AI SL/TP'}
@@ -3332,13 +3340,13 @@ export default function Backtest() {
                         {/* Row 1 — P&L comparison */}
                         <div className="grid grid-cols-4 gap-2 text-center">
                           <div className="bg-slate-700/60 rounded p-2">
-                            <p className="text-[10px] text-slate-400">Strategy P&L</p>
+                            <p className="text-3xs text-fg-4">Strategy P&L</p>
                             <p className={`text-sm font-bold ${aiSimData.originalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                               ₹{aiSimData.originalPnl.toFixed(0)}
                             </p>
                           </div>
                           <div className="bg-green-900/30 border border-green-700/40 rounded p-2">
-                            <p className="text-[10px] text-slate-400">
+                            <p className="text-3xs text-fg-4">
                               {aiSlTpView === 'strategy' && 'Strategy SL/TP P&L'}
                               {aiSlTpView === 'ai_sl'    && 'AI SL + Strategy TP P&L'}
                               {aiSlTpView === 'ai_tp'    && 'Strategy SL + AI TP P&L'}
@@ -3350,34 +3358,34 @@ export default function Backtest() {
                             </p>
                           </div>
                           <div className="bg-slate-700/60 rounded p-2">
-                            <p className="text-[10px] text-slate-400">Difference</p>
+                            <p className="text-3xs text-fg-4">Difference</p>
                             <p className={`text-sm font-bold ${diff >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                               {diff >= 0 ? '+' : ''}₹{diff.toFixed(0)}
                             </p>
                           </div>
                           <div className="bg-slate-700/60 rounded p-2">
-                            <p className="text-[10px] text-slate-400">Confirmed Win Rate</p>
-                            <p className="text-sm font-bold text-white">{aiSimData.winRate}%</p>
+                            <p className="text-3xs text-fg-4">Confirmed Win Rate</p>
+                            <p className="text-sm font-bold text-fg">{aiSimData.winRate}%</p>
                           </div>
                         </div>
                         {/* Row 2 — totals + risk metrics */}
                         <div className="grid grid-cols-4 gap-2 text-center">
                           <div className="bg-slate-700/60 rounded p-2">
-                            <p className="text-[10px] text-slate-400">Confirmed Trades</p>
-                            <p className="text-sm font-bold text-white">{aiSimData.totalTrades}</p>
+                            <p className="text-3xs text-fg-4">Confirmed Trades</p>
+                            <p className="text-sm font-bold text-fg">{aiSimData.totalTrades}</p>
                           </div>
                           <div className="bg-slate-700/60 rounded p-2">
-                            <p className="text-[10px] text-slate-400">Rejected Trades</p>
+                            <p className="text-3xs text-fg-4">Rejected Trades</p>
                             <p className="text-sm font-bold text-red-400/80">{aiSimData.rejectedCount}</p>
                           </div>
                           <div className="bg-slate-700/60 rounded p-2">
-                            <p className="text-[10px] text-slate-400">AI Sharpe</p>
+                            <p className="text-3xs text-fg-4">AI Sharpe</p>
                             <p className={`text-sm font-bold ${aiSimData.sharpe >= 1 ? 'text-green-400' : aiSimData.sharpe > 0 ? 'text-yellow-400' : 'text-red-400'}`}>
                               {aiSimData.sharpe}
                             </p>
                           </div>
                           <div className="bg-slate-700/60 rounded p-2">
-                            <p className="text-[10px] text-slate-400">AI Max DD</p>
+                            <p className="text-3xs text-fg-4">AI Max DD</p>
                             <p className={`text-sm font-bold ${aiSimData.maxDrawdown > 20 ? 'text-red-400' : aiSimData.maxDrawdown > 10 ? 'text-yellow-400' : 'text-green-400'}`}>
                               -{aiSimData.maxDrawdown}%
                             </p>
@@ -3387,7 +3395,7 @@ export default function Backtest() {
                     );
                   })()}
                   {isComparison && (
-                    <p className="text-[10px] text-slate-500 mb-2">
+                    <p className="text-3xs text-fg-5 mb-2">
                       Est. using delta ~0.5. Actual premium moves may differ due to IV & time decay.
                     </p>
                   )}
@@ -3395,26 +3403,27 @@ export default function Backtest() {
                   <div className="h-72">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                      <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
                       <XAxis
                         dataKey={isComparison ? 't' : 'date'}
-                        stroke="#94a3b8"
+                        stroke={ct.axis}
+                        tick={{ fill: ct.text.secondary }}
                         tickFormatter={isComparison ? (v) => `T${v}` : (s) => new Date(s).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" })}
                       />
-                      <YAxis stroke="#94a3b8" domain={['auto', 'auto']} />
+                      <YAxis stroke={ct.axis} tick={{ fill: ct.text.secondary }} domain={['auto', 'auto']} />
                       <Tooltip
-                        contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155' }}
-                        itemStyle={{ color: '#fff' }}
+                        contentStyle={ct.tooltipStyle()}
+                        itemStyle={{ color: ct.tooltip.text }}
                         labelFormatter={isComparison ? (v) => `Trade #${v}` : (l) => new Date(l).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}
                       />
                       {isComparison ? (
                         <>
                           <Legend wrapperStyle={{ fontSize: '11px' }} />
-                          <Line type="monotone" dataKey="original" stroke="#3b82f6" name="Strategy" dot={false} strokeWidth={2} />
-                          <Line type="monotone" dataKey="ai_sim" stroke="#4ade80" name="AI SL/TP" dot={false} strokeWidth={2} strokeDasharray="5 3" />
+                          <Line type="monotone" dataKey="original" stroke={ct.categorical[0]} name="Strategy" dot={false} strokeWidth={2} />
+                          <Line type="monotone" dataKey="ai_sim" stroke={ct.categorical[1]} name="AI SL/TP" dot={false} strokeWidth={2} strokeDasharray="5 3" />
                         </>
                       ) : (
-                        <Line type="monotone" dataKey="balance" stroke="#3b82f6" strokeWidth={2} dot={false} />
+                        <Line type="monotone" dataKey="balance" stroke={ct.categorical[0]} strokeWidth={2} dot={false} />
                       )}
                     </LineChart>
                   </ResponsiveContainer>
@@ -3430,21 +3439,21 @@ export default function Backtest() {
                 return (
                 <div className="bg-slate-800 rounded-lg p-4 overflow-hidden">
                   <div className="flex items-center justify-between mb-4">
-                    <h4 className="text-slate-400">All Trades ({result.trades.length})</h4>
+                    <h4 className="text-fg-4">All Trades ({result.trades.length})</h4>
                     {hasSpotData && (
                       <div className="flex items-center gap-2">
                         {isSwingMode && (
-                          <span className="text-[10px] bg-blue-900/40 text-blue-300 border border-blue-700/40 px-2 py-0.5 rounded-full">
+                          <span className="text-3xs bg-blue-900/40 text-blue-300 border border-blue-700/40 px-2 py-0.5 rounded-full">
                             Swing SL Mode
                           </span>
                         )}
-                        <div className="flex rounded overflow-hidden border border-slate-600 text-xs">
+                        <div className="flex rounded overflow-hidden border border-line-2 text-xs">
                           <button
-                            className={`px-3 py-1 transition-colors ${!showSpotView ? 'bg-slate-600 text-white' : 'bg-transparent text-slate-400 hover:text-white'}`}
+                            className={`px-3 py-1 transition-colors ${!showSpotView ? 'bg-slate-600 text-fg' : 'bg-transparent text-fg-4 hover:text-fg'}`}
                             onClick={() => setShowSpotView(false)}
                           >Premium</button>
                           <button
-                            className={`px-3 py-1 transition-colors ${showSpotView ? 'bg-blue-700 text-white' : 'bg-transparent text-slate-400 hover:text-white'}`}
+                            className={`px-3 py-1 transition-colors ${showSpotView ? 'bg-blue-700 text-white' : 'bg-transparent text-fg-4 hover:text-fg'}`}
                             onClick={() => setShowSpotView(true)}
                           >Spot Index</button>
                         </div>
@@ -3452,13 +3461,13 @@ export default function Backtest() {
                     )}
                   </div>
                   {showSpotView && hasSpotData && (
-                    <p className="text-[10px] text-blue-400/70 mb-2">
+                    <p className="text-3xs text-blue-400/70 mb-2">
                       Showing index price levels. Entry &amp; Exit = underlying index price at signal/exit bar. SL/TP = index levels used as exit triggers. P&amp;L is still based on option premium.
                     </p>
                   )}
-                  <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
-                  <table className="w-full text-sm text-left text-slate-300">
-                    <thead className="text-xs text-slate-400 uppercase bg-slate-700/50 sticky top-0 z-10">
+                  <div className="overflow-x-auto max-h-[37.5rem] overflow-y-auto">
+                  <table className="w-full text-sm text-left text-fg-3">
+                    <thead className="text-xs text-fg-4 uppercase bg-slate-700/50 sticky top-0 z-10">
                       <tr>
                         <th className="px-4 py-3 bg-slate-800">Entry Time</th>
                         <th className="px-4 py-3 bg-slate-800">Symbol</th>
@@ -3497,15 +3506,15 @@ export default function Backtest() {
                     </thead>
                     <tbody>
                       {result.trades.map((trade, idx) => (
-                        <tr key={idx} className="border-b border-slate-700 hover:bg-slate-700/30">
+                        <tr key={idx} className="border-b border-line hover:bg-slate-700/30">
                           <td className="px-4 py-3 text-xs">{new Date(trade.entryTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</td>
                           <td className="px-4 py-3 font-mono text-xs">{trade.option_symbol || '-'}</td>
-                          <td className="px-4 py-3 text-slate-400 text-xs">{trade.volume || '-'}</td>
-                          <td className="px-4 py-3 text-slate-500 text-xs">{trade.avg_volume ? Math.round(trade.avg_volume) : '-'}</td>
+                          <td className="px-4 py-3 text-fg-4 text-xs">{trade.volume || '-'}</td>
+                          <td className="px-4 py-3 text-fg-5 text-xs">{trade.avg_volume ? Math.round(trade.avg_volume) : '-'}</td>
                           <td className={`px-4 py-3 font-bold text-xs ${trade.type === 'CE' || trade.type === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
                             {trade.type}
                           </td>
-                          <td className="px-4 py-3 text-xs max-w-[150px]">
+                          <td className="px-4 py-3 text-xs max-w-[9.375rem]">
                             {trade.ai_decision ? (
                               <div className="flex flex-col items-start gap-0.5">
                                 <span className={`px-1.5 py-0.5 rounded font-bold whitespace-nowrap ${trade.ai_decision === 'CONFIRM' ? 'bg-green-900/50 text-green-300' : 'bg-red-900/50 text-red-300'}`}>
@@ -3522,7 +3531,7 @@ export default function Backtest() {
                                   </span>
                                 )}
                                 {(trade.ai_spot_sl || trade.ai_spot_tp) && (
-                                  <span className="text-purple-400/70 text-[10px] mt-0.5"
+                                  <span className="text-purple-400/70 text-3xs mt-0.5"
                                     title="AI-suggested index levels for SL and TP">
                                     SL {trade.ai_spot_sl ? Number(trade.ai_spot_sl).toFixed(0) : '–'} / TP {trade.ai_spot_tp ? Number(trade.ai_spot_tp).toFixed(0) : '–'}
                                   </span>
@@ -3532,7 +3541,7 @@ export default function Backtest() {
                                     <button
                                       onClick={() => copyPrompt(idx, 'first')}
                                       title="Copy the exact prompt sent to the AI for this trade"
-                                      className="flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-slate-700/60 text-slate-400 hover:text-slate-200 hover:bg-slate-600/60 transition-colors"
+                                      className="flex items-center gap-0.5 text-4xs px-1 py-0.5 rounded bg-slate-700/60 text-fg-4 hover:text-fg-2 hover:bg-slate-600/60 transition-colors"
                                     >
                                       {promptCopyState[`first_${idx}`] === 'done'
                                         ? <><Check size={9} className="text-green-400" /> Copied</>
@@ -3544,7 +3553,7 @@ export default function Backtest() {
                                       <button
                                         onClick={() => copyResponse(idx, trade.aiConfirmation.raw_response)}
                                         title="Copy the raw AI response for this trade"
-                                        className="flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-slate-700/60 text-slate-400 hover:text-slate-200 hover:bg-slate-600/60 transition-colors"
+                                        className="flex items-center gap-0.5 text-4xs px-1 py-0.5 rounded bg-slate-700/60 text-fg-4 hover:text-fg-2 hover:bg-slate-600/60 transition-colors"
                                       >
                                         {responseCopyState[idx] === 'done'
                                           ? <><Check size={9} className="text-green-400" /> Copied</>
@@ -3555,19 +3564,19 @@ export default function Backtest() {
                                 )}
                               </div>
                             ) : aiPolling ? (
-                              <span className="text-slate-600 animate-pulse text-xs">analyzing…</span>
+                              <span className="text-fg-6 animate-pulse text-xs">analyzing…</span>
                             ) : '-'}
                           </td>
                           {/* Model: which AI produced the decision (helps spot per-model bias) */}
                           <td className="px-3 py-3 text-xs">
                             {(() => {
                               const mid = trade.aiConfirmation?.model_id;
-                              if (!mid) return aiPolling ? <span className="text-slate-600 text-[10px]">…</span> : <span className="text-slate-600 text-[10px]">-</span>;
+                              if (!mid) return aiPolling ? <span className="text-fg-6 text-3xs">…</span> : <span className="text-fg-6 text-3xs">-</span>;
                               const b = modelBadgeFor(mid);
-                              if (!b) return <span className="text-slate-500 text-[10px]">{mid}</span>;
+                              if (!b) return <span className="text-fg-5 text-3xs">{mid}</span>;
                               return (
                                 <span
-                                  className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${b.cls}`}
+                                  className={`px-1.5 py-0.5 rounded font-mono text-3xs ${b.cls}`}
                                   title={mid}
                                 >
                                   {b.short}
@@ -3576,7 +3585,7 @@ export default function Backtest() {
                             })()}
                           </td>
                           {/* Entry price: spot or premium depending on view */}
-                          <td className="px-4 py-3 font-bold text-white text-xs">
+                          <td className="px-4 py-3 font-bold text-fg text-xs">
                             {showSpotView && hasSpotData
                               ? (trade.spot_entry ? Number(trade.spot_entry).toFixed(2) : '-')
                               : Number(trade.entryPrice).toFixed(2)}
@@ -3609,7 +3618,7 @@ export default function Backtest() {
                           <td className={`px-4 py-3 font-bold text-xs ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                             {Number(trade.pnl).toFixed(2)}
                           </td>
-                          <td className="px-4 py-3 text-slate-400 text-xs">{trade.reason}</td>
+                          <td className="px-4 py-3 text-fg-4 text-xs">{trade.reason}</td>
                           {showAiSim && aiSimData && (() => {
                             const sim = aiSimData.trades[idx];
                             const isReject = trade.ai_decision === 'REJECT';
@@ -3622,11 +3631,11 @@ export default function Backtest() {
                               <>
                                 <td className="px-4 py-3 text-xs font-mono border-l border-green-700/20"
                                   title={aiSl ? `AI SL: ${Number(aiSl).toFixed(2)} (${isCE ? 'below' : 'above'} entry)` : 'No AI SL'}>
-                                  {aiSl ? <span className="text-red-300/80">{Number(aiSl).toFixed(0)}</span> : <span className="text-slate-600">-</span>}
+                                  {aiSl ? <span className="text-red-300/80">{Number(aiSl).toFixed(0)}</span> : <span className="text-fg-6">-</span>}
                                 </td>
                                 <td className="px-4 py-3 text-xs font-mono"
                                   title={aiTp ? `AI TP: ${Number(aiTp).toFixed(2)} (${isCE ? 'above' : 'below'} entry)` : 'No AI TP'}>
-                                  {aiTp ? <span className="text-green-300/80">{Number(aiTp).toFixed(0)}</span> : <span className="text-slate-600">-</span>}
+                                  {aiTp ? <span className="text-green-300/80">{Number(aiTp).toFixed(0)}</span> : <span className="text-fg-6">-</span>}
                                 </td>
                                 {(aiSlTpView === 'ai_fve' || (aiSlTpView === 'ai_both' && result.trades.some(t => t.aiConfirmation?.suggested_entry_spot != null))) && (
                                   <td className="px-4 py-3 text-xs font-mono"
@@ -3639,42 +3648,42 @@ export default function Backtest() {
                                       'AI did not return a fair entry level for this trade'
                                     }>
                                     {isReject ? (
-                                      <span className="text-slate-600">-</span>
+                                      <span className="text-fg-6">-</span>
                                     ) : sim?.fair_skipped ? (
                                       <span className="flex flex-col gap-0.5">
-                                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-orange-900/50 text-orange-300 font-semibold whitespace-nowrap">⏭ Not reached</span>
-                                        {trade.aiConfirmation?.suggested_entry_spot > 0 && <span className="text-orange-400/60 text-[10px]">target {Number(trade.aiConfirmation.suggested_entry_spot).toFixed(0)}</span>}
+                                        <span className="px-1.5 py-0.5 rounded text-3xs bg-orange-900/50 text-orange-300 font-semibold whitespace-nowrap">⏭ Not reached</span>
+                                        {trade.aiConfirmation?.suggested_entry_spot > 0 && <span className="text-orange-400/60 text-3xs">target {Number(trade.aiConfirmation.suggested_entry_spot).toFixed(0)}</span>}
                                       </span>
                                     ) : sim?.fair_entry_spot ? (
                                       <span className="flex flex-col gap-0.5">
                                         <span className="text-teal-300">{isCE ? '↓' : '↑'}{Number(sim.fair_entry_spot).toFixed(0)}</span>
-                                        {sim.fair_entry_premium != null && <span className="text-teal-400/70 text-[10px]">₹{Number(sim.fair_entry_premium).toFixed(0)}</span>}
+                                        {sim.fair_entry_premium != null && <span className="text-teal-400/70 text-3xs">₹{Number(sim.fair_entry_premium).toFixed(0)}</span>}
                                       </span>
                                     ) : trade.aiConfirmation?.suggested_entry_spot === 0 ? (
-                                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-teal-900/40 text-teal-400 whitespace-nowrap">✓ Fair value</span>
+                                      <span className="px-1.5 py-0.5 rounded text-3xs bg-teal-900/40 text-teal-400 whitespace-nowrap">✓ Fair value</span>
                                     ) : trade.aiConfirmation?.suggested_entry_spot > 0 ? (
                                       <span className="flex flex-col gap-0.5">
-                                        <span className="text-slate-400 text-[10px]">⏳ {Number(trade.aiConfirmation.suggested_entry_spot).toFixed(0)}</span>
-                                        <span className="text-slate-600 text-[10px]">run resim</span>
+                                        <span className="text-fg-4 text-3xs">⏳ {Number(trade.aiConfirmation.suggested_entry_spot).toFixed(0)}</span>
+                                        <span className="text-fg-6 text-3xs">run resim</span>
                                       </span>
                                     ) : (
-                                      <span className="text-slate-600 text-[10px]">—</span>
+                                      <span className="text-fg-6 text-3xs">—</span>
                                     )}
                                   </td>
                                 )}
                                 {!sim?.ai_sim_exit || isReject ? (
                                   <>
-                                    <td className="px-4 py-3 text-slate-500 text-xs font-mono">-</td>
+                                    <td className="px-4 py-3 text-fg-5 text-xs font-mono">-</td>
                                     <td className="px-4 py-3 text-xs">
                                       {isReject
-                                        ? <span className="px-1 py-0.5 rounded text-[10px] bg-red-900/30 text-red-500" title="AI rejected this trade — not taken">REJECTED</span>
+                                        ? <span className="px-1 py-0.5 rounded text-3xs bg-red-900/30 text-red-400" title="AI rejected this trade — not taken">REJECTED</span>
                                         : sim?.fair_skipped
-                                        ? <span className="px-1 py-0.5 rounded text-[10px] bg-orange-900/30 text-orange-400" title="Fair value level not reached within 15 min — trade not entered">FVE SKIPPED</span>
-                                        : <span className="px-1 py-0.5 rounded text-[10px] bg-slate-700 text-slate-400">NO DATA</span>}
+                                        ? <span className="px-1 py-0.5 rounded text-3xs bg-orange-900/30 text-orange-400" title="Fair value level not reached within 15 min — trade not entered">FVE SKIPPED</span>
+                                        : <span className="px-1 py-0.5 rounded text-3xs bg-slate-700 text-fg-4">NO DATA</span>}
                                     </td>
                                     <td className={`px-4 py-3 text-xs font-bold ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                                       {isReject || sim?.fair_skipped ? <span title={sim?.fair_skipped ? 'Trade skipped — fair entry not reached' : 'Trade not taken — AI rejected'}>₹0</span> : Number(pnl).toFixed(2)}
-                                      {!isReject && !sim?.fair_skipped && <span className={`block text-[10px] font-normal ${diff >= 0 ? 'text-green-500/70' : 'text-red-500/70'}`}>{diff >= 0 ? '↑+' : '↓'}{diff.toFixed(0)}</span>}
+                                      {!isReject && !sim?.fair_skipped && <span className={`block text-3xs font-normal ${diff >= 0 ? 'text-green-400/70' : 'text-red-400/70'}`}>{diff >= 0 ? '↑+' : '↓'}{diff.toFixed(0)}</span>}
                                     </td>
                                   </>
                                 ) : (
@@ -3684,13 +3693,13 @@ export default function Backtest() {
                                       {Number(sim.ai_sim_exit.spot).toFixed(2)}
                                     </td>
                                     <td className="px-4 py-3 text-xs">
-                                      <span className={`px-1 py-0.5 rounded text-[10px] ${sim.ai_sim_exit.reason === 'TP_HIT' ? 'bg-green-900/50 text-green-300' : sim.ai_sim_exit.reason === 'SL_HIT' ? 'bg-red-900/50 text-red-300' : 'bg-slate-700 text-slate-400'}`}>
+                                      <span className={`px-1 py-0.5 rounded text-3xs ${sim.ai_sim_exit.reason === 'TP_HIT' ? 'bg-green-900/50 text-green-300' : sim.ai_sim_exit.reason === 'SL_HIT' ? 'bg-red-900/50 text-red-300' : 'bg-slate-700 text-fg-4'}`}>
                                         {sim.ai_sim_exit.reason}
                                       </span>
                                     </td>
                                     <td className={`px-4 py-3 text-xs font-bold ${sim.ai_sim_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                                       {Number(sim.ai_sim_pnl).toFixed(2)}
-                                      <span className={`block text-[10px] font-normal ${(sim.ai_sim_pnl - trade.pnl) >= 0 ? 'text-green-500/70' : 'text-red-500/70'}`}>{(sim.ai_sim_pnl - trade.pnl) >= 0 ? '↑+' : '↓'}{(sim.ai_sim_pnl - trade.pnl).toFixed(0)}</span>
+                                      <span className={`block text-3xs font-normal ${(sim.ai_sim_pnl - trade.pnl) >= 0 ? 'text-green-400/70' : 'text-red-400/70'}`}>{(sim.ai_sim_pnl - trade.pnl) >= 0 ? '↑+' : '↓'}{(sim.ai_sim_pnl - trade.pnl).toFixed(0)}</span>
                                     </td>
                                   </>
                                 )}
@@ -3707,7 +3716,7 @@ export default function Backtest() {
               })()}
             </div>
           ) : (
-            <div className="flex items-center justify-center h-full text-slate-500">
+            <div className="flex items-center justify-center h-full text-fg-5">
               Run a backtest to see results
             </div>
           )}
@@ -3734,26 +3743,26 @@ export default function Backtest() {
                               <h3 className="text-lg font-bold text-violet-200 flex items-center gap-2">
                                   {isReviewMode ? '🤖 Ask AI to Improve This Strategy' : '🤖 Ask AI for Parameter Suggestions'}
                               </h3>
-                              <p className="text-[11px] text-slate-400 mt-0.5">
+                              <p className="text-2xs text-fg-4 mt-0.5">
                                   Strategy: <code className="bg-slate-800 px-1 rounded">{params.strategy}</code>
                                   &nbsp;·&nbsp; Symbol: <code className="bg-slate-800 px-1 rounded">{params.symbol}</code>
                                   &nbsp;·&nbsp; {tunableCount} tunable params
                               </p>
                           </div>
-                          <button onClick={onClose} className="text-slate-400 hover:text-white text-2xl leading-none">×</button>
+                          <button onClick={onClose} className="text-fg-4 hover:text-fg text-2xl leading-none">×</button>
                       </div>
 
                       {/* Step: config — pick model + submit */}
                       {askAiModal.step === 'config' && (
                           <div className="p-5 space-y-4">
                               <div>
-                                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
+                                  <label htmlFor="backtest-ai-model-50" className="block text-xs font-bold uppercase tracking-wider text-fg-4 mb-2">
                                       AI Model
                                   </label>
-                                  <select
+                                  <select id="backtest-ai-model-50"
                                       value={askAiModal.model || resolvedModel}
                                       onChange={e => setAskAiModal(m => ({ ...m, model: e.target.value }))}
-                                      className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white text-sm"
+                                      className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                   >
                                       <optgroup label="🌐 Web Sessions (no API cost)">
                                           <option value="claude-web/claude-opus-5">Claude Opus 5 (web) — newest, best</option>
@@ -3779,7 +3788,7 @@ export default function Backtest() {
                                           <option value="claude-opus-5">Claude Opus 5 (API)</option>
                                       </optgroup>
                                   </select>
-                                  <p className="text-[10px] text-slate-500 mt-1">
+                                  <p className="text-3xs text-fg-5 mt-1">
                                       Web-session models reuse credentials saved in your AI Risk Filter section.
                                       API models use the Google/Anthropic keys in your backend env.
                                   </p>
@@ -3789,7 +3798,7 @@ export default function Backtest() {
                                   global Settings; we can't preview their state from here, so just
                                   point the user at the right place. */}
                               {isWebSession && (
-                                  <div className="bg-slate-900/40 border border-slate-700 rounded p-3 text-[11px] text-slate-300">
+                                  <div className="bg-slate-900/40 border border-line rounded p-3 text-2xs text-fg-3">
                                       🍪 Web-session models read cookies from{' '}
                                       <a href="/settings" className="text-amber-300 underline hover:text-amber-200">Settings → AI Web Cookies</a>.
                                       If cookies aren't saved there, the call will fail at runtime with the actual reason.
@@ -3797,7 +3806,7 @@ export default function Backtest() {
                               )}
 
                               {isReviewMode && (
-                                  <div className="bg-violet-950/20 border border-violet-700/30 rounded p-3 text-[11px] text-slate-300">
+                                  <div className="bg-violet-950/20 border border-violet-700/30 rounded p-3 text-2xs text-fg-3">
                                       📊 Sending your <b>backtest results</b> (metrics, exit-reason breakdown,
                                       5 best &amp; 5 worst trades) + the current params, and asking for a
                                       strengths/weaknesses critique and concrete improvements — not just param values.
@@ -3805,23 +3814,23 @@ export default function Backtest() {
                               )}
 
                               {/* Brief summary of what we're sending */}
-                              <details className="text-[11px]">
-                                  <summary className="cursor-pointer text-slate-400 hover:text-slate-200">
+                              <details className="text-2xs">
+                                  <summary className="cursor-pointer text-fg-4 hover:text-fg-2">
                                       Preview: {isReviewMode ? 'payload' : 'parameters'} being sent to AI ({tunableCount} param keys{isReviewMode ? ' + results' : ''})
                                   </summary>
-                                  <pre className="mt-2 bg-slate-900 p-3 rounded text-slate-300 overflow-x-auto max-h-60 text-[10px]">
+                                  <pre className="mt-2 bg-slate-900 p-3 rounded text-fg-3 overflow-x-auto max-h-60 text-3xs">
 {JSON.stringify(isReviewMode ? { current_params: buildAskAiPayload(), results_summary: reviewSummary } : buildAskAiPayload(), null, 2)}
                                   </pre>
                               </details>
 
                               {askAiModal.error && (
-                                  <div className="bg-red-900/30 border border-red-700/50 rounded p-3 text-[12px] text-red-200">
+                                  <div className="bg-red-900/30 border border-red-700/50 rounded p-3 text-xs text-red-200">
                                       ❌ {askAiModal.error}
                                   </div>
                               )}
 
-                              <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
-                                  <button onClick={onClose} className="px-4 py-2 rounded text-sm bg-slate-700 hover:bg-slate-600 text-slate-200">
+                              <div className="flex justify-end gap-2 pt-2 border-t border-line-0">
+                                  <button onClick={onClose} className="px-4 py-2 rounded text-sm bg-slate-700 hover:bg-slate-600 text-fg-2">
                                       Cancel
                                   </button>
                                   <button
@@ -3829,7 +3838,7 @@ export default function Backtest() {
                                       disabled={tunableCount === 0}
                                       className={`px-4 py-2 rounded text-sm font-bold ${
                                           tunableCount === 0
-                                              ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                                              ? 'bg-slate-800 text-fg-5 cursor-not-allowed'
                                               : 'bg-violet-600 hover:bg-violet-500 text-white'
                                       }`}
                                   >
@@ -3843,11 +3852,11 @@ export default function Backtest() {
                       {askAiModal.step === 'running' && (
                           <div className="p-10 flex flex-col items-center justify-center text-center">
                               <div className="w-12 h-12 border-4 border-violet-500/30 border-t-violet-400 rounded-full animate-spin mb-4" />
-                              <p className="text-sm text-slate-200">Asking <code className="bg-slate-800 px-1 rounded">{resolvedModel}</code>…</p>
-                              <p className="text-[11px] text-slate-500 mt-2">
+                              <p className="text-sm text-fg-2">Asking <code className="bg-slate-800 px-1 rounded">{resolvedModel}</code>…</p>
+                              <p className="text-2xs text-fg-5 mt-2">
                                   {isWebSession ? 'Web-session calls can take 30–120s with thinking enabled.' : 'API calls usually complete in 5–20s.'}
                               </p>
-                              <p className="text-[10px] text-slate-600 mt-3 font-mono">
+                              <p className="text-3xs text-fg-6 mt-3 font-mono">
                                   Elapsed: {Math.round((askAiModal.elapsedMs || 0) / 1000)}s
                               </p>
                           </div>
@@ -3875,19 +3884,19 @@ export default function Backtest() {
                                           <span className="text-violet-200 font-bold">
                                               {keys.length} parameter{keys.length !== 1 ? 's' : ''} suggested
                                           </span>
-                                          <span className="text-slate-500">·</span>
-                                          <span className="text-slate-300">Confidence: <span className={`font-bold ${conf >= 70 ? 'text-emerald-400' : conf >= 50 ? 'text-amber-400' : 'text-rose-400'}`}>{conf}%</span></span>
-                                          <span className="text-slate-500">·</span>
-                                          <span className="text-slate-500">{Math.round((askAiModal.elapsedMs || 0) / 1000)}s</span>
+                                          <span className="text-fg-5">·</span>
+                                          <span className="text-fg-3">Confidence: <span className={`font-bold ${conf >= 70 ? 'text-emerald-400' : conf >= 50 ? 'text-amber-400' : 'text-rose-400'}`}>{conf}%</span></span>
+                                          <span className="text-fg-5">·</span>
+                                          <span className="text-fg-5">{Math.round((askAiModal.elapsedMs || 0) / 1000)}s</span>
                                       </div>
-                                      <button onClick={toggleAll} className="text-[11px] px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200">
+                                      <button onClick={toggleAll} className="text-2xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-fg-2">
                                           {allOn ? 'Deselect all' : 'Select all'}
                                       </button>
                                   </div>
 
                                   {/* Reasoning */}
                                   {reasoning && (
-                                      <div className="text-[11px] text-slate-300 italic bg-slate-900 border border-slate-800 rounded p-3">
+                                      <div className="text-2xs text-fg-3 italic bg-slate-900 border border-line-0 rounded p-3">
                                           💭 {reasoning}
                                       </div>
                                   )}
@@ -3895,28 +3904,28 @@ export default function Backtest() {
                                   {/* Strategy critique (review mode) */}
                                   {analysis && (
                                       typeof analysis === 'string' ? (
-                                          <div className="text-[12px] text-slate-200 bg-slate-900 border border-violet-800/40 rounded p-3 whitespace-pre-wrap">
+                                          <div className="text-xs text-fg-2 bg-slate-900 border border-violet-800/40 rounded p-3 whitespace-pre-wrap">
                                               {analysis}
                                           </div>
                                       ) : (
-                                          <div className="space-y-2 bg-slate-900 border border-violet-800/40 rounded p-3 text-[12px]">
+                                          <div className="space-y-2 bg-slate-900 border border-violet-800/40 rounded p-3 text-xs">
                                               {analysis.verdict && <p className="text-violet-200 font-semibold">⚖️ {analysis.verdict}</p>}
                                               {asArr(analysis.strengths).length > 0 && (
                                                   <div>
-                                                      <p className="text-emerald-400 font-bold text-[10px] uppercase tracking-wider mb-1">Strengths</p>
-                                                      <ul className="list-disc list-inside text-slate-300 space-y-0.5">{asArr(analysis.strengths).map((s, i) => <li key={i}>{s}</li>)}</ul>
+                                                      <p className="text-emerald-400 font-bold text-3xs uppercase tracking-wider mb-1">Strengths</p>
+                                                      <ul className="list-disc list-inside text-fg-3 space-y-0.5">{asArr(analysis.strengths).map((s, i) => <li key={i}>{s}</li>)}</ul>
                                                   </div>
                                               )}
                                               {asArr(analysis.weaknesses).length > 0 && (
                                                   <div>
-                                                      <p className="text-rose-400 font-bold text-[10px] uppercase tracking-wider mb-1">Weaknesses</p>
-                                                      <ul className="list-disc list-inside text-slate-300 space-y-0.5">{asArr(analysis.weaknesses).map((s, i) => <li key={i}>{s}</li>)}</ul>
+                                                      <p className="text-rose-400 font-bold text-3xs uppercase tracking-wider mb-1">Weaknesses</p>
+                                                      <ul className="list-disc list-inside text-fg-3 space-y-0.5">{asArr(analysis.weaknesses).map((s, i) => <li key={i}>{s}</li>)}</ul>
                                                   </div>
                                               )}
                                               {asArr(analysis.recommended_changes).length > 0 && (
                                                   <div>
-                                                      <p className="text-amber-400 font-bold text-[10px] uppercase tracking-wider mb-1">What to change</p>
-                                                      <ul className="list-disc list-inside text-slate-300 space-y-0.5">{asArr(analysis.recommended_changes).map((s, i) => <li key={i}>{s}</li>)}</ul>
+                                                      <p className="text-amber-400 font-bold text-3xs uppercase tracking-wider mb-1">What to change</p>
+                                                      <ul className="list-disc list-inside text-fg-3 space-y-0.5">{asArr(analysis.recommended_changes).map((s, i) => <li key={i}>{s}</li>)}</ul>
                                                   </div>
                                               )}
                                           </div>
@@ -3925,13 +3934,13 @@ export default function Backtest() {
 
                                   {/* Diff table — only when the AI returned param changes */}
                                   {keys.length === 0 ? (
-                                      <div className="text-[11px] text-slate-400 bg-slate-900 border border-slate-800 rounded p-3">
+                                      <div className="text-2xs text-fg-4 bg-slate-900 border border-line-0 rounded p-3">
                                           No parameter-value changes suggested{analysis ? ' — see the critique above.' : '.'}
                                       </div>
                                   ) : (
-                                  <div className="border border-slate-800 rounded overflow-hidden">
+                                  <div className="border border-line-0 rounded overflow-hidden">
                                       <table className="w-full text-xs">
-                                          <thead className="bg-slate-900/80 text-slate-500 uppercase tracking-wider text-[10px]">
+                                          <thead className="bg-slate-900/80 text-fg-5 uppercase tracking-wider text-3xs">
                                               <tr>
                                                   <th className="p-2 text-left w-12">Apply</th>
                                                   <th className="p-2 text-left">Parameter</th>
@@ -3940,13 +3949,16 @@ export default function Backtest() {
                                                   <th className="p-2 text-right">Suggested</th>
                                               </tr>
                                           </thead>
-                                          <tbody className="divide-y divide-slate-800">
+                                          {/* divide-line, not the neutral-800 divider rule 5 would pick: a
+                                              row rule painted in the card's own shade is a 1.00:1 no-op in
+                                              all 12 themes, and midnight pins `line-0` to that same hex. */}
+                                          <tbody className="divide-y divide-line">
                                               {keys.map(k => {
                                                   const cur = params[k];
                                                   const sug = suggested[k];
                                                   const sameValue = String(cur) === String(sug);
                                                   return (
-                                                      <tr key={k} className={`text-slate-200 ${askAiModal.applyMap[k] ? 'bg-violet-950/10' : ''}`}>
+                                                      <tr key={k} className={`text-fg-2 ${askAiModal.applyMap[k] ? 'bg-violet-950/10' : ''}`}>
                                                           <td className="p-2">
                                                               <input
                                                                   type="checkbox"
@@ -3955,11 +3967,11 @@ export default function Backtest() {
                                                                   onChange={e => setAskAiModal(m => ({ ...m, applyMap: { ...m.applyMap, [k]: e.target.checked } }))}
                                                               />
                                                           </td>
-                                                          <td className="p-2 font-mono text-slate-300">{k}</td>
-                                                          <td className="p-2 text-right font-mono text-slate-400">{String(cur)}</td>
-                                                          <td className="p-2 text-center text-slate-600">→</td>
-                                                          <td className={`p-2 text-right font-mono font-bold ${sameValue ? 'text-slate-500' : 'text-emerald-300'}`}>
-                                                              {String(sug)}{sameValue && <span className="text-slate-600 text-[10px] ml-1">(no change)</span>}
+                                                          <td className="p-2 font-mono text-fg-3">{k}</td>
+                                                          <td className="p-2 text-right font-mono text-fg-4">{String(cur)}</td>
+                                                          <td className="p-2 text-center text-fg-6">→</td>
+                                                          <td className={`p-2 text-right font-mono font-bold ${sameValue ? 'text-fg-5' : 'text-emerald-300'}`}>
+                                                              {String(sug)}{sameValue && <span className="text-fg-6 text-3xs ml-1">(no change)</span>}
                                                           </td>
                                                       </tr>
                                                   );
@@ -3969,14 +3981,14 @@ export default function Backtest() {
                                   </div>
                                   )}
 
-                                  <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+                                  <div className="flex justify-end gap-2 pt-2 border-t border-line-0">
                                       <button
                                           onClick={() => setAskAiModal(m => ({ ...m, step: 'config' }))}
-                                          className="px-4 py-2 rounded text-sm bg-slate-700 hover:bg-slate-600 text-slate-200"
+                                          className="px-4 py-2 rounded text-sm bg-slate-700 hover:bg-slate-600 text-fg-2"
                                       >
                                           ← Ask Again
                                       </button>
-                                      <button onClick={onClose} className="px-4 py-2 rounded text-sm bg-slate-700 hover:bg-slate-600 text-slate-200">
+                                      <button onClick={onClose} className="px-4 py-2 rounded text-sm bg-slate-700 hover:bg-slate-600 text-fg-2">
                                           Cancel
                                       </button>
                                       {keys.length > 0 && (

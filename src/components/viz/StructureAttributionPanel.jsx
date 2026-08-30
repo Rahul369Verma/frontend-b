@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, StatTile, StatRow, Waterfall, DataTable, StatusBadge, Placeholder, Meter } from './primitives';
-import { inr, DIVERGING, CATEGORICAL } from './tokens';
+import { inr, useChartTheme } from './tokens';
 
 /**
  * Greek attribution for a MULTI-LEG structure backtest.
@@ -18,6 +18,7 @@ import { inr, DIVERGING, CATEGORICAL } from './tokens';
  * @param {object} data  logic/analytics/structureAttribution.js summarizeStructure()
  */
 export default function StructureAttributionPanel({ data }) {
+    const ct = useChartTheme();
     if (!data) return null;
     if (data.error) {
         return <Card title="Structure attribution"><Placeholder>Unavailable: {data.error}</Placeholder></Card>;
@@ -73,7 +74,7 @@ export default function StructureAttributionPanel({ data }) {
             </StatRow>
 
             <Card title="The verdict">
-                <p className="text-sm text-slate-200 leading-relaxed">{data.verdict}</p>
+                <p className="text-sm text-fg-2 leading-relaxed">{data.verdict}</p>
             </Card>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -89,13 +90,13 @@ export default function StructureAttributionPanel({ data }) {
                             { key: 'role', header: 'Leg role', render: r => (
                                 <span className="flex items-center gap-1.5">
                                     <span className="w-1.5 h-1.5 rounded-full"
-                                          style={{ backgroundColor: r.role.startsWith('SELL') ? CATEGORICAL[1] : CATEGORICAL[0] }} />
-                                    <span className="text-slate-200">{r.role}</span>
+                                          style={{ backgroundColor: r.role.startsWith('SELL') ? ct.categorical[1] : ct.categorical[0] }} />
+                                    <span className="text-fg-2">{r.role}</span>
                                 </span>
                             ) },
                             { key: 'legs', header: 'Legs', align: 'right' },
                             { key: 'grossPnl', header: 'Gross', align: 'right', render: r => (
-                                <span style={{ color: r.grossPnl >= 0 ? DIVERGING.positive : DIVERGING.negative }}>
+                                <span style={{ color: r.grossPnl >= 0 ? ct.diverging.positive : ct.diverging.negative }}>
                                     {inr(r.grossPnl, { compact: true, sign: true })}
                                 </span>
                             ) },
