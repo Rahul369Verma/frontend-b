@@ -2498,7 +2498,13 @@ export default function MultiLeg() {
                                     <thead className="sticky top-0 z-10 bg-surface"><tr className="text-fg-5 text-left"><th>Entry</th><th>Exit</th><th>Name</th><th>Mode</th><th>Reason</th><th className="text-right">Gross ₹</th><th className="text-right">Charges</th><th className="text-right">Net ₹</th></tr></thead>
                                     <tbody>
                                         {mlTrades.map((t, i) => (
-                                            <tr key={i} className="border-t border-line-0">
+                                            /* A quarantined trade is shown, struck through, NOT hidden — it was
+                                               booked on a price that never existed (an LTP carried over from
+                                               another session on a contract with zero OI and zero volume), so
+                                               its PnL is excluded from every total. Hiding it would make the
+                                               correction invisible. */
+                                            <tr key={i} className={`border-t border-line-0 ${t.quarantined ? 'opacity-45 line-through' : ''}`}
+                                                title={t.quarantined ? `EXCLUDED from all totals — ${t.quarantineReason || 'untrustworthy fill price'}` : undefined}>
                                                 <td className="whitespace-nowrap" title="Entry (IST)">{istDateTime(t.entryAt)}</td>
                                                 <td className="whitespace-nowrap" title="Exit (IST) — date shown when it differs from entry">{istSmart(t.exitAt, t.entryAt)}<DayGap from={t.entryAt} to={t.exitAt} /></td>
                                                 <td>{t.name}</td>
@@ -2506,7 +2512,10 @@ export default function MultiLeg() {
                                                 <td className="text-fg-4">{t.exitReason}</td>
                                                 <td className="text-right">₹{fmt(t.grossPnl)}</td>
                                                 <td className="text-right text-fg-5">₹{fmt(t.charges)}</td>
-                                                <td className={`text-right font-semibold ${t.netPnl > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(t.netPnl)}</td>
+                                                <td className={`text-right font-semibold ${t.quarantined ? 'text-fg-5' : t.netPnl > 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                                                    ₹{fmt(t.netPnl)}
+                                                    {t.quarantined && <span className="ml-1 text-4xs text-amber-400 no-underline" title="fake fill — not counted">⚠ void</span>}
+                                                </td>
                                             </tr>
                                         ))}
                                     </tbody>

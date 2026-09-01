@@ -1165,6 +1165,52 @@ export default function Dashboard() {
                                   </div>
                               )}
 
+                              {/* ── AI position-management strip ───────────────────────
+                                  Only appears once the AI has actually DONE something to
+                                  this position: booked part of it, bought it extra hold
+                                  time, or installed a protective floor. Everything here is
+                                  state the exit paths are live-checking right now, so it
+                                  belongs on the card rather than inside the accordion. */}
+                              {(() => {
+                                  const partials = Array.isArray(pos.partial_exits) ? pos.partial_exits : [];
+                                  const extraHold = Number(pos.ai_hold_extra_candles) || 0;
+                                  const floor = pos.ai_protect_premium;
+                                  if (!partials.length && !extraHold && !floor) return null;
+                                  const bookedNet = partials.reduce((a2, x) => a2 + (Number(x.net_pnl) || 0), 0);
+                                  const bookedLots = partials.reduce((a2, x) => a2 + (Number(x.lots) || 0), 0);
+                                  return (
+                                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-3xs">
+                                          <span className="text-violet-300 font-semibold">🤖 AI managing</span>
+                                          {pos.lots != null && (
+                                              <span className="text-fg-4 font-mono" title="Lots still open on this position">
+                                                  {pos.lots} lot{pos.lots === 1 ? '' : 's'} open
+                                              </span>
+                                          )}
+                                          {bookedLots > 0 && (
+                                              <span
+                                                  className={`font-mono ${bookedNet >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}
+                                                  title={partials.map(x => `${x.lots} lot(s) @ ₹${x.exitPrice} → net ₹${Math.round(x.net_pnl || 0)}`).join('\n')}
+                                              >
+                                                  ✂️ {bookedLots} lot{bookedLots === 1 ? '' : 's'} booked (₹{Math.round(bookedNet)})
+                                              </span>
+                                          )}
+                                          {extraHold > 0 && (
+                                              <span className="text-indigo-300 font-mono" title="Extra candles the AI granted past the max-hold timer">
+                                                  ⏳ +{extraHold} candles
+                                              </span>
+                                          )}
+                                          {floor != null && (
+                                              <span
+                                                  className="text-amber-300 font-mono"
+                                                  title="Engine-monitored premium floor — the position exits here to protect the gain. Ratchets toward price, never away."
+                                              >
+                                                  🛡️ floor ₹{Number(floor).toFixed(2)}
+                                              </span>
+                                          )}
+                                      </div>
+                                  );
+                              })()}
+
                               {/* ── AI In-flight Review accordion ──────────────────────
                                   Shows every periodic review the AI performed while the
                                   position was open: HOLD / CLOSE_NOW / UPDATE_SL / UPDATE_TP
@@ -1178,11 +1224,22 @@ export default function Dashboard() {
                                   const intervalMin = pos.inflight_review_interval_min || 15;
                                   const lastReview = reviews[0]; // newest-first from server
                                   const ACTION_STYLE = {
-                                      HOLD:      { txt: 'HOLD',      cls: 'bg-slate-700/60 text-fg-3' },
-                                      CLOSE_NOW: { txt: 'CLOSE',     cls: 'bg-rose-800/40 text-rose-200' },
-                                      UPDATE_SL: { txt: 'UPDATE SL', cls: 'bg-amber-800/40 text-amber-200' },
-                                      UPDATE_TP: { txt: 'UPDATE TP', cls: 'bg-cyan-800/40 text-cyan-200' },
-                                      ERROR:     { txt: 'ERROR',     cls: 'bg-rose-900/40 text-rose-300' },
+                                      HOLD:          { txt: 'HOLD',       cls: 'bg-slate-700/60 text-fg-3' },
+                                      CLOSE_NOW:     { txt: 'CLOSE',      cls: 'bg-rose-800/40 text-rose-200' },
+                                      UPDATE_SL:     { txt: 'UPDATE SL',  cls: 'bg-amber-800/40 text-amber-200' },
+                                      UPDATE_TP:     { txt: 'UPDATE TP',  cls: 'bg-cyan-800/40 text-cyan-200' },
+                                      UPDATE_SL_TP:  { txt: 'SL+TP',      cls: 'bg-teal-800/40 text-teal-200' },
+                                      EXTEND_HOLD:   { txt: '+HOLD',      cls: 'bg-indigo-800/40 text-indigo-200' },
+                                      PARTIAL_CLOSE: { txt: 'PARTIAL',    cls: 'bg-fuchsia-800/40 text-fuchsia-200' },
+                                      ERROR:         { txt: 'ERROR',      cls: 'bg-rose-900/40 text-rose-300' },
+                                  };
+                                  // Why the review ran. A PERIODIC verdict is advice; a
+                                  // MAX_HOLD/TP one was answering "close this now?" with a
+                                  // real exit held back on a deadline — worth telling apart
+                                  // at a glance when reading back a trade.
+                                  const TRIGGER_STYLE = {
+                                      MAX_HOLD: { txt: '⏳ max hold', cls: 'bg-indigo-900/40 text-indigo-300' },
+                                      TP:       { txt: '🎯 at target', cls: 'bg-emerald-900/40 text-emerald-300' },
                                   };
                                   return (
                                       <div className="mt-2 border-t border-line-0/50 pt-2">
@@ -1233,6 +1290,16 @@ export default function Dashboard() {
                                                                       {r.confidence != null && (
                                                                           <span className="text-violet-300 font-mono text-3xs">{r.confidence}%</span>
                                                                       )}
+                                                                      {TRIGGER_STYLE[r.trigger] && (
+                                                                          <span
+                                                                              className={`text-3xs px-1.5 py-0.5 rounded ${TRIGGER_STYLE[r.trigger].cls}`}
+                                                                              title={r.pending_exit_reason
+                                                                                  ? `The engine was about to close on "${r.pending_exit_reason}" and asked first`
+                                                                                  : 'Consulted before a discretionary exit'}
+                                                                          >
+                                                                              {TRIGGER_STYLE[r.trigger].txt}
+                                                                          </span>
+                                                                      )}
                                                                       {applied === true && (
                                                                           <span className="text-emerald-400 text-3xs" title="Verdict applied">✓ applied</span>
                                                                       )}
@@ -1272,6 +1339,12 @@ export default function Dashboard() {
                                                                   )}
                                                                   {r.new_tp != null && (
                                                                       <span className="text-cyan-300">new TP {Number(r.new_tp).toFixed(2)}</span>
+                                                                  )}
+                                                                  {r.extend_candles != null && (
+                                                                      <span className="text-indigo-300">+{r.extend_candles} candles</span>
+                                                                  )}
+                                                                  {r.close_lots != null && (
+                                                                      <span className="text-fuchsia-300">close {r.close_lots} lot(s)</span>
                                                                   )}
                                                                   {r.model && (
                                                                       <span className="text-fg-6 truncate" title={r.model}>

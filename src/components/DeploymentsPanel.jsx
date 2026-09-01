@@ -15,6 +15,7 @@
 //   POST /api/deployments/:id/toggle         → on/off (per deployment)
 //   POST /api/deployments/:id/toggle-mode    → PAPER/LIVE (per deployment)
 //   POST /api/deployments/:id/toggle-ai      → AI confirmation on/off (per deployment)
+//   POST /api/deployments/:id/lots           → position size in lots (per deployment)
 //   DELETE /api/deployments/:id              → remove (refuses if open position)
 //
 // Handlers passed from Dashboard (reuse its modals — no duplicated machinery):
@@ -276,6 +277,31 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
             await _mutate('AI toggle', () => axios.post(`${API_URL}/deployments/${d._id}/toggle-ai`, { enabled: next }));
         } finally { setBusyId(null); }
     };
+    // Position SIZE for THIS deployment. `lots` is the multiplier the engine
+    // applies at entry (quantity = lots × lotSize), so it scales risk and reward
+    // together — hence the explicit confirmation on a LIVE deployment, which is
+    // committing real margin. Not retroactive: open positions keep their size.
+    const setLots = async (d, lots) => {
+        const current = parseInt((d.params || {}).lots, 10) || 1;
+        if (!Number.isInteger(lots) || lots < 1 || lots === current) return;
+        const lotSize = parseInt((d.params || {}).lot_size, 10) || null;
+        const unitsNote = lotSize ? ` (${lots} × ${lotSize} = ${lots * lotSize} units)` : '';
+        const msg = d.tradeMode === 'LIVE'
+            ? {
+                title: 'Change LIVE position size',
+                body: `"${d.name}" is trading LIVE.\n\nSize ${current} → ${lots} lot(s)${unitsNote}.\n\n` +
+                      `Every future entry risks and can win ${(lots / current).toFixed(2)}× what it does now. ` +
+                      `Positions already open are unaffected.`,
+                danger: true,
+                confirmLabel: `Set ${lots} lot(s)`,
+              }
+            : `Set "${d.name}" to ${lots} lot(s)${unitsNote}?`;
+        if (!await confirm(msg)) return;
+        setBusyId(d._id);
+        try {
+            await _mutate('Lots', () => axios.post(`${API_URL}/deployments/${d._id}/lots`, { lots }));
+        } finally { setBusyId(null); }
+    };
     const remove = async (d) => {
         if (!await confirm({ title: 'Delete deployment', body: `Delete deployment "${d.name}"?\nEngine refuses if a position is still open on it.`, danger: true, confirmLabel: 'Delete deployment' })) return;
         setBusyId(d._id);
@@ -427,6 +453,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                                         onToggleActive={() => toggleActive(d)}
                                         onToggleMode={() => toggleMode(d)}
                                         onToggleAi={() => toggleAi(d)}
+                                        onSetLots={(n) => setLots(d, n)}
                                         onDelete={() => remove(d)}
                                         onToggleExpand={() => setExpanded(s => ({ ...s, [d._id]: !s[d._id] }))}
                                         onToggleEdit={() => setEditingId(editingId === d._id ? null : d._id)}
@@ -478,10 +505,96 @@ function PnlBadge({ label, stats }) {
     );
 }
 
+/**
+ * Per-strategy position size. `lots` multiplies every entry this deployment
+ * makes (quantity = lots × lotSize in the live engine), so it is the one knob
+ * that scales P&L — and risk — linearly.
+ *
+ * Deliberately a STEPPER with an explicit ✓, not a live-saving input: a stray
+ * keystroke must not resize a LIVE strategy. The pending value shows the unit
+ * count it resolves to, because "3 lots" means nothing without the lot size and
+ * ₹-risk intuition lives in units.
+ */
+function LotsControl({ lots, lotSize, isLive, disabled, onSetLots }) {
+    const [pending, setPending] = useState(null);
+    const shown = pending == null ? lots : pending;
+    const dirty = pending != null && pending !== lots;
+    const bump = (delta) => setPending(Math.max(1, Math.min(500, shown + delta)));
+
+    return (
+        <div className="flex items-center gap-1">
+            <span className="text-fg-5 uppercase text-4xs tracking-wider">Lots</span>
+            <div className={`flex items-center rounded border ${dirty ? 'border-amber-500/60 bg-amber-500/10' : 'border-line-2/50 bg-slate-800/60'}`}>
+                <button
+                    type="button"
+                    onClick={() => bump(-1)}
+                    disabled={disabled || shown <= 1}
+                    className="px-1.5 leading-none text-fg-4 hover:text-fg disabled:opacity-30"
+                    title="Fewer lots"
+                >
+                    −
+                </button>
+                <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={shown}
+                    disabled={disabled}
+                    onChange={(e) => {
+                        const n = parseInt(e.target.value, 10);
+                        setPending(Number.isFinite(n) ? Math.max(1, Math.min(500, n)) : 1);
+                    }}
+                    className="w-10 bg-transparent text-center font-mono text-fg-2 font-bold outline-none disabled:opacity-50
+                               [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+                <button
+                    type="button"
+                    onClick={() => bump(1)}
+                    disabled={disabled || shown >= 500}
+                    className="px-1.5 leading-none text-fg-4 hover:text-fg disabled:opacity-30"
+                    title="More lots"
+                >
+                    +
+                </button>
+            </div>
+            {lotSize && (
+                <span className="text-4xs text-fg-5 font-mono" title={`${shown} lot(s) × ${lotSize} = ${shown * lotSize} units per entry`}>
+                    ={shown * lotSize}u
+                </span>
+            )}
+            {dirty && (
+                <>
+                    <button
+                        type="button"
+                        onClick={() => onSetLots(pending)}
+                        disabled={disabled}
+                        className={`px-1.5 py-0.5 rounded text-4xs font-bold ${
+                            isLive ? 'bg-red-600/80 hover:bg-red-600 text-white' : 'bg-primary hover:opacity-90 text-white'
+                        } disabled:opacity-50`}
+                        title={isLive
+                            ? `Apply ${pending} lot(s) to this LIVE deployment — future entries only`
+                            : `Apply ${pending} lot(s)`}
+                    >
+                        ✓ {isLive ? 'LIVE' : 'Save'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setPending(null)}
+                        className="px-1 py-0.5 rounded text-4xs bg-slate-700 hover:bg-slate-600 text-fg-3"
+                        title="Discard"
+                    >
+                        ×
+                    </button>
+                </>
+            )}
+        </div>
+    );
+}
+
 function DeploymentCard({
     d, strategies, sessionHealth, globalConfig,
     isBusy, isExpanded, isEditing,
-    onToggleActive, onToggleMode, onToggleAi, onDelete, onToggleExpand, onToggleEdit, onEdited,
+    onToggleActive, onToggleMode, onToggleAi, onSetLots, onDelete, onToggleExpand, onToggleEdit, onEdited,
     onTest, onSim, onManualTrade, onResults, pnlWindows,
 }) {
     const params = d.params || {};
@@ -795,11 +908,19 @@ function DeploymentCard({
             )}
 
             {/* ── Quick-stats strip — always visible (parity with legacy) ──── */}
-            <div className="px-4 py-2 border-t border-line bg-slate-900/40 flex flex-wrap gap-x-6 gap-y-1 text-2xs">
+            <div className="px-4 py-2 border-t border-line bg-slate-900/40 flex flex-wrap items-center gap-x-6 gap-y-1 text-2xs">
+                <LotsControl
+                    lots={parseInt(params.lots, 10) || 1}
+                    lotSize={parseInt(params.lot_size, 10) || null}
+                    isLive={isLive}
+                    disabled={isBusy || !onSetLots}
+                    onSetLots={onSetLots}
+                />
                 {(() => {
                     const quickKeys = [
                         { k: 'capital',          label: 'Capital',   prefix: '₹' },
-                        { k: 'lots',             label: 'Lots',      prefix: '' },
+                        // 'lots' is deliberately absent — LotsControl below renders
+                        // it as an editable stepper instead of a read-only stat.
                         { k: 'lot_size',         label: 'Lot Size',  prefix: '' },
                         { k: 'max_daily_loss',   label: 'Max Loss',  prefix: '₹', global: true },
                         { k: 'trade_start_time', label: 'Start',     prefix: '' },
