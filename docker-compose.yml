@@ -10,4 +10,22 @@ services:
       - ../.env
     volumes:
       - .:/app
+      # ── ANONYMOUS VOLUME: node_modules lives INSIDE the container ──────────
+      # This deliberately masks the host's node_modules so container-native
+      # binaries are used instead of the host's (correct — do not remove it).
+      #
+      # THE TRAP IT CREATES: `npm install <pkg>` on the HOST can never reach
+      # this volume. The source above is bind-mounted, so a new import arrives
+      # in the container instantly while its package does not — and vite fails
+      # with `Failed to resolve import "<pkg>"` even though package.json,
+      # host node_modules and `vite build` on the host are all perfectly fine.
+      # (This happened with lightweight-charts on 2026-09-06.)
+      #
+      # AFTER ADDING ANY DEPENDENCY, run ONE of:
+      #   docker compose exec frontend npm install        # sync the volume
+      #   docker compose up -d --build --force-recreate   # rebuild it
+      #
+      # `npm run test` catches the same thing on the host: src/test/
+      # dependencies.test.js asserts every import is declared AND installed,
+      # without mocks (the render suite mocks charting libs and is blind to it).
       - /app/node_modules

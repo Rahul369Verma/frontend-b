@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
-import { Key, Bell, RefreshCw, Trash2, CheckCircle, AlertTriangle, Cookie, Save } from 'lucide-react';
+import { Key, Bell, RefreshCw, Trash2, CheckCircle, AlertTriangle, Cookie, Save, Settings as SettingsIcon } from 'lucide-react';
+import { PageHeader, Tabs } from '../components/viz/primitives';
 import { API_URL } from '../config/api.js';
 import { useConfirm } from '../components/confirmContext.js';
 
@@ -162,8 +163,8 @@ export default function Settings() {
   ];
 
   return (
-    <div className="p-8 space-y-8 max-w-4xl mx-auto">
-      <h1 className="text-3xl font-bold text-fg">Settings</h1>
+    <div className="p-6 space-y-6 max-w-4xl mx-auto">
+      <PageHeader icon={SettingsIcon} title="Settings" subtitle="Broker keys, AI web cookies and notifications." />
 
       {message && (
         <div className={`p-4 rounded-lg flex items-center gap-2 ${
@@ -177,22 +178,7 @@ export default function Settings() {
       )}
 
       <div className="bg-surface rounded-xl border border-line overflow-hidden">
-        <div className="flex border-b border-line">
-          {tabs.map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-6 py-4 font-medium transition-colors ${
-                activeTab === tab.id
-                  ? 'bg-primary/10 text-primary-ink border-b-2 border-primary'
-                  : 'text-fg-4 hover:text-fg hover:bg-slate-800'
-              }`}
-            >
-              <tab.icon className="w-4 h-4" />
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        <Tabs className="px-2 pt-1" ariaLabel="Settings sections" tabs={tabs} value={activeTab} onChange={setActiveTab} />
 
         <div className="p-8">
           {activeTab === 'api' && (

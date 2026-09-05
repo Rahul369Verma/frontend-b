@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { ArrowLeft, Loader2, X } from 'lucide-react';
 import { STATUS_ICON, inr, useChartTheme } from './tokens';
 
 /**
@@ -97,7 +99,7 @@ export function StatTile({ label, value, hint, tone = 'neutral', badge, hero = f
 }
 
 export function StatRow({ children, cols = 4 }) {
-    const gridCols = { 2: 'md:grid-cols-2', 3: 'md:grid-cols-3', 4: 'md:grid-cols-4', 5: 'md:grid-cols-5', 6: 'md:grid-cols-6' }[cols] || 'md:grid-cols-4';
+    const gridCols = { 2: 'md:grid-cols-2', 3: 'md:grid-cols-3', 4: 'md:grid-cols-4', 5: 'md:grid-cols-5', 6: 'md:grid-cols-6', 8: 'md:grid-cols-4 xl:grid-cols-8' }[cols] || 'md:grid-cols-4';
     return <div className={`grid grid-cols-2 ${gridCols} gap-3`}>{children}</div>;
 }
 
@@ -370,7 +372,7 @@ export function Heatmap({
 
 // ── Table — always available behind every chart ──────────────────────────────
 
-export function DataTable({ columns, rows, empty = 'No rows', dense = false, maxHeight }) {
+export function DataTable({ columns, rows, empty = 'No rows', dense = false, maxHeight, zebra = true, onRowClick = null, selectedKey = null }) {
     const ct = useChartTheme();
     if (!rows || !rows.length) return <p className="text-xs text-fg-5 py-4 text-center">{empty}</p>;
     return (
@@ -388,8 +390,19 @@ export function DataTable({ columns, rows, empty = 'No rows', dense = false, max
                     </tr>
                 </thead>
                 <tbody>
-                    {rows.map((r, i) => (
-                        <tr key={r._key || i} className="hover:bg-slate-800/40">
+                    {rows.map((r, i) => {
+                        const isSel = selectedKey != null && (r._key ?? i) === selectedKey;
+                        return (
+                        // A clickable row is a real button semantically: it gets a
+                        // pointer, a keyboard path and a pressed state, because a
+                        // bare onClick on a <tr> is unreachable without a mouse.
+                        <tr key={r._key || i}
+                            onClick={onRowClick ? () => onRowClick(r) : undefined}
+                            onKeyDown={onRowClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRowClick(r); } } : undefined}
+                            tabIndex={onRowClick ? 0 : undefined}
+                            role={onRowClick ? 'button' : undefined}
+                            aria-pressed={onRowClick ? isSel : undefined}
+                            className={`${zebra && i % 2 === 1 ? 'bg-card-2/40' : ''} hover:bg-card-2/80 transition-colors ${onRowClick ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary' : ''} ${isSel ? 'bg-primary/10' : ''}`}>
                             {columns.map(c => (
                                 <td key={c.key}
                                     className={`${dense ? 'py-1' : 'py-1.5'} px-2 whitespace-nowrap ${c.align === 'right' ? 'text-right tabular-nums' : ''}`}
@@ -398,7 +411,8 @@ export function DataTable({ columns, rows, empty = 'No rows', dense = false, max
                                 </td>
                             ))}
                         </tr>
-                    ))}
+                        );
+                    })}
                 </tbody>
             </table>
         </div>
@@ -480,6 +494,241 @@ export function Findings({ findings = [], emptyText = 'No issues detected in thi
                 </li>
             ))}
         </ul>
+    );
+}
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PAGE-LEVEL KIT — header, tabs, segmented control, chips, loading, empty,
+// modal. Every page used to build these itself: 3 h1 sizes, 2 root paddings, 7
+// tab bars (none keyboard-navigable), 5 spinner idioms, 6 modal scrims at 3
+// opacities. One implementation each, all on the token layer, so a theme or
+// an accessibility axis changes them everywhere at once.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── Page header ──────────────────────────────────────────────────────────────
+
+/**
+ * The top of every page. ONE title scale (text-xl), one subtitle role, badges
+ * inline with the title, actions on the right, an optional back link that is a
+ * real <Link> (history-based `navigate(-1)` can leave the app entirely).
+ *
+ * `icon` is a lucide component. It is re-bound to a capitalised local because
+ * this repo's ESLint has no jsx-uses-vars: a destructured `icon: Icon` param is
+ * invisible to no-unused-vars, and renaming it `_Icon` to silence the rule is
+ * exactly what produced two `ReferenceError: Icon is not defined` crashes.
+ */
+export function PageHeader({ icon, title, subtitle, badges, actions, backTo, backLabel = 'Back', className = '' }) {
+    const Icon = icon;
+    return (
+        <header className={`flex items-start justify-between flex-wrap gap-3 ${className}`}>
+            <div className="min-w-0 flex items-start gap-3">
+                {backTo && (
+                    <Link to={backTo} title={backLabel} aria-label={backLabel}
+                        className="mt-0.5 inline-flex items-center justify-center w-7 h-7 rounded-md border border-line-2 bg-card-2 text-fg-4 hover:text-fg flex-shrink-0">
+                        <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+                    </Link>
+                )}
+                <div className="min-w-0">
+                    <h1 className="text-xl font-bold text-fg flex items-center gap-2 flex-wrap leading-tight">
+                        {Icon && <Icon className="w-5 h-5 text-primary flex-shrink-0" aria-hidden="true" />}
+                        <span className="truncate">{title}</span>
+                        {badges}
+                    </h1>
+                    {subtitle && <p className="text-xs text-fg-5 mt-1 max-w-3xl">{subtitle}</p>}
+                </div>
+            </div>
+            {actions && <div className="flex items-center gap-2 flex-wrap">{actions}</div>}
+        </header>
+    );
+}
+
+// ── Tabs — a real tablist ────────────────────────────────────────────────────
+
+/**
+ * @param tabs   [{ id, label, icon?, hint?, badge? }]
+ * @param value  the active id
+ * Arrow keys move between tabs (roving tabindex), Home/End jump to the ends —
+ * the WAI-ARIA tabs pattern. None of the seven hand-rolled bars this replaces
+ * could be operated from the keyboard.
+ */
+export function Tabs({ tabs = [], value, onChange, size = 'md', ariaLabel = 'Sections', className = '' }) {
+    const pad = size === 'sm' ? 'px-2.5 py-1 text-2xs' : 'px-3.5 py-2 text-xs';
+    const onKey = (e, i) => {
+        const keys = { ArrowRight: 1, ArrowLeft: -1, Home: 0, End: 0 };
+        if (!(e.key in keys) || !tabs.length) return;
+        e.preventDefault();
+        const next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (i + keys[e.key] + tabs.length) % tabs.length;
+        onChange?.(tabs[next].id);
+        const el = e.currentTarget.parentElement?.querySelectorAll('[role="tab"]')?.[next];
+        if (el) el.focus();
+    };
+    return (
+        <div role="tablist" aria-label={ariaLabel} className={`flex flex-wrap gap-1 border-b border-line-0 ${className}`}>
+            {tabs.map((t, i) => {
+                const Icon = t.icon;
+                const on = t.id === value;
+                return (
+                    <button key={t.id} type="button" role="tab" aria-selected={on} tabIndex={on ? 0 : -1} title={t.hint}
+                        onClick={() => onChange?.(t.id)} onKeyDown={(e) => onKey(e, i)}
+                        className={`${pad} -mb-px inline-flex items-center gap-1.5 rounded-t border-b-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${on
+                            ? 'border-primary text-primary-ink bg-primary/10'
+                            : 'border-transparent text-fg-5 hover:text-fg-3 hover:bg-card-2'}`}>
+                        {Icon && <Icon className="w-3.5 h-3.5" aria-hidden="true" />}
+                        {t.label}
+                        {t.badge}
+                    </button>
+                );
+            })}
+        </div>
+    );
+}
+
+// ── Segmented control — one of N, always visible ─────────────────────────────
+
+/**
+ * @param options [{ v, label, icon?, hint? }]
+ * `aria-pressed` carries the state for assistive tech; the tint only echoes it.
+ */
+export function Segmented({ options = [], value, onChange, size = 'sm', className = '' }) {
+    const pad = size === 'sm' ? 'px-2.5 py-1 text-2xs' : 'px-3 py-1.5 text-xs';
+    return (
+        <div className={`inline-flex rounded-md border border-line-2 overflow-hidden ${className}`} role="group">
+            {options.map((o) => {
+                const Icon = o.icon;
+                const on = value === o.v;
+                return (
+                    <button key={String(o.v)} type="button" onClick={() => onChange?.(o.v)} aria-pressed={on} title={o.hint}
+                        className={`${pad} inline-flex items-center gap-1.5 border-r border-line-2 last:border-r-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary ${on
+                            ? 'bg-primary/15 text-primary-ink'
+                            : 'bg-card-2 text-fg-5 hover:text-fg-3'}`}>
+                        {Icon && <Icon className="w-3.5 h-3.5" aria-hidden="true" />}
+                        {o.label}
+                    </button>
+                );
+            })}
+        </div>
+    );
+}
+
+// ── Chip — a small categorical token (symbol, mode, timeframe) ───────────────
+
+const CHIP_TONES = {
+    neutral: 'bg-card-2 text-fg-4 border-line-0',
+    muted: 'bg-card-2 text-fg-5 border-line-0',
+    live: 'bg-primary/15 text-primary-ink border-primary/30',
+    paper: 'bg-card-2 text-fg-3 border-line',
+    good: 'bg-success/10 text-success border-success/30',
+    warning: 'bg-warning/10 text-warning border-warning/30',
+    critical: 'bg-danger/10 text-danger border-danger/30',
+    info: 'bg-info/15 text-info border-info/30',
+};
+/** Unlike StatusBadge (which carries an icon and means "a state"), a Chip is a
+ *  label: what symbol, which mode, which timeframe. */
+export function Chip({ children, tone = 'neutral', title, className = '' }) {
+    return (
+        <span title={title} className={`inline-flex items-center px-1.5 py-px rounded border text-3xs font-medium whitespace-nowrap ${CHIP_TONES[tone] || CHIP_TONES.neutral} ${className}`}>
+            {children}
+        </span>
+    );
+}
+/** LIVE / PAPER as a chip, the one place the mapping lives. */
+export function ModeChip({ mode, title }) {
+    const m = String(mode || '').toUpperCase();
+    if (!m) return null;
+    return <Chip tone={m === 'LIVE' ? 'live' : 'paper'} title={title || (m === 'LIVE' ? 'Real orders at the broker' : 'Simulated fills')}>{m}</Chip>;
+}
+
+// ── Loading ──────────────────────────────────────────────────────────────────
+
+const SPINNER_SIZE = { xs: 'w-3 h-3', sm: 'w-4 h-4', md: 'w-6 h-6', lg: 'w-8 h-8' };
+/** The app's one spinner. `role="status"` so the wait is announced; the label is
+ *  visible by default because a bare ring says nothing about what is loading. */
+export function Spinner({ size = 'sm', label = 'Loading…', showLabel = true, className = '' }) {
+    return (
+        <span role="status" aria-live="polite" className={`inline-flex items-center gap-2 text-xs text-fg-5 ${className}`}>
+            <Loader2 className={`${SPINNER_SIZE[size] || SPINNER_SIZE.sm} animate-spin motion-reduce:animate-none flex-shrink-0`} aria-hidden="true" />
+            {showLabel ? <span>{label}</span> : <span className="sr-only">{label}</span>}
+        </span>
+    );
+}
+
+const SKELETON_WIDTHS = ['w-11/12', 'w-4/5', 'w-full', 'w-2/3', 'w-5/6', 'w-3/4'];
+/** Text-shaped placeholder rows. Deterministic widths (no Math.random in
+ *  render), pulse honours the reduce-motion axis. */
+export function Skeleton({ lines = 3, className = '' }) {
+    return (
+        <div className={`space-y-2 ${className}`} aria-hidden="true">
+            {Array.from({ length: lines }, (_, i) => (
+                <div key={i} className={`h-3 rounded bg-card-2 animate-pulse motion-reduce:animate-none ${SKELETON_WIDTHS[i % SKELETON_WIDTHS.length]}`} />
+            ))}
+        </div>
+    );
+}
+/** Tile-shaped placeholders in the same grid StatRow uses, so a KPI strip keeps
+ *  its height while it loads and the page does not jump when the numbers land. */
+export function SkeletonTiles({ count = 4, cols = 4 }) {
+    return (
+        <StatRow cols={cols}>
+            {Array.from({ length: count }, (_, i) => (
+                <div key={i} className="bg-surface border border-line/60 rounded-lg px-4 py-3 flex flex-col gap-2" aria-hidden="true">
+                    <div className="h-2.5 w-1/2 rounded bg-card-2 animate-pulse motion-reduce:animate-none" />
+                    <div className="h-6 w-2/3 rounded bg-card-2 animate-pulse motion-reduce:animate-none" />
+                    <div className="h-2 w-3/4 rounded bg-card-2 animate-pulse motion-reduce:animate-none" />
+                </div>
+            ))}
+        </StatRow>
+    );
+}
+
+// ── Empty state — what is missing, and what to do about it ───────────────────
+
+export function EmptyState({ icon, title, children, action, className = '' }) {
+    const Icon = icon;
+    return (
+        <div className={`flex flex-col items-center justify-center text-center gap-2 py-10 px-4 ${className}`}>
+            {Icon && <Icon className="w-7 h-7 text-fg-6" aria-hidden="true" />}
+            {title && <p className="text-sm font-medium text-fg-3">{title}</p>}
+            {children && <p className="text-xs text-fg-5 max-w-md">{children}</p>}
+            {action && <div className="mt-1">{action}</div>}
+        </div>
+    );
+}
+
+// ── Modal ────────────────────────────────────────────────────────────────────
+
+/**
+ * One scrim (black/60), one z-index, Escape closes, click-outside closes, the
+ * dialog is labelled. Replaces six overlays at three opacities where only one
+ * wired the Escape key.
+ */
+export function Modal({ open, onClose, title, children, footer, width = 'max-w-lg' }) {
+    useEffect(() => {
+        if (!open) return undefined;
+        const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [open, onClose]);
+    if (!open) return null;
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-[2px]"
+            onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.(); }}>
+            <div role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined}
+                className={`w-full ${width} bg-surface border border-line rounded-lg shadow-2xl max-h-[90vh] flex flex-col`}>
+                {(title || onClose) && (
+                    <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-line-0">
+                        <h2 className="text-sm font-semibold text-fg">{title}</h2>
+                        {onClose && (
+                            <button type="button" onClick={onClose} aria-label="Close" className="text-fg-5 hover:text-fg p-1 rounded">
+                                <X className="w-4 h-4" aria-hidden="true" />
+                            </button>
+                        )}
+                    </div>
+                )}
+                <div className="px-4 py-3 overflow-auto">{children}</div>
+                {footer && <div className="px-4 py-3 border-t border-line-0 flex items-center justify-end gap-2">{footer}</div>}
+            </div>
+        </div>
     );
 }
 

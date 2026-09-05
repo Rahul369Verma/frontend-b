@@ -557,7 +557,7 @@ const AiManager = () => {
 
     // ── Render ────────────────────────────────────────────────────────────────
     return (
-        <div className="p-6 bg-slate-900 min-h-screen text-fg font-sans">
+        <div className="p-6 text-fg font-sans">
 
             {/* Header */}
             <div className="flex justify-between items-center mb-8">
@@ -566,7 +566,7 @@ const AiManager = () => {
                         <FaRobot className="w-8 h-8 text-indigo-400" />
                     </div>
                     <div>
-                        <h1 className="text-2xl font-bold text-fg">AI Strategy Manager</h1>
+                        <h1 className="text-xl font-bold text-fg">AI Strategy Manager</h1>
                         <div className="flex items-center gap-2 text-sm text-fg-4">
                             <span className={`w-2 h-2 rounded-full ${(activeTab === 'rl' ? rlModelExists : status.model_trained) ? 'bg-emerald-500' : 'bg-rose-500'}`} />
                             {activeTab === 'rl'

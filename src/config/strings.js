@@ -60,12 +60,16 @@ export const STRINGS = {
      */
     nav: {
         dashboard: 'Dashboard',
+        livePortfolio: 'Live Portfolio',
+        charts: 'Charts',
         backtest: 'Backtest',
         optimizer: 'Optimizer',
         multiLeg: 'Multi-Leg',
         risk: 'Portfolio Risk',
         tickStrategies: 'Tick Strategies',
+        tickResults: 'Tick Results',
         aiManager: 'AI Manager',
+        aiScore: 'AI Score',
         parityAudit: 'Parity Audit',
         dataManager: 'Data Manager',
         settings: 'Settings',

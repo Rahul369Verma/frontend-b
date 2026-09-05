@@ -1,13 +1,14 @@
 import React, { useEffect, useId, useMemo, useState } from 'react';
 import axios from 'axios';
 import { io } from 'socket.io-client';
-import { Zap, Plus, Play, Pause, Trash2, Activity, TrendingUp, TrendingDown, Clock, AlertTriangle, Octagon, Power, Eye, Square, Layers, Sliders } from 'lucide-react';
+import { Zap, Plus, Play, Pause, Trash2, Activity, TrendingUp, TrendingDown, Clock, AlertTriangle, Octagon, Power, PowerOff, Eye, Square, Layers, Sliders } from 'lucide-react';
 import { INSTRUMENT_CONFIG, MONTH_NAMES } from '../constants';
 import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 import { pollInterval } from '../hooks/usePolling.js';
 import { API_URL, SOCKET_URL } from '../config/api.js';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { useConfirm } from '../components/confirmContext.js';
+import { PageHeader, Chip } from '../components/viz/primitives';
 
 // Build a Fyers futures symbol from an index key + expiry date.
 //   buildFuturesSymbol('NSE:NIFTYBANK-INDEX', '2026-06-30')
@@ -38,6 +39,7 @@ export default function TickStrategies() {
     const [trades, setTrades] = useState([]);
     const [tradesTotal, setTradesTotal] = useState(0);
 
+    const [powerBusy, setPowerBusy] = useState(false);
     const [createOpen, setCreateOpen] = useState(false);
     // form.symbol is the FINAL symbol sent to backend (the one fyersData
     // subscribes to). We derive it from (indexSymbol + dataSource + futuresExpiry)
@@ -400,6 +402,43 @@ export default function TickStrategies() {
         } catch (err) { alert('Kill-all failed: ' + (err.response?.data?.error || err.message)); }
     };
 
+    // ── PERMANENT power switch ──────────────────────────────────────────────
+    // Deliberately NOT the same control as Halt. Halt refuses new entries while
+    // the tick subscriber, the 1Hz watchdog, the 3s heartbeat and the 15-minute
+    // rollover keep running — it stops the trading but not the CPU load — and it
+    // is in-memory, so a restart or redeploy silently brings everything back.
+    // This writes the choice to the settings document, force-flats open
+    // positions and tears the engine down, and start() honours it on boot.
+    const handlePower = async (enabled) => {
+        let reason = 'paused from dashboard';
+        if (!enabled) {
+            const openCount = snapshot?.totals?.openPositions || 0;
+            reason = window.prompt(
+                `PAUSE the tick engine.\n\nThis force-closes ${openCount} open paper position(s), stops the tick subscriber, the 1Hz watchdog, the heartbeat and the rollover timer, and STAYS OFF across restarts and redeploys until you resume it here.\n\nReason (recorded in the audit log):`,
+                'not making profit — system pressure',
+            );
+            if (reason == null) return;
+            if (!await confirm({
+                title: 'Pause the tick engine',
+                body: `Confirm: flatten ${openCount} position(s), stop all tick processing, and keep the engine off across restarts.`,
+                danger: true,
+                confirmLabel: 'Pause engine',
+            })) return;
+        }
+        setPowerBusy(true);
+        try {
+            const res = await axios.post(`${API_URL}/tick-strategies/power`, {
+                enabled, reason, actor: 'operator',
+            });
+            if (!enabled) {
+                alert(`Tick engine paused. Closed ${res.data.positionsClosed || 0} position(s). It will stay off until you resume it — including across restarts.`);
+            }
+            await fetchAll();
+        } catch (err) {
+            alert(`${enabled ? 'Resume' : 'Pause'} failed: ` + (err.response?.data?.error || err.message));
+        } finally { setPowerBusy(false); }
+    };
+
     // Merge runtime snapshot stats onto the persisted strategy docs so each
     // card can show live state (open position, hit count, PnL) without two
     // separate lookups in render.
@@ -411,24 +450,39 @@ export default function TickStrategies() {
     const totals = snapshot.totals || {};
 
     return (
-        <div className="p-8 space-y-8">
-            {/* Header */}
-            <div className="flex justify-between items-center">
-                <div>
-                    <h1 className="text-3xl font-bold text-fg flex items-center gap-3">
-                        <Zap className="w-7 h-7 text-amber-400" /> Live Tick Strategies
-                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/40">
-                            PAPER ONLY
-                        </span>
-                    </h1>
-                    <p className="text-fg-4 mt-1 text-sm">
-                        Sub-second strategies that react to raw tick data — volume bursts, order-flow footprints, premium spikes.
-                        These can't be backtested against 1-min candles, so they run paper-only against the live tick stream.
-                    </p>
-                </div>
-                <div className="flex items-center gap-2">
-                    {/* Halt / Resume / Kill — emergency controls */}
-                    {snapshot?.engine?.halted ? (
+        <div className="p-6 space-y-6">
+            <PageHeader
+                icon={Zap}
+                title="Live Tick Strategies"
+                badges={<Chip tone="paper" title="These strategies never place broker orders">PAPER ONLY</Chip>}
+                subtitle="Sub-second strategies that react to raw tick data — volume bursts, order-flow footprints, premium spikes. They can't be backtested against 1-min candles, so they run paper-only against the live tick stream."
+                actions={(
+                    <>
+                    {/* PERMANENT power switch — the only control here that
+                        survives a restart, and the only one that gives the box
+                        its CPU back. Rendered first because it is the big lever. */}
+                    {snapshot?.engine?.paused ? (
+                        <button
+                            onClick={() => handlePower(true)}
+                            disabled={powerBusy}
+                            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white font-semibold text-sm transition"
+                            title="Turn the tick engine back on — re-subscribes to ticks and restarts the watchdog"
+                        >
+                            <Play className="w-4 h-4" /> {powerBusy ? 'Starting…' : 'Start Engine'}
+                        </button>
+                    ) : (
+                        <button
+                            onClick={() => handlePower(false)}
+                            disabled={powerBusy}
+                            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 disabled:opacity-60 text-white font-semibold text-sm transition border border-slate-500"
+                            title="PAUSE — flatten positions, stop tick processing entirely, and stay off across restarts. Unlike Halt, this releases the CPU."
+                        >
+                            <PowerOff className="w-4 h-4" /> {powerBusy ? 'Pausing…' : 'Pause Engine'}
+                        </button>
+                    )}
+                    {/* Halt / Resume / Kill — in-session controls. Hidden while
+                        paused: there is nothing running to halt or kill. */}
+                    {!snapshot?.engine?.paused && (snapshot?.engine?.halted ? (
                         <button
                             onClick={handleResume}
                             className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white font-semibold text-sm transition"
@@ -444,14 +498,16 @@ export default function TickStrategies() {
                         >
                             <Octagon className="w-4 h-4" /> Halt
                         </button>
+                    ))}
+                    {!snapshot?.engine?.paused && (
+                        <button
+                            onClick={handleKillAll}
+                            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold text-sm transition"
+                            title="KILL ALL — force-flat every open position + halt entries (this session only)"
+                        >
+                            <Power className="w-4 h-4" /> KILL ALL
+                        </button>
                     )}
-                    <button
-                        onClick={handleKillAll}
-                        className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold text-sm transition"
-                        title="KILL ALL — force-flat every open position + halt entries"
-                    >
-                        <Power className="w-4 h-4" /> KILL ALL
-                    </button>
                     <button
                         onClick={() => openCreate()}
                         disabled={Object.keys(types).length === 0}
@@ -459,11 +515,66 @@ export default function TickStrategies() {
                     >
                         <Plus className="w-4 h-4" /> New Tick Strategy
                     </button>
+                    </>
+                )}
+            />
+
+            {/* PAUSED banner. Takes precedence over the halt banner: pausing
+                force-flats via killAll, which also sets `halted`, so both would
+                otherwise render and the louder red "HALTED" would bury the fact
+                that the engine is actually switched OFF. */}
+            {snapshot?.engine?.paused && (
+                <div className="bg-slate-800 border border-slate-500 rounded-xl p-4 flex items-start gap-3">
+                    <PowerOff className="w-6 h-6 text-slate-300 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                        <h3 className="text-slate-100 font-bold mb-1">⏸️ Tick engine is PAUSED — nothing is running</h3>
+                        <p className="text-slate-300 text-sm">
+                            Paused by <span className="font-mono">{snapshot.engine.pausedBy || 'operator'}</span>
+                            {snapshot.engine.pausedReason ? <>: <span className="font-semibold">{snapshot.engine.pausedReason}</span></> : null}
+                            {snapshot.engine.pausedAt && ` · since ${new Date(snapshot.engine.pausedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })} IST`}
+                        </p>
+                        <p className="text-slate-400 text-xs mt-1">
+                            Tick subscriber, 1&nbsp;Hz watchdog, heartbeat and rollover are all stopped, so the engine
+                            is using no CPU. <strong>This survives restarts and redeploys</strong> — it stays off until
+                            you start it here.
+                        </p>
+                    </div>
+                    <button
+                        onClick={() => handlePower(true)}
+                        disabled={powerBusy}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-500 disabled:opacity-60 text-white font-semibold rounded-lg flex-shrink-0 self-center shadow-lg shadow-green-900/50"
+                        title="Turn the tick engine back on"
+                    >
+                        <Play className="w-4 h-4" /> {powerBusy ? 'Starting…' : 'Start Engine'}
+                    </button>
                 </div>
-            </div>
+            )}
+
+            {/* The engine could not read its own pause switch at boot and is
+                being held off deliberately — say so rather than looking idle. */}
+            {snapshot?.engine?.pauseCheckFailed && !snapshot?.engine?.paused && (
+                <div className="bg-amber-950 border border-amber-700 rounded-xl p-4 flex items-start gap-3">
+                    <AlertTriangle className="w-6 h-6 text-amber-400 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                        <h3 className="text-amber-200 font-bold mb-1">Tick engine held OFF — pause state unknown</h3>
+                        <p className="text-amber-200/80 text-sm">
+                            The engine could not read its pause switch from the database at startup, so it did not
+                            start. Running it blind could re-impose load you had switched off. Press Start once the
+                            database is reachable.
+                        </p>
+                    </div>
+                    <button
+                        onClick={() => handlePower(true)}
+                        disabled={powerBusy}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-500 disabled:opacity-60 text-white font-semibold rounded-lg flex-shrink-0 self-center"
+                    >
+                        <Play className="w-4 h-4" /> Start Engine
+                    </button>
+                </div>
+            )}
 
             {/* Halt banner — pulses red when engine is halted */}
-            {snapshot?.engine?.halted && (
+            {snapshot?.engine?.halted && !snapshot?.engine?.paused && (
                 <div className="bg-red-950 border border-red-700 rounded-xl p-4 flex items-start gap-3 animate-pulse">
                     <Octagon className="w-6 h-6 text-red-400 flex-shrink-0 mt-0.5" />
                     <div className="flex-1">
@@ -917,16 +1028,30 @@ export default function TickStrategies() {
 // Sub-components
 // ────────────────────────────────────────────────────────────────────────
 
-function StatBox({ label, value, icon: _Icon, color, subtext, valueClass = 'text-fg' }) {
+// Literal class strings per tone: Tailwind only generates classes it can SEE in
+// the source, so `bg-${color}-500/10` never produced a class and the chips were
+// unstyled. The icon is re-bound to a capitalised local — the previous
+// `icon: _Icon` (renamed to silence no-unused-vars) left `<Icon>` undefined and
+// crashed this page with "ReferenceError: Icon is not defined" on every load.
+const STATBOX_TONES = {
+    violet: 'bg-primary/10 text-primary',
+    green: 'bg-success/10 text-success',
+    amber: 'bg-warning/10 text-warning',
+    red: 'bg-danger/10 text-danger',
+    rose: 'bg-danger/10 text-danger',
+    blue: 'bg-info/15 text-info',
+};
+function StatBox({ label, value, icon, color, subtext, valueClass = 'text-fg' }) {
+    const Icon = icon;
     return (
-        <div className="bg-surface p-5 rounded-xl border border-line flex items-center justify-between">
-            <div>
-                <p className="text-fg-4 text-xs uppercase tracking-wider">{label}</p>
-                <h3 className={`text-3xl font-bold mt-1 ${valueClass}`}>{value}</h3>
+        <div className="bg-surface p-5 rounded-xl border border-line flex items-center justify-between gap-3">
+            <div className="min-w-0">
+                <p className="text-fg-4 text-2xs uppercase tracking-wider">{label}</p>
+                <h3 className={`text-2xl font-bold mt-1 tabular-nums truncate ${valueClass}`} title={String(value)}>{value}</h3>
                 {subtext && <p className="text-2xs text-fg-5 mt-1">{subtext}</p>}
             </div>
-            <div className={`p-3 rounded-lg bg-${color}-500/10 text-${color}-400`}>
-                <Icon className="w-6 h-6" />
+            <div className={`p-3 rounded-lg flex-shrink-0 ${STATBOX_TONES[color] || STATBOX_TONES.violet}`}>
+                {Icon && <Icon className="w-6 h-6" aria-hidden="true" />}
             </div>
         </div>
     );

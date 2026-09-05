@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
-import { Play, Activity, ChevronDown, ChevronUp, Bot, Copy, Check, Square, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Play, Activity, ChevronDown, ChevronUp, Bot, Copy, Check, Square, PanelLeftClose, PanelLeftOpen, CandlestickChart, X } from 'lucide-react';
+import PriceChart from '../components/charts/PriceChart';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useGlobalState } from '../context/GlobalContext';
 import CollapsibleCard from '../components/CollapsibleCard';
+import { PageHeader, Spinner } from '../components/viz/primitives';
+import { FlaskConical as BacktestIcon } from 'lucide-react';
 import AttributionPanel from '../components/viz/AttributionPanel';
 import { useChartTheme } from '../theme/chartTheme.js';
 
@@ -193,6 +196,24 @@ export default function Backtest() {
   );
   const [showAiSim, setShowAiSim] = useState(false);
   const [backtestResultId, setBacktestResultId] = useState(null);
+  // ── Per-trade candle chart ────────────────────────────────────────────────
+  // The engine already builds every trade's candles and its spot SL/TP; they are
+  // cached server-side and stripped from the bulk response so a 500-trade result
+  // does not OOM this tab. This fetches ONE trade's worth on demand.
+  const [tradeChart, setTradeChart] = useState(null);   // { idx, loading, error, data }
+  const openTradeChart = async (idx) => {
+    if (!backtestResultId) return;
+    setTradeChart({ idx, loading: true, error: null, data: null });
+    try {
+      const res = await axios.get(`${API_URL}/backtest/${backtestResultId}/trade/${idx}/candles`);
+      setTradeChart({ idx, loading: false, error: null, data: res.data });
+    } catch (e) {
+      // A 422 here is not a failure — it means this backtest mode never recorded
+      // candles. Say which, rather than showing an empty chart.
+      const d = e?.response?.data;
+      setTradeChart({ idx, loading: false, error: d?.why || d?.error || e.message, data: null });
+    }
+  };
   // Cache of resims keyed by mode. Modes:
   //   'strategy' = strategy SL + strategy TP (no AI levels)
   //   'ai_sl'    = AI SL + strategy TP
@@ -835,8 +856,8 @@ export default function Backtest() {
 
   const handleSaveDefault = async () => {
     if (!params.strategy) return alert("Please select a strategy first.");
-    const confirm = await confirm(`Are you sure you want to update GLOBAL DEFAULTS for ${params.strategy}? This will affect all new backtests.`);
-    if (!confirm) return;
+    const ok = await confirm(`Are you sure you want to update GLOBAL DEFAULTS for ${params.strategy}? This will affect all new backtests.`);
+    if (!ok) return;
 
     // Filter out system params
     const strategyParams = {};
@@ -923,8 +944,8 @@ export default function Backtest() {
         if (!proceed) return;
     }
 
-    const confirm = await confirm(`Are you sure you want to DEPLOY this configuration for ${params.symbol} to the Live Bot?`);
-    if (!confirm) return;
+    const ok = await confirm(`Are you sure you want to DEPLOY this configuration for ${params.symbol} to the Live Bot?`);
+    if (!ok) return;
 
     // MERGE DEFAULTS: Ensure we save the EXACT snapshot of what the user sees
     const currentDefaults = strategyDefaults[params.strategy] || {};
@@ -1254,10 +1275,12 @@ export default function Backtest() {
   };
 
   return (
-    <div className="p-8 space-y-8">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold text-fg">Backtest Strategy</h1>
-        <button 
+    <div className="p-6 space-y-6">
+      <PageHeader icon={BacktestIcon} title="Backtest Strategy"
+        subtitle="Replay a single-leg strategy over archived candles — every trade, the equity curve, the AI overlay."
+        actions={(
+          <>
+<button 
             className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-fg-3 px-3 py-2 rounded border border-line text-sm transition-colors"
             onClick={() => {
                 const json = prompt("Paste Parameters JSON here:");
@@ -1290,7 +1313,8 @@ export default function Backtest() {
         >
             <span className="font-mono text-xs">{`{ }`}</span> Import JSON
         </button>
-      </div>
+          </>
+        )} />
       
       <div className={`grid grid-cols-1 gap-8 ${configCollapsed ? 'lg:grid-cols-[3rem_1fr]' : 'lg:grid-cols-3'}`}>
         {/* Controls — collapsible left panel */}
@@ -3469,6 +3493,7 @@ export default function Backtest() {
                   <table className="w-full text-sm text-left text-fg-3">
                     <thead className="text-xs text-fg-4 uppercase bg-slate-700/50 sticky top-0 z-10">
                       <tr>
+                        <th className="px-2 py-3 bg-slate-800" title="Plot this trade on candles with its SL/TP"><span className="sr-only">Chart</span></th>
                         <th className="px-4 py-3 bg-slate-800">Entry Time</th>
                         <th className="px-4 py-3 bg-slate-800">Symbol</th>
                         <th className="px-4 py-3 bg-slate-800">Volume</th>
@@ -3507,6 +3532,18 @@ export default function Backtest() {
                     <tbody>
                       {result.trades.map((trade, idx) => (
                         <tr key={idx} className="border-b border-line hover:bg-slate-700/30">
+                          <td className="px-2 py-3">
+                            <button
+                              type="button"
+                              onClick={() => openTradeChart(idx)}
+                              disabled={!backtestResultId}
+                              title={backtestResultId ? 'Plot this trade on candles with its SL/TP' : 'Re-run the backtest to enable charting'}
+                              className="p-1 rounded text-fg-5 hover:text-blue-400 hover:bg-slate-700/60 disabled:opacity-30 disabled:cursor-not-allowed"
+                            >
+                              <CandlestickChart className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span className="sr-only">Chart trade {idx + 1}</span>
+                            </button>
+                          </td>
                           <td className="px-4 py-3 text-xs">{new Date(trade.entryTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</td>
                           <td className="px-4 py-3 font-mono text-xs">{trade.option_symbol || '-'}</td>
                           <td className="px-4 py-3 text-fg-4 text-xs">{trade.volume || '-'}</td>
@@ -3735,7 +3772,7 @@ export default function Backtest() {
           // server-side now; a missing-cookie failure shows up at runtime with the
           // actual error from Python, which is more accurate than a stale browser check.
           return (
-              <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={onClose}>
+              <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-[2px]" onClick={onClose}>
                   <div className="bg-surface border border-violet-700/50 rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
                       {/* Header */}
                       <div className="p-4 border-b border-violet-700/30 bg-violet-950/20 flex justify-between items-center">
@@ -3851,7 +3888,7 @@ export default function Backtest() {
                       {/* Step: running — spinner + elapsed */}
                       {askAiModal.step === 'running' && (
                           <div className="p-10 flex flex-col items-center justify-center text-center">
-                              <div className="w-12 h-12 border-4 border-violet-500/30 border-t-violet-400 rounded-full animate-spin mb-4" />
+                              <Spinner size="lg" showLabel={false} className="mb-4" />
                               <p className="text-sm text-fg-2">Asking <code className="bg-slate-800 px-1 rounded">{resolvedModel}</code>…</p>
                               <p className="text-2xs text-fg-5 mt-2">
                                   {isWebSession ? 'Web-session calls can take 30–120s with thinking enabled.' : 'API calls usually complete in 5–20s.'}
@@ -4007,6 +4044,72 @@ export default function Backtest() {
               </div>
           );
       })()}
+
+      {/* ── One trade, on candles, with the levels it was managed against ────
+          The table has always shown spot_sl / spot_tp as numbers. A number tells
+          you where the stop was; it does not tell you how close price came to it,
+          or whether the exit was the stop doing its job or the session ending.
+          Same PriceChart component the live /charts page uses, so a backtest stop
+          and a live stop are drawn by identical code. */}
+      {tradeChart && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Trade ${tradeChart.idx + 1} chart`}
+          onClick={() => setTradeChart(null)}
+        >
+          <div className="w-full max-w-5xl rounded-lg border border-line bg-slate-900 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4 border-b border-line px-4 py-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-fg-2">
+                  Trade {tradeChart.idx + 1}
+                  {tradeChart.data?.trade?.symbol ? ` · ${tradeChart.data.trade.symbol}` : ''}
+                  {tradeChart.data?.trade?.type ? ` · ${tradeChart.data.trade.type}` : ''}
+                </div>
+                <div className="text-2xs text-fg-5">
+                  {tradeChart.data
+                    ? `${tradeChart.data.meta.count} candles · levels are SPOT (index points), not premium${tradeChart.data.trade.slTpType ? ` · ${tradeChart.data.trade.slTpType}` : ''}`
+                    : 'Entry candle through the end of the exit day.'}
+                </div>
+              </div>
+              <button type="button" onClick={() => setTradeChart(null)} className="p-1 rounded text-fg-5 hover:text-fg-2 hover:bg-slate-700/60" aria-label="Close">
+                <X className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </div>
+            <div className="p-4">
+              {tradeChart.loading && <div className="h-64 flex items-center justify-center text-fg-5 text-xs">Loading candles…</div>}
+              {tradeChart.error && (
+                <div className="h-64 flex items-center justify-center text-center text-fg-5 text-xs px-6">
+                  No chart for this trade — {tradeChart.error}
+                </div>
+              )}
+              {tradeChart.data && (
+                <>
+                  <PriceChart
+                    candles={tradeChart.data.candles}
+                    markers={tradeChart.data.markers}
+                    priceLines={tradeChart.data.priceLines}
+                    height={420}
+                    showVolume={tradeChart.data.meta.hasVolume}
+                  />
+                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-2xs text-fg-4">
+                    <span>entry <b className="text-fg-2">{tradeChart.data.trade.spotEntry ?? '—'}</b></span>
+                    <span>exit <b className="text-fg-2">{tradeChart.data.trade.spotExit ?? '—'}</b></span>
+                    {tradeChart.data.priceLines.filter(l => l.kind !== 'entry').map(l => (
+                      <span key={l.kind} style={{ color: l.color }}>{l.title}</span>
+                    ))}
+                    <span className={(Number(tradeChart.data.trade.pnl) || 0) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                      P&L ₹{Math.round(Number(tradeChart.data.trade.pnl) || 0).toLocaleString('en-IN')}
+                    </span>
+                    <span className="text-fg-5">{tradeChart.data.trade.reason}</span>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

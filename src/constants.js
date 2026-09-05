@@ -124,16 +124,21 @@ export const MONTH_NAMES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AU
 
 export const TIMEZONE = "Asia/Kolkata";
 
+// open/close are MARKET FACTS and derive from ./config/marketSession.js (which
+// mirrors backend/logic/marketSession.js — the authority). strategyStart/End are
+// POLICY and stay literal, exactly as on the backend.
+import { sessionFor as _sessionFor } from './config/marketSession';
+
 export const MARKET_TIMINGS = {
     NSE: {
-        open: "09:15",
-        close: "15:30",
+        open: _sessionFor({ exchange: 'NSE', segment: 'DERIVATIVES' }).open,
+        close: _sessionFor({ exchange: 'NSE', segment: 'DERIVATIVES' }).close,
         strategyStart: "09:30",
         strategyEnd: "15:15"
     },
     BSE: {
-        open: "09:15",
-        close: "15:30",
+        open: _sessionFor({ exchange: 'BSE', segment: 'DERIVATIVES' }).open,
+        close: _sessionFor({ exchange: 'BSE', segment: 'DERIVATIVES' }).close,
         strategyStart: "09:30",
         strategyEnd: "15:15"
     },

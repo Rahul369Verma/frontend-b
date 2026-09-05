@@ -3,6 +3,7 @@ import axios from 'axios';
 import { Help, Tile } from './builderUi';
 import ChainLadder from './ChainLadder';
 import AnalysisTabs from './AnalysisTabs';
+import ZoneFinderPanel from './ZoneFinderPanel';
 import {
     num, fmt, rup, pct, sgn, shortSym, addDays, interpAt, sdFor, SD_HORIZON_NOTE,
     inputCls, cellCls, btnCls,
@@ -453,6 +454,19 @@ export default function StrategyBuilder() {
     };
 
     // ── template seeding ─────────────────────────────────────────────────────
+    // ── zone finder → legs ──────────────────────────────────────────────
+    // The finder returns template-ordered legs with absolute strikes; they land
+    // in the builder exactly like a seeded template and are then yours to edit.
+    const useZoneLegs = (picked, expiryIso) => {
+        if (!Array.isArray(picked) || !picked.length) return;
+        setTplKey('');
+        setSaveState(null);
+        setRatioMult(1);
+        const near = expiryIso || chain?.expiry || expiry || '';
+        setLegs(picked.slice(0, MAX_LEGS).map(l => newLeg({ type: l.type, action: l.action, strike: l.strike, ratio: Math.max(1, num(l.ratio) || 1), expiry: near, premium: '' })));
+        setActiveLegId(null);
+    };
+
     const seedTemplate = (key) => {
         setTplKey(key);
         setSaveState(null);
@@ -692,6 +706,11 @@ export default function StrategyBuilder() {
                     </div>
                 )}
             </div>
+
+            {/* ── ZONE FINDER — strikes from the market's distribution ── */}
+
+            <ZoneFinderPanel symbol={symbol} lots={1} currentLegs={legs} onUseLegs={useZoneLegs} />
+
 
             {/* ── TEMPLATE SEED ─────────────────────────────────────────── */}
             <div className="bg-slate-800/30 rounded-lg border border-line p-2.5">

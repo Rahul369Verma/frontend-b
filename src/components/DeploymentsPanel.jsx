@@ -26,8 +26,9 @@
 //   globalConfig                → global settings (for max_daily_loss override)
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ChevronDown, ChevronRight, Wallet } from 'lucide-react';
+import { ROUTES, strategyDetailHref } from '../config/routes.js';
 import axios from 'axios';
 import { API_URL } from '../config/api.js';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
@@ -119,12 +120,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
     // scoped to this deployment. Carries deploymentId + strategy + label in the
     // query so StrategyDetail can filter to it (with symbol-level fallback).
     const openResults = (d) => {
-        const qs = new URLSearchParams({
-            deploymentId: d._id,
-            strategyName: d.strategyName || '',
-            label: d.name || '',
-        }).toString();
-        navigate(`/strategy/${encodeURIComponent(d.symbol)}?${qs}`);
+        navigate(strategyDetailHref({ symbol: d.symbol, deploymentId: d._id, strategyName: d.strategyName, label: d.name }));
     };
     const [deployments, setDeployments] = useState([]);
     const [strategies, setStrategies] = useState(KNOWN_STRATEGIES_FALLBACK);
@@ -330,6 +326,13 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                     </span>
                 </button>
                 <div className="flex items-center gap-2">
+                    {/* The combined view: every deployment's results on one page,
+                        so nobody has to open the cards one by one to compare. */}
+                    <Link to={ROUTES.livePortfolio}
+                        className="text-2xs px-2 py-1 rounded border border-line-2 bg-card-2 text-fg-3 hover:text-fg inline-flex items-center gap-1"
+                        title="Every deployment's results — combined, and one card per strategy">
+                        <Wallet className="w-3 h-3" aria-hidden="true" /> Portfolio results
+                    </Link>
                     {panelOpen && counts.all > 0 && (
                         <button
                             onClick={() => {

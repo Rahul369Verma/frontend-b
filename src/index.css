@@ -247,6 +247,15 @@ body {
     font-family: var(--ui-font-family);
 }
 
+/* ── Numbers line up in every table ──────────────────────────────────────────
+   Thirty-three hand-rolled tables and one DataTable; only the DataTable set
+   `tabular-nums`, so on every other page a column of P&L wobbled by digit
+   width and could not be scanned. Base layer: a `proportional-nums` utility in
+   markup still wins. */
+@layer base {
+    table { font-variant-numeric: tabular-nums; }
+}
+
 /* ── Pointer cursor on interactive elements ─────────────────────────────────
    WHY THIS IS NEEDED AT ALL. Tailwind v3's Preflight set `button { cursor:
    pointer }`. Tailwind v4 REMOVED it, deliberately, to match the bare browser

@@ -6,10 +6,14 @@ import {
     BarChart, Bar, ReferenceLine, Cell, LabelList,
 } from 'recharts';
 import {
-    ArrowLeft, RefreshCw, Activity, TrendingUp, TrendingDown,
+    RefreshCw, Activity, TrendingUp, TrendingDown,
     Calendar as CalendarIcon, Clock, BarChart3, Table as TableIcon,
 } from 'lucide-react';
 import { useChartTheme } from '../theme/chartTheme.js';
+import PnlCalendar from '../components/charts/PnlCalendar.jsx';
+import { StatRow, StatTile, Tabs, PageHeader, Chip, ModeChip } from '../components/viz/primitives';
+import { ROUTES, strategyDetailHref } from '../config/routes.js';
+import { riskOpenMin, riskCloseMin } from '../config/marketSession.js';
 import { API_URL } from '../config/api.js';
 
 // Upper bound on trades pulled in one shot. Per-symbol closed-trade counts are
@@ -129,13 +133,8 @@ export default function StrategyDetail() {
     const switchDeployment = useCallback((id) => {
         const d = allDeployments.find(x => String(x._id) === String(id));
         if (!d) return;
-        const qs = new URLSearchParams({
-            deploymentId: String(d._id),
-            strategyName: d.strategyName || '',
-            label: d.name || '',
-        }).toString();
         setScope('deployment');
-        navigate(`/strategy/${encodeURIComponent(d.symbol)}?${qs}`);
+        navigate(strategyDetailHref({ symbol: d.symbol, deploymentId: d._id, strategyName: d.strategyName, label: d.name }));
     }, [allDeployments, navigate]);
     // The strategy name we scope by — query param wins (it reflects the exact
     // deployment the user clicked), else the symbol's current config.
@@ -283,16 +282,20 @@ export default function StrategyDetail() {
         });
     }, [closed]);
 
+    // `[{ date, net }]` — the shape <PnlCalendar> takes, and the same shape both
+    // analytics endpoints return, so the calendar has ONE input contract app-wide.
     const dailyPnl = useMemo(() => {
         const m = new Map();
         for (const t of closed) {
             const day = istDayKey(t.exitTime || t.timestamp);
             m.set(day, (m.get(day) || 0) + tradePnl(t));
         }
-        return m;
+        return [...m.entries()].map(([date, net]) => ({ date, net }));
     }, [closed]);
 
-    const calendarWeeks = useMemo(() => buildCalendar(dailyPnl, rangeKey), [dailyPnl, rangeKey]);
+    // The calendar takes a day COUNT, not this page's range key: it is shared with
+    // the multileg panel and the portfolio page, neither of which has DATE_RANGES.
+    const calendarDays = DATE_RANGES.find(r => r.key === rangeKey)?.days ?? null;
 
     const pnlHistogram = useMemo(() => buildHistogram(closed.map(tradePnl)), [closed]);
 
@@ -300,52 +303,29 @@ export default function StrategyDetail() {
 
     // ── Render ──────────────────────────────────────────────────────────────
     return (
-        <div className="p-6 max-w-[1500px] mx-auto">
-            {/* Header */}
-            <div className="flex items-start justify-between gap-4 mb-6 flex-wrap">
-                <div className="flex items-start gap-4">
-                    <button
-                        onClick={() => navigate(-1)}
-                        className="mt-1 text-fg-4 hover:text-fg p-1 rounded transition-colors"
-                        title="Back"
-                    >
-                        <ArrowLeft className="w-5 h-5" />
-                    </button>
-                    <div>
-                        <h1 className="text-2xl font-bold text-fg flex items-center gap-3 flex-wrap">
-                            <Activity className="w-6 h-6 text-primary" />
-                            <span>{symbol}</span>
-                            {/* Deployment label (when arriving from a Results button) takes
-                                precedence over the symbol's current-config strategy name. */}
-                            {(qpLabel || qpStrategyName || strategyMeta?.strategyName) && (
-                                <span className="text-sm text-fg-4 font-normal">
-                                    {qpLabel || qpStrategyName || strategyMeta?.strategyName}
-                                </span>
-                            )}
-                            {/* `bg-{hue}-800/40` + `text-{hue}-200`: the tint band under the
-                                tint-ink band, so both invert together on light themes. The
-                                `border-{hue}-700` beside it is deliberately the SOLID band —
-                                a strong border wants a mid-tone in both modes (spec 2c). */}
-                            {deploymentId && (
-                                <span className="text-3xs px-2 py-0.5 rounded bg-violet-800/40 text-violet-200 border border-violet-700" title={`Deployment ${deploymentId}`}>
-                                    deployment {String(deploymentId).slice(-6).toUpperCase()}
-                                </span>
-                            )}
-                            {strategyMeta?.tradeMode === 'LIVE' ? (
-                                <span className="text-3xs px-2 py-0.5 rounded bg-red-800/40 text-red-200 border border-red-700">LIVE</span>
-                            ) : strategyMeta?.tradeMode === 'PAPER' || strategyMeta?.tradeMode === 'PAPER_TRADE' ? (
-                                <span className="text-3xs px-2 py-0.5 rounded bg-blue-800/40 text-blue-200 border border-blue-700">PAPER</span>
-                            ) : null}
-                            {strategyMeta?.isActive === false && (
-                                <span className="text-3xs px-2 py-0.5 rounded bg-slate-700 text-fg-4 border border-line-2">INACTIVE</span>
-                            )}
-                        </h1>
-                        <div className="text-sm text-fg-5 mt-1">
-                            {loading ? 'Loading trades…' : `${closed.length} closed trades · ${openPos.length} open`}
-                        </div>
-                    </div>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
+        <div className="p-6 max-w-[94rem] mx-auto">
+            {/* Header — back link is a real route (the results hub), not history */}
+            <PageHeader
+                className="mb-6"
+                backTo={ROUTES.livePortfolio}
+                backLabel="All results"
+                icon={Activity}
+                title={symbol}
+                badges={(
+                    <>
+                        {(qpLabel || qpStrategyName || strategyMeta?.strategyName) && (
+                            <span className="text-sm text-fg-4 font-normal">{qpLabel || qpStrategyName || strategyMeta?.strategyName}</span>
+                        )}
+                        {deploymentId && (
+                            <Chip tone="info" title={`Deployment ${deploymentId}`}>deployment {String(deploymentId).slice(-6).toUpperCase()}</Chip>
+                        )}
+                        <ModeChip mode={strategyMeta?.tradeMode === 'PAPER_TRADE' ? 'PAPER' : strategyMeta?.tradeMode} />
+                        {strategyMeta?.isActive === false && <Chip tone="muted" title="Deployment is switched off">INACTIVE</Chip>}
+                    </>
+                )}
+                subtitle={loading ? 'Loading trades…' : `${closed.length} closed trades · ${openPos.length} open`}
+                actions={(
+                    <>
                     {/* Deployment switcher — every deployment in the DB, so the
                         SAME strategy at different resolutions (5m vs 1m) can be
                         compared per-deployment without going back to the
@@ -416,8 +396,9 @@ export default function StrategyDetail() {
                     >
                         <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
                     </button>
-                </div>
-            </div>
+                    </>
+                )}
+            />
 
             {error && (
                 <div className="mb-4 p-3 bg-red-900/20 border border-red-700/50 rounded text-red-300 text-sm">
@@ -455,22 +436,9 @@ export default function StrategyDetail() {
             <KpiStrip kpis={kpis} openCount={openPos.length} />
 
             {/* Tabs */}
-            <div className="flex gap-1 mb-4 border-b border-line">
-                {TAB_KEYS.map(({ key, label, icon: _Icon }) => (
-                    <button
-                        key={key}
-                        onClick={() => setActiveTab(key)}
-                        className={`px-4 py-2 text-sm flex items-center gap-2 border-b-2 transition-colors ${
-                            activeTab === key
-                                ? 'border-primary text-primary'
-                                : 'border-transparent text-fg-4 hover:text-fg'
-                        }`}
-                    >
-                        <Icon className="w-4 h-4" />
-                        {label}
-                    </button>
-                ))}
-            </div>
+            <Tabs className="mb-4" ariaLabel="Result views"
+                tabs={TAB_KEYS.map((t) => ({ id: t.key, label: t.label, icon: t.icon }))}
+                value={activeTab} onChange={setActiveTab} />
 
             {/* Tab content */}
             <div className="bg-surface rounded-xl border border-line p-6 min-h-[400px]">
@@ -499,7 +467,7 @@ export default function StrategyDetail() {
                 ) : (
                     <>
                         {activeTab === 'equity'   && <EquityCurveView data={equitySeries} />}
-                        {activeTab === 'calendar' && <CalendarView weeks={calendarWeeks} />}
+                        {activeTab === 'calendar' && <PnlCalendar daily={dailyPnl} rangeDays={calendarDays} />}
                         {activeTab === 'table'    && <TradesTable trades={[...closed].reverse()} openPos={openPos} />}
                         {activeTab === 'dist'     && <DistributionView histogram={pnlHistogram} hourMap={hourHeatmap} kpis={kpis} />}
                     </>
@@ -511,27 +479,22 @@ export default function StrategyDetail() {
 
 // ── KPI strip ──────────────────────────────────────────────────────────────
 function KpiStrip({ kpis, openCount }) {
-    const totalCls = kpis.total >= 0 ? 'text-emerald-400' : 'text-red-400';
+    const tone = (v) => (v > 0 ? 'positive' : v < 0 ? 'negative' : 'neutral');
+    const pf = kpis.profitFactor;
     return (
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 mb-5">
-            <Kpi label="Total PnL"    value={fmtINR(kpis.total)}     valueCls={totalCls} />
-            <Kpi label="Trades"       value={kpis.count}              hint={`${openCount} open`} />
-            <Kpi label="Win Rate"     value={fmtPct(kpis.winRate)}   hint={`${kpis.wins}W · ${kpis.losses}L`} />
-            <Kpi label="Profit Factor" value={kpis.profitFactor == null ? '∞' : fmtNum(kpis.profitFactor)} hint={kpis.profitFactor == null ? 'no losses' : 'gross win ÷ gross loss'} />
-            <Kpi label="Best Trade"   value={fmtINR(kpis.best)}      valueCls="text-emerald-400" />
-            <Kpi label="Worst Trade"  value={fmtINR(kpis.worst)}     valueCls="text-red-400" />
-            <Kpi label="Best Day"     value={kpis.bestDay  ? fmtINR(kpis.bestDay.pnl)  : '—'} hint={kpis.bestDay?.day  || ''} valueCls="text-emerald-400" />
-            <Kpi label="Worst Day"    value={kpis.worstDay ? fmtINR(kpis.worstDay.pnl) : '—'} hint={kpis.worstDay?.day || ''} valueCls="text-red-400" />
-        </div>
-    );
-}
-
-function Kpi({ label, value, hint, valueCls = 'text-fg' }) {
-    return (
-        <div className="bg-slate-800/50 border border-line rounded p-3">
-            <div className="text-3xs uppercase tracking-wide text-fg-5">{label}</div>
-            <div className={`text-lg font-bold ${valueCls}`}>{value}</div>
-            {hint && <div className="text-3xs text-fg-5 mt-0.5">{hint}</div>}
+        <div className="mb-5">
+            <StatRow cols={8}>
+                <StatTile label="Total PnL" value={fmtINR(kpis.total)} tone={tone(kpis.total)} />
+                <StatTile label="Trades" value={String(kpis.count)} hint={`${openCount} open`} />
+                <StatTile label="Win rate" value={fmtPct(kpis.winRate)} hint={`${kpis.wins}W · ${kpis.losses}L`} />
+                <StatTile label="Profit factor" value={pf == null ? '∞' : fmtNum(pf)}
+                    tone={pf == null ? 'neutral' : pf >= 1 ? 'positive' : 'negative'}
+                    hint={pf == null ? 'no losses' : 'gross win ÷ gross loss'} />
+                <StatTile label="Best trade" value={fmtINR(kpis.best)} tone="positive" />
+                <StatTile label="Worst trade" value={fmtINR(kpis.worst)} tone="negative" />
+                <StatTile label="Best day" value={kpis.bestDay ? fmtINR(kpis.bestDay.pnl) : '—'} hint={kpis.bestDay?.day || ''} tone="positive" />
+                <StatTile label="Worst day" value={kpis.worstDay ? fmtINR(kpis.worstDay.pnl) : '—'} hint={kpis.worstDay?.day || ''} tone="negative" />
+            </StatRow>
         </div>
     );
 }
@@ -570,108 +533,6 @@ function EquityCurveView({ data }) {
             </ResponsiveContainer>
             <div className="text-xs text-fg-5 mt-2">
                 Each point = one trade exit. Line = cumulative realised PnL. The 0-line is the break-even threshold.
-            </div>
-        </div>
-    );
-}
-
-// ── Calendar Heatmap ───────────────────────────────────────────────────────
-function buildCalendar(dailyPnl, rangeKey) {
-    // Build a contiguous list of days from earliest to today (IST), bucketed into weeks.
-    const days = [];
-    const today = toIst(Date.now());
-    today.setUTCHours(0, 0, 0, 0);
-    const range = DATE_RANGES.find(r => r.key === rangeKey);
-    let start;
-    if (range?.days) {
-        start = new Date(today.getTime() - (range.days - 1) * 86400000);
-    } else if (dailyPnl.size > 0) {
-        const earliest = [...dailyPnl.keys()].sort()[0];
-        start = new Date(earliest + 'T00:00:00.000Z');
-    } else {
-        start = new Date(today.getTime() - 29 * 86400000);
-    }
-    // Pad to start on a Monday for clean week columns.
-    const dow = (start.getUTCDay() + 6) % 7; // 0=Mon, 6=Sun
-    start = new Date(start.getTime() - dow * 86400000);
-    for (let t = start.getTime(); t <= today.getTime(); t += 86400000) {
-        const d = new Date(t);
-        const key = d.toISOString().slice(0, 10);
-        days.push({ date: key, pnl: dailyPnl.get(key) ?? null });
-    }
-    // Chunk into weeks of 7.
-    const weeks = [];
-    for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
-    return weeks;
-}
-
-function calendarColor(pnl) {
-    if (pnl == null) return 'bg-slate-800 border-line';
-    if (pnl === 0)   return 'bg-slate-700 border-line-2';
-    const abs = Math.abs(pnl);
-    // Logarithmic-ish bucketing: tiny / small / medium / large.
-    let intensity;
-    if (abs < 500)       intensity = 1;
-    else if (abs < 2000) intensity = 2;
-    else if (abs < 5000) intensity = 3;
-    else                 intensity = 4;
-    if (pnl > 0) {
-        return [
-            'bg-emerald-900/40 border-emerald-800',
-            'bg-emerald-700/60 border-emerald-600',
-            'bg-emerald-600/80 border-emerald-500',
-            'bg-emerald-500 border-emerald-400',
-        ][intensity - 1];
-    }
-    return [
-        'bg-red-900/40 border-red-800',
-        'bg-red-700/60 border-red-600',
-        'bg-red-600/80 border-red-500',
-        'bg-red-500 border-red-400',
-    ][intensity - 1];
-}
-
-function CalendarView({ weeks }) {
-    const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    return (
-        <div>
-            <h3 className="text-base font-semibold text-fg-2 mb-3">Daily PnL Calendar</h3>
-            <div className="flex gap-2">
-                <div className="flex flex-col gap-1 pt-6 text-3xs text-fg-5">
-                    {dayLabels.map(d => <div key={d} className="h-5 flex items-center">{d}</div>)}
-                </div>
-                <div className="flex gap-1 overflow-x-auto pb-2">
-                    {weeks.map((week, wi) => (
-                        <div key={wi} className="flex flex-col gap-1">
-                            <div className="h-5 text-4xs text-fg-5 text-center">
-                                {wi % 4 === 0 && week[0]?.date ? new Date(week[0].date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : ''}
-                            </div>
-                            {Array.from({ length: 7 }).map((_, di) => {
-                                const cell = week[di];
-                                if (!cell) return <div key={di} className="w-5 h-5" />;
-                                const isFuture = new Date(cell.date) > new Date();
-                                if (isFuture) return <div key={di} className="w-5 h-5 bg-slate-900/40 border border-line-0/60 rounded" />;
-                                return (
-                                    <div
-                                        key={di}
-                                        className={`w-5 h-5 rounded border ${calendarColor(cell.pnl)}`}
-                                        title={`${cell.date} · ${cell.pnl == null ? 'no trades' : fmtINR(cell.pnl)}`}
-                                    />
-                                );
-                            })}
-                        </div>
-                    ))}
-                </div>
-            </div>
-            <div className="flex items-center gap-3 mt-4 text-3xs text-fg-5">
-                <span>Less</span>
-                <div className="w-4 h-4 rounded border bg-red-700/60 border-red-600" />
-                <div className="w-4 h-4 rounded border bg-red-900/40 border-red-800" />
-                <div className="w-4 h-4 rounded border bg-slate-700 border-line-2" />
-                <div className="w-4 h-4 rounded border bg-emerald-900/40 border-emerald-800" />
-                <div className="w-4 h-4 rounded border bg-emerald-700/60 border-emerald-600" />
-                <span>More</span>
-                <span className="ml-4">Hover a cell to see the day's PnL.</span>
             </div>
         </div>
     );
@@ -871,13 +732,21 @@ function buildHistogram(pnls) {
     });
 }
 
+/** minutes-of-day → 'HH:MM', so the heatmap caption states the window it actually drew. */
+const hhmmOf = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
 function buildHourHeatmap(closed) {
-    // 5-min buckets across the NSE session (9:15 → 15:30 IST) × weekday.
-    const SLOTS = 75; // 5h15m / 5min = 75 slots
-    const slotStartMin = 9 * 60 + 15;
+    // 5-min buckets across the NSE session × weekday, DERIVED from the session
+    // config. It was a hard-coded 75 slots (09:15-15:30); since 3-Aug-2026 the
+    // derivatives session runs to 15:40, so every trade entered at or after 15:30
+    // fell past the last bucket and was SILENTLY DISCARDED by the `continue`
+    // below — a row vanishing out of an analytics grid with nothing said.
+    const slotStartMin = riskOpenMin('NSE');
+    const SLOTS = Math.ceil((riskCloseMin('NSE') - slotStartMin) / 5);
     const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
     // grid[day][slot] = { count, pnl }
     const grid = days.map(() => Array.from({ length: SLOTS }, () => ({ count: 0, pnl: 0 })));
+    const outside = [];   // never dropped silently — see below
     for (const t of closed) {
         const ts = new Date(t.entryTime || t.timestamp);
         const ist = toIst(ts);
@@ -886,11 +755,13 @@ function buildHourHeatmap(closed) {
         const dayIdx = dow - 1;
         const mins = ist.getUTCHours() * 60 + ist.getUTCMinutes();
         const slot = Math.floor((mins - slotStartMin) / 5);
-        if (slot < 0 || slot >= SLOTS) continue;
+        // Anything still outside the session (a bad timestamp, a pre-open fill) is
+        // COUNTED and reported, never dropped on the floor.
+        if (slot < 0 || slot >= SLOTS) { outside.push({ at: t.entryTime || t.timestamp, pnl: tradePnl(t) }); continue; }
         grid[dayIdx][slot].count++;
         grid[dayIdx][slot].pnl += tradePnl(t);
     }
-    return { grid, days };
+    return { grid, days, slotStartMin, outside };
 }
 
 function hourCellColor(cell) {
@@ -960,11 +831,14 @@ function DistributionView({ histogram, hourMap, kpis }) {
                 <div className="text-3xs text-fg-5 mt-1">
                     Each bar = a PnL <span className="text-fg-4">range</span>, not a single trade. A bar of height N means N trades fell into that range — hover for the exact bracket.
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 text-xs">
-                    <Kpi label="Avg Win"  value={fmtINR(kpis.avgWin)}  valueCls="text-emerald-400" />
-                    <Kpi label="Avg Loss" value={fmtINR(-kpis.avgLoss)} valueCls="text-red-400" />
-                    <Kpi label="Win Rate" value={fmtPct(kpis.winRate)} />
-                    <Kpi label="Profit Factor" value={kpis.profitFactor == null ? '∞' : fmtNum(kpis.profitFactor)} />
+                <div className="mt-3">
+                    <StatRow cols={4}>
+                        <StatTile label="Avg win" value={fmtINR(kpis.avgWin)} tone="positive" />
+                        <StatTile label="Avg loss" value={fmtINR(-kpis.avgLoss)} tone="negative" />
+                        <StatTile label="Win rate" value={fmtPct(kpis.winRate)} />
+                        <StatTile label="Profit factor" value={kpis.profitFactor == null ? '∞' : fmtNum(kpis.profitFactor)}
+                            tone={kpis.profitFactor == null ? 'neutral' : kpis.profitFactor >= 1 ? 'positive' : 'negative'} />
+                    </StatRow>
                 </div>
             </div>
 
@@ -977,8 +851,8 @@ function DistributionView({ histogram, hourMap, kpis }) {
                     <div className="inline-block min-w-full">
                         {/* Time axis */}
                         <div className="flex gap-px ml-12 mb-1 text-4xs text-fg-5">
-                            {Array.from({ length: 75 }).map((_, slot) => {
-                                const m = 9 * 60 + 15 + slot * 5;
+                            {Array.from({ length: hourMap.grid[0]?.length || 0 }).map((_, slot) => {
+                                const m = hourMap.slotStartMin + slot * 5;
                                 const showLabel = slot % 12 === 0;
                                 return (
                                     <div key={slot} className="w-3 text-center">
@@ -991,7 +865,7 @@ function DistributionView({ histogram, hourMap, kpis }) {
                             <div key={day} className="flex items-center gap-px mb-px">
                                 <div className="w-10 text-3xs text-fg-5 text-right pr-2">{day}</div>
                                 {hourMap.grid[di].map((cell, slot) => {
-                                    const m = 9 * 60 + 15 + slot * 5;
+                                    const m = hourMap.slotStartMin + slot * 5;
                                     const timeStr = `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
                                     return (
                                         <div
@@ -1006,8 +880,17 @@ function DistributionView({ histogram, hourMap, kpis }) {
                     </div>
                 </div>
                 <div className="text-3xs text-fg-5 mt-2">
-                    5-minute buckets across the NSE session (09:15 → 15:30 IST). Cell colour = net PnL for entries in that bucket across all selected days.
+                    5-minute buckets across the NSE session ({hhmmOf(hourMap.slotStartMin)} → {hhmmOf(hourMap.slotStartMin + (hourMap.grid[0]?.length || 0) * 5)} IST).
+                    Cell colour = net PnL for entries in that bucket across all selected days.
                 </div>
+                {/* Anything outside the grid is NAMED, not dropped. The grid used to
+                    end at 15:30 and silently discard every later entry. */}
+                {hourMap.outside?.length > 0 && (
+                    <div className="text-3xs text-amber-300/80 mt-1">
+                        ⚠ {hourMap.outside.length} trade(s) entered outside the session window and are not in this grid
+                        ({fmtINR(hourMap.outside.reduce((a, o) => a + (o.pnl || 0), 0))} net) — check their timestamps.
+                    </div>
+                )}
             </div>
         </div>
     );

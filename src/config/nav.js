@@ -30,13 +30,18 @@
  */
 import {
     Activity,
+    Brain,
     Gauge,
+    CandlestickChart,
     LayoutDashboard,
     Layers,
     LineChart,
     Settings,
+    ShieldCheck,
     Square,
     Terminal,
+    Timer,
+    Wallet,
     Zap,
 } from 'lucide-react';
 
@@ -67,24 +72,41 @@ const Backtest = lazy(() => import('../pages/Backtest'));
 const Optimizer = lazy(() => import('../pages/Optimizer'));
 const MultiLeg = lazy(() => import('../pages/MultiLeg'));
 const Risk = lazy(() => import('../pages/Risk'));
+const Charts = lazy(() => import('../pages/Charts'));
+const LivePortfolio = lazy(() => import('../pages/LivePortfolio'));
 const TickStrategies = lazy(() => import('../pages/TickStrategies'));
+const TickResults = lazy(() => import('../pages/TickResults'));
 const SettingsPage = lazy(() => import('../pages/Settings'));
 const StrategyDetail = lazy(() => import('../pages/StrategyDetail'));
 const Callback = lazy(() => import('../pages/Callback'));
 const AiManager = lazy(() => import('../components/AiManager'));
+const AiScore = lazy(() => import('../pages/AiScore'));
 const DataManager = lazy(() => import('../components/DataManager'));
 const ParityAuditDashboard = lazy(() => import('../components/ParityAuditDashboard'));
 
-/** The sidebar rail, in order. Ten entries, one per navigable page. */
+/** The sidebar rail, in order. Twelve entries, one per navigable page. */
 export const NAV_ITEMS = [
     { path: '/', icon: LayoutDashboard, labelKey: 'nav.dashboard', component: Dashboard },
+    // Sits directly under Dashboard: Dashboard is "what is running right now",
+    // this is "what has it all made" — the same book, one zoom level out.
+    { path: '/live-portfolio', icon: Wallet, labelKey: 'nav.livePortfolio', component: LivePortfolio },
+    // Sits next to the portfolio: that page says what happened, this one shows
+    // WHERE it happened — the same trades, drawn on price.
+    { path: '/charts', icon: CandlestickChart, labelKey: 'nav.charts', component: Charts },
     { path: '/backtest', icon: LineChart, labelKey: 'nav.backtest', component: Backtest },
     { path: '/optimizer', icon: Activity, labelKey: 'nav.optimizer', component: Optimizer },
     { path: '/multi-leg', icon: Layers, labelKey: 'nav.multiLeg', component: MultiLeg },
     { path: '/risk', icon: Gauge, labelKey: 'nav.risk', component: Risk },
     { path: '/tick-strategies', icon: Zap, labelKey: 'nav.tickStrategies', component: TickStrategies },
+    // Sits directly under the tick control room, for the same reason Live
+    // Portfolio sits under Dashboard: one is "what is running", the other is
+    // "what has it earned".
+    { path: '/tick-results', icon: Timer, labelKey: 'nav.tickResults', component: TickResults },
     { path: '/ai-manager', icon: Terminal, labelKey: 'nav.aiManager', component: AiManager },
-    { path: '/parity-audit', icon: Activity, labelKey: 'nav.parityAudit', component: ParityAuditDashboard },
+    // Sits next to the AI control room for the same reason results sit next to
+    // engines: that page runs the AI, this one says whether it has been worth it.
+    { path: '/ai-score', icon: Brain, labelKey: 'nav.aiScore', component: AiScore },
+    { path: '/parity-audit', icon: ShieldCheck, labelKey: 'nav.parityAudit', component: ParityAuditDashboard },
     { path: '/data-manager', icon: Square, labelKey: 'nav.dataManager', component: DataManager },
     { path: '/settings', icon: Settings, labelKey: 'nav.settings', component: SettingsPage },
 ];

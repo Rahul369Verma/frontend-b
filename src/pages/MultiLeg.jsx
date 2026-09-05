@@ -1,12 +1,18 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceDot, ReferenceArea, Legend,
 } from 'recharts';
-import { Layers, Play, Pause, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp } from 'lucide-react';
+import { Layers, Play, Pause, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp, Wallet } from 'lucide-react';
 import StructureAttributionPanel from '../components/viz/StructureAttributionPanel';
 import StrategyBuilder from '../components/multileg/StrategyBuilder';
+import ResultsAnalytics from '../components/multileg/ResultsAnalytics';
+import TradePathChart from '../components/multileg/TradePathChart';
 import ZoomableChart from '../components/charts/ZoomableChart';
+import { PageHeader, Tabs } from '../components/viz/primitives';
+import { ROUTES } from '../config/routes.js';
+import { riskOpenMin, riskCloseMin } from '../config/marketSession.js';
 import { HELP } from '../data/multilegHelp';
 import { useChartTheme } from '../theme/chartTheme.js';
 import { pollInterval } from '../hooks/usePolling.js';
@@ -113,6 +119,11 @@ export default function MultiLeg() {
     const [from, setFrom] = useState(isoDaysAgo(45));
     const [to, setTo] = useState(isoDaysAgo(0));
     const [resolution, setResolution] = useState('5');
+    // Which option prices the backtest runs on: 'broker' = candles + the kernel's
+    // synthetic Black-Scholes chain (any date range); 'archive' = the real
+    // option-chain archive (bid/ask every ~60 s, from Aug 2026).
+    const [chainSource, setChainSource] = useState('broker');
+    const [archiveCov, setArchiveCov] = useState(null);
     const [running, setRunning] = useState(false);
     const [result, setResult] = useState(null);
     // Active TAB, remembered across reloads. A refresh used to drop you back on
@@ -122,8 +133,18 @@ export default function MultiLeg() {
     // page blank with nothing rendered.
     const [storedTab, setStoredTab] = useLocalStorage('ml.activeTab', 'builder');
     const TAB_IDS = ['builder', 'backtest', 'sweep', 'scan', 'auto', 'deploy', 'results'];
-    const mode = TAB_IDS.includes(storedTab) ? storedTab : 'builder';
-    const setMode = setStoredTab;
+    // A link may name the tab — the results hub sends `/multi-leg?tab=results`.
+    // The URL wins on arrival, memory wins otherwise; picking another tab
+    // clears the URL's say so the new choice sticks across a refresh.
+    const [searchParams, setSearchParams] = useSearchParams();
+    const urlTab = searchParams.get('tab');
+    const mode = TAB_IDS.includes(urlTab) ? urlTab : (TAB_IDS.includes(storedTab) ? storedTab : 'builder');
+    const setMode = useCallback((t) => {
+        setStoredTab(t);
+        if (searchParams.has('tab')) {
+            setSearchParams((p) => { const q = new URLSearchParams(p); q.delete('tab'); return q; }, { replace: true });
+        }
+    }, [setStoredTab, searchParams, setSearchParams]);
     const [gridText, setGridText] = useState('');
     const [sweep, setSweep] = useState(null);
     const [metric, setMetric] = useState('netPnl');
@@ -282,12 +303,20 @@ export default function MultiLeg() {
             .then(r => setPreview(r.data)).catch(e => setError(e.response?.data?.error || e.message));
     }, [tpl, symbol, spot, iv]);
     useEffect(() => { fetchPreview(); }, [fetchPreview]);
+    useEffect(() => {
+        if (chainSource !== 'archive') return undefined;
+        let dead = false;
+        axios.get(`${API_URL}/multileg/archive/coverage`, { params: { symbol } })
+            .then(r => { if (!dead) setArchiveCov(r.data); })
+            .catch(e => { if (!dead) setArchiveCov({ error: e.response?.data?.error || e.message }); });
+        return () => { dead = true; };
+    }, [chainSource, symbol]);
 
     const runBacktest = async (overrideParams = null) => {
         setRunning(true); setError(null); setResult(null);
         try {
             const p = overrideParams || { ...params, ...entryParams };
-            const r = await axios.post(`${API_URL}/multileg/backtest`, { template: tplKey, symbol, from, to, resolution, params: p });
+            const r = await axios.post(`${API_URL}/multileg/backtest`, { template: tplKey, symbol, from, to, resolution, params: p, chain_source: chainSource });
             setResult(r.data);
         } catch (e) { setError(e.response?.data?.error || e.message); }
         setRunning(false);
@@ -305,7 +334,7 @@ export default function MultiLeg() {
         try {
             const t = templates.find(x => x.key === templateKey);
             const r = await axios.post(`${API_URL}/multileg/backtest`, {
-                template: templateKey, symbol: sym, from, to, resolution, params: { ...(t?.defaults || {}) },
+                template: templateKey, symbol: sym, from, to, resolution, params: { ...(t?.defaults || {}) }, chain_source: chainSource,
             });
             setResult(r.data);
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -598,34 +627,12 @@ export default function MultiLeg() {
             (resFilter.symbol === 'all' || t.symbol === resFilter.symbol)
         );
     }, [resTrades, resFilter]);
-    const resStats = useMemo(() => {
-        const closed = [...resFiltered].sort((a, b) => new Date(a.exitAt) - new Date(b.exitAt));
-        const n = closed.length;
-        if (!n) return { n: 0, equity: [] };
-        let net = 0, gross = 0, charges = 0, wins = 0, losses = 0, grossWin = 0, grossLoss = 0, best = -Infinity, worst = Infinity, holdSum = 0;
-        let cum = 0, peak = 0, maxDD = 0;
-        const equity = [], byReason = {}, byTemplate = {}, bySymbol = {};
-        for (let i = 0; i < closed.length; i++) {
-            const t = closed[i];
-            const p = Number(t.netPnl) || 0;
-            net += p; gross += Number(t.grossPnl) || 0; charges += Number(t.charges) || 0;
-            if (p > 0) { wins++; grossWin += p; } else if (p < 0) { losses++; grossLoss += Math.abs(p); }
-            best = Math.max(best, p); worst = Math.min(worst, p);
-            holdSum += Number(t.holdDays) || ((new Date(t.exitAt) - new Date(t.entryAt)) / 86400e3) || 0;
-            cum += p; peak = Math.max(peak, cum); maxDD = Math.min(maxDD, cum - peak);
-            equity.push({ idx: i + 1, date: istDateTime(t.exitAt), cum: +cum.toFixed(0), pnl: +p.toFixed(0) });
-            const agg = (m, k) => { m[k] = m[k] || { net: 0, n: 0, wins: 0 }; m[k].net += p; m[k].n++; if (p > 0) m[k].wins++; };
-            agg(byReason, t.exitReason || '—'); agg(byTemplate, t.template || '—'); agg(bySymbol, t.symbol || '—');
-        }
-        return {
-            n, net, gross, charges, wins, losses,
-            winRate: wins + losses ? (100 * wins / (wins + losses)) : 0,
-            profitFactor: grossLoss > 0 ? grossWin / grossLoss : null,
-            avgWin: wins ? grossWin / wins : 0, avgLoss: losses ? grossLoss / losses : 0,
-            best, worst, maxDD, avgHold: holdSum / n,
-            equity, byReason, byTemplate, bySymbol,
-        };
-    }, [resFiltered]);
+    // NOTE: the Results KPIs / equity / breakdowns are NOT computed here any
+    // more — they come from GET /multileg/analytics via <ResultsAnalytics>.
+    // The client aggregate summed EVERY row in `resFiltered`, quarantined
+    // trades included, so it disagreed with the server by exactly the fills
+    // that never happened. One source of truth, and it is the one that knows
+    // which trades are fiction.
 
     const saveStrategy = async () => {
         const name = saveName.trim();
@@ -775,6 +782,24 @@ export default function MultiLeg() {
                 </select>
             </label>
         </>
+    );
+
+    const ChainSourceInputs = (
+        <div className="mb-3 text-xs">
+            <label className="text-fg-4" title="broker: candles from the broker + the kernel's synthetic Black-Scholes option prices (any dates; an upper bound for short premium). archive: the real option-chain archive — actual bid/ask every ~60 s, shorts sold at bid, stops and targets on the real path (from Aug 2026).">Option prices
+                <select value={chainSource} onChange={e => setChainSource(e.target.value)} className={inputCls}>
+                    <option value="broker">Broker candles + model chain (any dates · synthetic option prices)</option>
+                    <option value="archive">Live option-chain archive (real bid/ask · from Aug 2026)</option>
+                </select>
+            </label>
+            {chainSource === 'archive' && (
+                <div className="mt-1 text-3xs text-fg-5">
+                    {archiveCov?.error ? <span className="text-red-300">{archiveCov.error}</span>
+                        : archiveCov ? <>Archive for {archiveCov.idx}: <b className="text-fg-3">{archiveCov.sessions}</b> sessions, {archiveCov.firstDay} → {archiveCov.lastDay} ({archiveCov.snapshots} snapshots, {archiveCov.source}). Dates outside this range have no data; the candle resolution is ignored — marks are the archive's own snapshots.</>
+                        : 'checking archive coverage…'}
+                </div>
+            )}
+        </div>
     );
 
     const RankingInputs = (
@@ -927,6 +952,45 @@ export default function MultiLeg() {
                     <input type="number" step="0.1" value={params.entry_slippage_cap_pct ?? 1.5} onChange={e => setParams(p => ({ ...p, entry_slippage_cap_pct: Number(e.target.value) }))}
                         className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                 </label>
+            </div>
+
+            <div className="text-xs text-fg-4 mt-4 mb-1 font-semibold">Strike placement (how the SHORT strikes are chosen at entry)</div>
+            <div className="grid grid-cols-3 gap-2 text-xs">
+                <label className="text-fg-5" title="offset = the template's steps from ATM (plus any offset_* overrides — now honoured live AND in backtest). zone = the zone finder places the shorts on the live chain by expected P&L per rupee of tail under the market's own distribution, and DECLINES when nothing clears zero after charges. Same picker in the backtest (synthetic chain) and live. docs/ZONE_FINDER.md">strike_mode
+                    <select value={params.strike_mode || (tpl?.strikeMode === 'zone' ? 'zone' : 'offset')} onChange={e => setParams(p => ({ ...p, strike_mode: e.target.value }))}
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2">
+                        <option value="offset">offset (template steps)</option>
+                        <option value="zone">zone (market-implied strikes)</option>
+                    </select>
+                </label>
+                {(params.strike_mode || tpl?.strikeMode) === 'zone' && params.strike_mode !== 'offset' && (
+                    <>
+                        <label className="text-fg-5" title="ratio = expected P&L per rupee of 5% tail (default; positive at every entry time tested, smallest tails). ev = max expected P&L (leans to the money). ev_cvar = max EV with the tail capped at 2× credit. pop = max probability of profit.">zone_objective
+                            <select value={params.zone_objective || 'ratio'} onChange={e => setParams(p => ({ ...p, zone_objective: e.target.value }))} className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2">
+                                <option value="ratio">ratio (EV ÷ tail)</option><option value="ev">ev</option><option value="ev_cvar">ev_cvar</option><option value="pop">pop</option>
+                            </select>
+                        </label>
+                        <label className="text-fg-5" title="realised/implied tilt of the horizon distribution. 0.85 reproduced realised P&L AND win rate on the Aug–Sep 2026 archive (the measured 0.55 overstates EV 3× because ATM IV drifts up into the close). 1.0 = take the market at its word.">zone_rho
+                            <input type="number" step="0.05" min="0.4" max="1.5" value={params.zone_rho ?? 0.85} onChange={e => setParams(p => ({ ...p, zone_rho: Number(e.target.value) }))} className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
+                        </label>
+                        <label className="text-fg-5" title="each short strike must have |delta| at least this">zone_min_delta
+                            <input type="number" step="0.01" min="0.02" max="0.5" value={params.zone_min_delta ?? 0.08} onChange={e => setParams(p => ({ ...p, zone_min_delta: Number(e.target.value) }))} className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
+                        </label>
+                        <label className="text-fg-5" title="each short strike must have |delta| at most this (0.45 keeps the finder off the ATM straddle, which lost after friction)">zone_max_delta
+                            <input type="number" step="0.01" min="0.05" max="0.6" value={params.zone_max_delta ?? 0.45} onChange={e => setParams(p => ({ ...p, zone_max_delta: Number(e.target.value) }))} className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
+                        </label>
+                        {tpl?.legs?.some(l => l.action === 'BUY') && (
+                            <label className="text-fg-5" title="wings this many strike steps beyond each short (wing DISTANCE is the whole variable — far wings won on return-on-margin)">zone_wing_steps
+                                <input type="number" step="1" min="1" max="30" value={params.zone_wing_steps ?? 10} onChange={e => setParams(p => ({ ...p, zone_wing_steps: Number(e.target.value) }))} className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
+                            </label>
+                        )}
+                        <label className="text-fg-5" title="off = no AI. shadow = an AI second opinion (event risk, directional tilt, data quality) is fetched in the background and stored beside the pick — it never changes the entry. gate = wait ≤8 s and skip on 'skip'. Shadow first: the single-leg AI confirm measured anti-predictive in production.">ai_zone_review
+                            <select value={params.ai_zone_review || 'off'} onChange={e => setParams(p => ({ ...p, ai_zone_review: e.target.value }))} className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2">
+                                <option value="off">off</option><option value="shadow">shadow (store, never gate)</option><option value="gate">gate (waits, can skip)</option>
+                            </select>
+                        </label>
+                    </>
+                )}
             </div>
 
             <div className="text-xs text-fg-4 mt-4 mb-1 font-semibold">Vol edge & realism (IV-percentile gate · greeks · spread model)</div>
@@ -1127,22 +1191,20 @@ export default function MultiLeg() {
                 onCancel={() => setConfirmState(null)} />
             <PreviewModal preview={livePreview} deployLots={deployLots} onCancel={() => setLivePreview(null)}
                 onConfirm={() => { const s = livePreview.strategy; setLivePreview(null); doDeploy(s, 'LIVE'); }} />
-            <h1 className="text-2xl font-bold text-fg flex items-center gap-3 mb-1">
-                <Layers className="w-6 h-6 text-primary" /> Multi-Leg Structures
-            </h1>
-            <div className="text-sm text-fg-5 mb-4">Spreads · butterflies · condors · straddles · ratio backspreads · calendars — backtest, optimize, scan, and auto-race across symbols before any deployment.</div>
+            <PageHeader className="mb-3" icon={Layers} title="Multi-Leg Structures"
+                subtitle={<>Spreads · butterflies · condors · straddles · ratio backspreads · calendars — backtest, optimize, scan, and auto-race across symbols before any deployment.</>}
+                actions={(
+                    <Link to={ROUTES.livePortfolioMulti}
+                        className="text-2xs px-2 py-1 rounded border border-line-2 bg-card-2 text-fg-3 hover:text-fg inline-flex items-center gap-1"
+                        title="Both books' results — single-leg and multi-leg — on one page">
+                        <Wallet className="w-3 h-3" aria-hidden="true" /> Portfolio results
+                    </Link>
+                )} />
 
-            {/* ── Tabs ── */}
-            <div className="flex gap-2 mb-1 border-b border-line-0">
-                {TABS.map(t => (
-                    <button key={t.id} onClick={() => setMode(t.id)}
-                        className={`flex items-center gap-2 px-5 py-2.5 rounded-t-lg text-sm font-semibold border border-b-0 transition-colors ${mode === t.id
-                            ? (t.id === 'auto' ? 'bg-amber-500/15 border-amber-600/60 text-amber-300' : 'bg-primary/15 border-primary/60 text-primary-ink')
-                            : 'bg-slate-900/60 border-line-0 text-fg-5 hover:text-fg-3'}`}>
-                        <t.icon className="w-4 h-4" /> {t.label}
-                    </button>
-                ))}
-            </div>
+            {/* ── Tabs — one tablist for the whole app (keyboard-navigable) ── */}
+            <Tabs className="mb-1" ariaLabel="Multi-leg sections"
+                tabs={TABS.map((t) => ({ id: t.id, label: t.label, icon: t.icon, hint: t.desc }))}
+                value={mode} onChange={setMode} />
             <div className="text-2xs text-fg-6 mb-4 pl-1">{TABS.find(t => t.id === mode)?.desc}</div>
 
             {error && <div className="mb-4 p-2 bg-red-900/20 border border-red-700/50 rounded text-red-300 text-xs">{error}</div>}
@@ -1159,6 +1221,7 @@ export default function MultiLeg() {
                         <div className="bg-surface rounded-xl border border-line p-4">
                             <div className="text-sm font-semibold text-fg mb-3">Run</div>
                             <div className="grid grid-cols-3 gap-2 text-xs mb-3">{DateRangeInputs}</div>
+                            {ChainSourceInputs}
                             {/* text-primary-ink, not text-primary, on a `bg-primary/<alpha>`
                                 wash. `--color-primary` is the brand FILL — one colour, tuned
                                 to carry white — so painting it as ink on a 10-30% wash of
@@ -1185,6 +1248,19 @@ export default function MultiLeg() {
                                 </div>
                                 <div className="text-3xs text-fg-6 mt-1">{saveMsg || 'Saves template + all params + entry trigger to the DB — load or deploy it from the Deploy tab.'}</div>
                             </div>
+                            {result?.chainSource && (
+                                <div className={`mt-3 rounded border p-2 text-2xs ${result.chainSource === 'archive' ? 'border-sky-700/50 bg-sky-950/20 text-sky-200' : 'border-amber-700/50 bg-amber-950/20 text-amber-200'}`}>
+                                    <div className="font-semibold mb-1">{result.chainSource === 'archive' ? 'Real option quotes — archive replay' : 'Synthetic option prices — read this as an UPPER BOUND, not a forecast'}</div>
+                                    {(result.caveats || []).map((c, i) => <div key={i}>• {c}</div>)}
+                                    {result.coverage && (
+                                        <div className="mt-1 text-fg-5">
+                                            Coverage: {result.coverage.sessions} sessions ({result.coverage.firstDay} → {result.coverage.lastDay}) · entered {result.coverage.entered} · finder declined {result.coverage.declinedDays} day(s)
+                                            {result.coverage.truncated ? ` · truncated to the last ${result.coverage.sessions} of ${result.coverage.daysAvailable} available` : ''}
+                                            {Object.keys(result.coverage.skipped || {}).length ? ` · skipped: ${Object.entries(result.coverage.skipped).map(([k, n]) => `${n} ${k}`).join(', ')}` : ''}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                             {result?.metrics && (
                                 <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
                                     <Tile label="Trades" value={result.metrics.n} />
@@ -1967,6 +2043,8 @@ export default function MultiLeg() {
                                     // expiry + DTE from the structure's legs
                                     const expiry = pos.legs?.map(l => l.expiry).filter(Boolean).sort()[0] || null;
                                     const dte = expiry ? Math.round((new Date(expiry + 'T15:30:00+05:30') - Date.now()) / 86400e3) : null;
+                                    // the TEMPLATE decides whether square_off is an exit rule at all
+                                    const depTpl = templates.find(t => t.key === d.template) || null;
                                     // what the engine is managing this structure TO (its exit config)
                                     const exitBits = [];
                                     if (P.tp_pct_credit) exitBits.push(`TP ${P.tp_pct_credit}% credit`);
@@ -1978,9 +2056,9 @@ export default function MultiLeg() {
                                     if (P.hold_days > 0) exitBits.push(`hold ≤${P.hold_days}d`);
                                     if (P.tp_x_debit) exitBits.push(`TP ${P.tp_x_debit}× debit`);
                                     if (P.use_signal_exit) exitBits.push('early-exit');
-                                    if (P.square_off) exitBits.push(`sq-off ${P.square_off}`);
+                                    if (P.square_off) exitBits.push(depTpl && !depTpl.intraday ? `sq-off ${P.square_off} (entry window only)` : `sq-off ${P.square_off}`);
                                     // the "if nothing moves" close date — knowable at entry, so show it
-                                    const proj = open ? projectExit(pos, P, expiry) : null;
+                                    const proj = open ? projectExit(pos, P, expiry, { intraday: !!depTpl?.intraday }) : null;
                                     const heldSessions = open ? sessionsBetween(new Date(pos.entryAt).getTime(), Date.now()) : null;
                                     // per-unit → ₹ multiplier = lotSize×lots. Prefer the engine's own
                                     // ratio (lastMtmRupees/lastMtm), which is correct even after a broker
@@ -2035,21 +2113,44 @@ export default function MultiLeg() {
                                     const chartMaxL = pg ? pg.maxLoss : (curve ? Math.min(...curve.points.map(p => p.pnl)) : null);
                                     const tpRupee = (tpUnit != null && unitToRupee) ? Math.round(tpUnit * unitToRupee) : null;
                                     const slRupee = (slUnit != null && unitToRupee) ? Math.round(slUnit * unitToRupee) : null;
-                                    // Y-DOMAIN. Left to auto-scale, an unbounded short leg drags the
-                                    // axis to the worst SAMPLED spot (-45k on a NIFTY strangle) and
-                                    // crushes the decision region — TP/SL land ~9px and ~22px from the
-                                    // zero line, i.e. visually on top of it. Frame what the operator
-                                    // acts on (SL..TP..max profit, padded) and let the tail run off
-                                    // chart; the footer already calls it UNBOUNDED in red, which
-                                    // communicates the tail better than an unreadable axis.
+                                    // Y-DOMAIN — driven by the CURVES ACTUALLY PLOTTED, not by
+                                    // theoretical extremes.
+                                    //
+                                    // Framing it on max-profit and the stop level looks reasonable and
+                                    // is wrong: those are often unreachable inside the plotted spot
+                                    // window. A FINNIFTY strangle plotted between its break-evens spans
+                                    // +Rs753..+Rs45,507 and never goes negative, yet its SL sits at
+                                    // -Rs45,507 — including that level stretched the axis to +-68k and
+                                    // squeezed the live P&L of Rs832 into 0.6% of the height.
+                                    //
+                                    // So: fit the curve, then admit TP/SL only if they land near it.
+                                    // A level that is off-scale is reported in the footer instead of
+                                    // silently flattening the thing you came to look at.
                                     const chartYDomain = (() => {
-                                        const cand = [0, tpRupee, slRupee, chartMaxP, chartNowPnl, chartNetPnl]
-                                            .filter(v => Number.isFinite(v));
-                                        if (cand.length < 2) return ['auto', 'auto'];
-                                        const lo = Math.min(...cand), hi = Math.max(...cand);
-                                        const pad = Math.max((hi - lo) * 0.25, 500);
+                                        const vals = [];
+                                        for (const p of (chartData || [])) {
+                                            for (const k of ['expiry', 'now', 'tPlus', 'whatif']) {
+                                                const v = Number(p?.[k]);
+                                                if (Number.isFinite(v)) vals.push(v);
+                                            }
+                                        }
+                                        [chartNowPnl, chartNetPnl].forEach(v => { if (Number.isFinite(v)) vals.push(v); });
+                                        if (vals.length < 2) return ['auto', 'auto'];
+                                        let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+                                        const span = Math.max(hi - lo, 1);
+                                        // a TP/SL within half a span of the curve is worth showing to scale
+                                        [tpRupee, slRupee].forEach(v => {
+                                            if (!Number.isFinite(v)) return;
+                                            if (v > lo - span * 0.5 && v < hi + span * 0.5) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+                                        });
+                                        const pad = Math.max((hi - lo) * 0.12, 200);
                                         return [Math.round(lo - pad), Math.round(hi + pad)];
                                     })();
+                                    // levels that could not be shown to scale — named in the footer
+                                    const offScale = [
+                                        Number.isFinite(tpRupee) && (tpRupee < chartYDomain[0] || tpRupee > chartYDomain[1]) ? `TP ₹${fmt(tpRupee)}` : null,
+                                        Number.isFinite(slRupee) && (slRupee < chartYDomain[0] || slRupee > chartYDomain[1]) ? `SL ₹${fmt(slRupee)}` : null,
+                                    ].filter(Boolean);
                                     const mtmHist = mlDeps.mtmHistory?.[d._id] || null;    // intraday sparkline
                                     const feed = d._feed || null;                          // signal-feed health (IDLE deployments)
                                     const isLive = d.trade_mode === 'LIVE';
@@ -2210,6 +2311,11 @@ export default function MultiLeg() {
                                                             gross figure here reads as a contradiction. */}
                                                         <span className="text-fg-6"> gross</span>
                                                         {chartNetPnl != null && <> · net <span className={chartNetPnl > 0 ? 'text-emerald-300' : chartNetPnl < 0 ? 'text-red-300' : ''}>₹{fmt(chartNetPnl)}</span>{chartCharges != null ? <span className="text-fg-6"> (chg ₹{fmt(chartCharges)})</span> : null}</>}
+                                                        {offScale.length > 0 && (
+                                                            <span className="text-amber-400/80" title="Outside the plotted range, so not drawn — showing it to scale would flatten the curve you came to read.">
+                                                                {' · '}off-scale: {offScale.join(', ')}
+                                                            </span>
+                                                        )}
                                                         {' · '}max profit ₹{fmt(chartMaxP)}<span className="text-fg-6"> gross</span> · max loss {chartUnbounded || chartMaxL == null
                                                             ? <span className="text-red-400 font-bold">UNBOUNDED</span>
                                                             : <>₹{fmt(chartMaxL)}</>}
@@ -2380,8 +2486,19 @@ export default function MultiLeg() {
                                                                         : <span className="text-fg-5"> · in {fmtDurTo(proj.fires)}</span>}
                                                                     {proj.others.length > 0 && <span className="text-fg-6"> · then {proj.others[0].why}</span>}
                                                                 </div>
-                                                            ) : (
-                                                                <div className="text-fg-5">Exit by: no time-based rule — TP/SL only</div>
+                                                            ) : null}
+                                                            {proj?.none && (
+                                                                <div className="col-span-2 md:col-span-3 text-fg-5">Closes: no time-based rule that can fire — TP/SL only</div>
+                                                            )}
+                                                            {!proj && (
+                                                                <div className="col-span-2 md:col-span-3 text-fg-5">Exit by: no time-based rule — TP/SL only</div>
+                                                            )}
+                                                            {/* Params that are SET but cannot close this structure. Shown because
+                                                                the alternative is a card that quietly implies they can. */}
+                                                            {proj?.noops?.length > 0 && (
+                                                                <div className="col-span-2 md:col-span-3 text-amber-300/80">
+                                                                    {proj.noops.map((t, i) => <div key={i}>⚠ {t}</div>)}
+                                                                </div>
                                                             )}
                                                         </div>
                                                     )}
@@ -2563,64 +2680,22 @@ export default function MultiLeg() {
                         </button>
                     </div>
 
-                    {resStats.n === 0 ? (
+                    {resFiltered.length === 0 ? (
                         <div className="bg-surface rounded-xl border border-line p-8 text-center text-sm text-fg-5">
                             {resLoading ? 'Loading…' : 'No completed structure round-trips yet for this filter. Deploy a strategy (PAPER first) — booked structures show here.'}
                         </div>
                     ) : (
                         <>
-                            {/* KPI strip */}
-                            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3">
-                                <Tile label="Net PnL" value={`₹${fmt(resStats.net)}`} good={resStats.net > 0} bad={resStats.net < 0} />
-                                <Tile label="Trades" value={`${resStats.n}`} />
-                                <Tile label="Win Rate" value={`${resStats.winRate.toFixed(0)}%`} good={resStats.winRate >= 50} bad={resStats.winRate < 50} />
-                                <Tile label="Profit Factor" value={resStats.profitFactor == null ? '∞' : resStats.profitFactor.toFixed(2)} good={resStats.profitFactor == null || resStats.profitFactor >= 1.3} bad={resStats.profitFactor != null && resStats.profitFactor < 1} />
-                                <Tile label="Max Drawdown" value={`₹${fmt(resStats.maxDD)}`} bad={resStats.maxDD < 0} />
-                                <Tile label="Charges paid" value={`₹${fmt(resStats.charges)}`} bad />
-                                <Tile label="Avg Win" value={`₹${fmt(resStats.avgWin)}`} good />
-                                <Tile label="Avg Loss" value={`₹${fmt(-resStats.avgLoss)}`} bad />
-                                <Tile label="Best" value={`₹${fmt(resStats.best)}`} good />
-                                <Tile label="Worst" value={`₹${fmt(resStats.worst)}`} bad />
-                                <Tile label="Avg Hold" value={`${resStats.avgHold.toFixed(1)}d`} />
-                                <Tile label="Gross (pre-cost)" value={`₹${fmt(resStats.gross)}`} good={resStats.gross > 0} bad={resStats.gross < 0} />
-                            </div>
-
-                            {/* Equity curve */}
-                            <div className="bg-surface rounded-xl border border-line p-4">
-                                <div className="text-sm font-semibold text-fg mb-2 flex items-center gap-2"><TrendingUp className="w-4 h-4 text-emerald-400" /> Equity Curve (cumulative net ₹)</div>
-                                <ZoomableChart data={resStats.equity} height={260}>
-                                    <LineChart margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
-                                        <XAxis dataKey="date" tick={{ fontSize: ct.type['3xs'], fill: ct.text.secondary }} minTickGap={40} />
-                                        <YAxis tick={{ fontSize: ct.type['3xs'], fill: ct.text.secondary }} width={54} />
-                                        <Tooltip contentStyle={ct.tooltipStyle({ fontSize: ct.type['xs'] })} />
-                                        <ReferenceLine y={0} stroke={ct.axis} />
-                                        <Line type="monotone" dataKey="cum" stroke={ct.categorical[0]} dot={false} strokeWidth={2} />
-                                    </LineChart>
-                                </ZoomableChart>
-                            </div>
-
-                            {/* Breakdowns */}
-                            <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-                                {[['By exit reason', resStats.byReason], ['By structure', resStats.byTemplate], ['By symbol', resStats.bySymbol]].map(([title, m]) => (
-                                    <div key={title} className="bg-surface rounded-xl border border-line p-4">
-                                        <div className="text-sm font-semibold text-fg mb-2">{title}</div>
-                                        <table className="w-full text-2xs text-fg-3">
-                                            <thead><tr className="text-fg-5 text-left"><th>Key</th><th className="text-right">Trades</th><th className="text-right">Win%</th><th className="text-right">Net ₹</th></tr></thead>
-                                            <tbody>
-                                                {Object.entries(m).sort((a, b) => b[1].net - a[1].net).map(([k, v]) => (
-                                                    <tr key={k} className="border-t border-line-0">
-                                                        <td className="truncate max-w-[7.5rem]" title={k}>{title === 'By structure' ? (templates.find(t => t.key === k)?.name || k) : title === 'By symbol' ? shortSym(k) : k}</td>
-                                                        <td className="text-right">{v.n}</td>
-                                                        <td className="text-right text-fg-4">{Math.round(100 * v.wins / v.n)}%</td>
-                                                        <td className={`text-right font-semibold ${v.net > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(v.net)}</td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                ))}
-                            </div>
+                            {/* Server-computed analytics — KPIs, daily P&L, equity+drawdown
+                                and every breakdown. See ResultsAnalytics for why the
+                                arithmetic (quarantine exclusion, expectancy) lives on the
+                                server and not here. */}
+                            <ResultsAnalytics
+                                tradeMode={resFilter.mode}
+                                deploymentId={resFilter.deploymentId}
+                                symbol={resFilter.symbol}
+                                templateFilter={resFilter.template}
+                                templates={templates} />
 
                             {/* Trades table */}
                             <div className="bg-surface rounded-xl border border-line p-4 overflow-x-auto">
@@ -2637,8 +2712,14 @@ export default function MultiLeg() {
                                             const allLegs = [...(t.legs || []), ...(t.closedLegs || [])];
                                             return (
                                             <React.Fragment key={tid}>
-                                            <tr className="border-t border-line-0 hover:bg-slate-800/40 cursor-pointer" onClick={() => setResTradeOpen(openT ? null : tid)}>
-                                                <td className="text-fg-5 w-4">{openT ? '▲' : '▾'}</td>
+                                            {/* A quarantined round-trip is STRUCK THROUGH, not filtered
+                                                out: it was booked on a price that never existed, and hiding
+                                                the correction would make this history a lie by omission.
+                                                Every figure in the Analytics panel above already excludes it. */}
+                                            <tr className={`border-t border-line-0 hover:bg-slate-800/40 cursor-pointer ${t.quarantined ? 'opacity-45 line-through' : ''}`}
+                                                title={t.quarantined ? `EXCLUDED from all totals — ${t.quarantineReason || 'untrustworthy fill price'}` : undefined}
+                                                onClick={() => setResTradeOpen(openT ? null : tid)}>
+                                                <td className="text-fg-5 w-4 no-underline">{openT ? '▲' : '▾'}</td>
                                                 <td className="whitespace-nowrap" title={`Entry ${istDateTimeSec(t.entryAt)} → Exit ${istDateTimeSec(t.exitAt)} IST`}>{istSpan(t.entryAt, t.exitAt)}<DayGap from={t.entryAt} to={t.exitAt} /></td>
                                                 <td className="truncate max-w-[7.5rem]" title={t.template}>{templates.find(x => x.key === t.template)?.name || t.template}</td>
                                                 <td>{shortSym(t.symbol)}</td>
@@ -2648,11 +2729,17 @@ export default function MultiLeg() {
                                                 <td className="text-right text-fg-5">{t.ivpAtEntry != null ? fmt(t.ivpAtEntry, 0) : '—'}</td>
                                                 <td className="text-right">₹{fmt(t.grossPnl)}</td>
                                                 <td className="text-right text-fg-5">₹{fmt(t.charges)}</td>
-                                                <td className={`text-right font-semibold ${t.netPnl > 0 ? 'text-emerald-300' : 'text-red-300'}`}>₹{fmt(t.netPnl)}</td>
+                                                <td className={`text-right font-semibold ${t.quarantined ? 'text-fg-5' : t.netPnl > 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                                                    ₹{fmt(t.netPnl)}
+                                                    {t.quarantined && <span className="ml-1 text-4xs text-amber-400 no-underline" title="fake fill — not counted">⚠ void</span>}
+                                                </td>
                                             </tr>
                                             {openT && (
                                                 <tr className="bg-slate-900/60"><td colSpan={11} className="p-2">
                                                     <div className="text-3xs text-fg-4 mb-1">Held {t.holdDays != null ? `${t.holdDays}d` : fmtDur(t.entryAt)} · spot {fmt(t.entrySpot)} → {fmt(t.exitSpot)} · net credit at entry ₹{fmt(t.origCredit, 1)}/u{t.lots ? ` · ${t.lots} lot(s)` : ''}</div>
+                                                    {/* What it DID while open — MAE/MFE and the gave-back number.
+                                                        Renders its own explanation for pre-feature trades. */}
+                                                    <div className="mb-2"><TradePathChart trade={t} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} /></div>
                                                     {allLegs.length > 0 ? (
                                                         <table className="w-full text-3xs font-mono text-fg-3">
                                                             <thead><tr className="text-fg-5 text-left"><th>Leg</th><th>Strike</th><th className="text-right">Entry ₹</th><th className="text-right">Exit ₹</th><th>Close</th></tr></thead>
@@ -2976,8 +3063,12 @@ function sessionsBetween(aMs, bMs) {
  * fires at the first tick of the next session. Snap forward so the projected
  * close is the instant the engine will actually pull the trigger.
  */
-const SESSION_OPEN_MIN = 9 * 60 + 16;   // isSessionOpen() lower bound, IST
-const SESSION_CLOSE_MIN = 15 * 60 + 30;
+// Derived, so the projection can never claim the engine has stopped ticking
+// while it is still managing risk. The engine's bound is the DERIVATIVES close
+// (15:40 since 3-Aug-2026); a hard-coded 15:30 pushed any 15:30-15:40 deadline
+// to the following day.
+const SESSION_OPEN_MIN = riskOpenMin('NSE') + 1;   // isSessionOpen() lower bound, IST
+const SESSION_CLOSE_MIN = riskCloseMin('NSE');
 function nextTickAfter(ms) {
     if (!Number.isFinite(ms)) return null;
     let t = ms;
@@ -2997,29 +3088,59 @@ function nextTickAfter(ms) {
  * close it sooner; this is the "no further price action" deadline, which is
  * knowable the moment we enter and so should never be a mystery on the card.
  */
-function projectExit(pos, P, expiry) {
+function projectExit(pos, P, expiry, { intraday = false } = {}) {
     if (!pos?.entryAt) return null;
     const entry = new Date(pos.entryAt).getTime();
     if (!Number.isFinite(entry)) return null;
     const cands = [];
+    // Params that are SET but cannot close this structure. Printing one of them
+    // as a deadline is the worst kind of wrong: it names a date and a time.
+    const noops = [];
+    const sqMins = (() => {
+        const [h, m] = String(P.square_off || '').split(':').map(Number);
+        return Number.isFinite(h) ? (h * 60 + (m || 0)) * 60000 : null;
+    })();
+
+    // hold_days is CALENDAR days from entry (exits.js heldDays), so a weekend
+    // ages it out; nextTickAfter() rolls the firing instant to the next open.
     if (P.hold_days > 0) cands.push({ at: entry + Number(P.hold_days) * 86400e3, rule: 'HOLD_CAP', why: `hold cap ${P.hold_days}d` });
     if (expiry) {
         const expClose = new Date(expiry + 'T15:30:00+05:30').getTime();   // exits.js minDte reference
-        if (P.dte_exit != null) cands.push({ at: expClose - Number(P.dte_exit) * 86400e3, rule: 'DTE_EXIT', why: `DTE≤${P.dte_exit}` });
+        // dte_exit ≈ 0 is UNREACHABLE: DTE only decays to 0 at 15:30, but the
+        // expiry-day close fires at 15:00 first. The engine warns about it with
+        // a CONFIG event; the card must not quote it as a deadline either.
+        if (P.dte_exit != null && Number(P.dte_exit) >= 0.03) {
+            cands.push({ at: expClose - Number(P.dte_exit) * 86400e3, rule: 'DTE_EXIT', why: `DTE≤${P.dte_exit}` });
+        } else if (P.dte_exit != null) {
+            noops.push(`DTE≤${P.dte_exit} can never fire — DTE reaches 0 only at 15:30, but the expiry-day close is 15:00`);
+        }
         cands.push({ at: new Date(expiry + 'T15:00:00+05:30').getTime(), rule: 'EXPIRY_DAY', why: 'expiry-day 15:00' });
+        // clamp_hold_to_expiry (opt-in): the hold ends at the square-off on the
+        // day BEFORE expiry instead of riding into the expiry-day 15:00 close.
+        if (P.clamp_hold_to_expiry === true && !intraday && sqMins != null) {
+            const dayBefore = istMidnight(new Date(expiry + 'T12:00:00+05:30').getTime() - 86400e3);
+            cands.push({ at: dayBefore + sqMins, rule: 'HOLD_CAP_EXPIRY', why: `clamp to expiry (sq-off ${P.square_off} the day before)` });
+        }
     }
-    if (P.square_off) {
-        const [h, m] = String(P.square_off).split(':').map(Number);
-        if (Number.isFinite(h)) cands.push({ at: istMidnight(Date.now()) + (h * 60 + (m || 0)) * 60000, rule: 'SQUARE_OFF', why: `sq-off ${P.square_off}` });
+    // SQUARE_OFF closes the structure ONLY for intraday templates — exits.js
+    // gates it on `tpl.intraday`. On a positional structure the same param only
+    // bounds the ENTRY window and supplies the time-of-day for the clamp above.
+    // Measured 4-Sep-2026: this card told a LIVE iron butterfly it would close
+    // at 15:10 that day; the engine had no such rule, and the rule that did
+    // bind (hold cap) landed on a Sunday.
+    if (sqMins != null) {
+        if (intraday) cands.push({ at: istMidnight(Date.now()) + sqMins, rule: 'SQUARE_OFF', why: `sq-off ${P.square_off}` });
+        else noops.push(`sq-off ${P.square_off} does not close this structure — it is positional, so the square-off only bounds the entry window`);
     }
+
     const valid = cands.filter(c => Number.isFinite(c.at));
-    if (!valid.length) return null;
+    if (!valid.length) return noops.length ? { none: true, noops } : null;
     const win = valid.reduce((a, b) => (b.at < a.at ? b : a));
     const fires = nextTickAfter(win.at);
     // "overdue" = the DEADLINE has passed, even though the engine cannot act
     // until the next tick. That gap is exactly what a weekend creates, and it
     // is the state a trader most needs flagged: the close is already decided.
-    return { ...win, at: win.at, fires, overdue: win.at <= Date.now(), others: valid.filter(c => c !== win).sort((a, b) => a.at - b.at) };
+    return { ...win, at: win.at, fires, overdue: win.at <= Date.now(), noops, others: valid.filter(c => c !== win).sort((a, b) => a.at - b.at) };
 }
 
 /**

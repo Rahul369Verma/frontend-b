@@ -12,6 +12,8 @@ import { pollInterval } from './hooks/usePolling.js';
 import { ALL_ROUTES, NAV_ITEMS } from './config/nav.js';
 import { useT } from './config/useT.js';
 import { useConfirm } from './components/confirmContext.js';
+import { assertMatchesServer } from './config/marketSession.js';
+import { API_URL } from './config/api.js';
 
 /**
  * App shell — provider stack, sidebar rail and the route table.
@@ -310,6 +312,15 @@ function App() {
       // Redirect to settings with query params
       window.location.href = `/settings?${search}`;
     }
+  }, []);
+
+  // The UI carries its own copy of the trading-day shape (the browser cannot
+  // import server code). Check it against what the engine is ACTUALLY running
+  // with, once, at boot. A silent disagreement here is how a card ends up
+  // projecting a close the engine will never make. Warns in the console; never
+  // blocks rendering.
+  useEffect(() => {
+    assertMatchesServer(() => fetch(`${API_URL}/market-session`, { credentials: 'include' }).then(r => r.json()));
   }, []);
 
   return (

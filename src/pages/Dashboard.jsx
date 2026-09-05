@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import DeploymentsPanel from '../components/DeploymentsPanel';
 import CollapsibleCard from '../components/CollapsibleCard';
-import { Play, Square, Activity, DollarSign, TrendingUp, AlertTriangle, Shield, ShoppingCart, List, Database, ChevronDown, ChevronRight } from 'lucide-react';
+import { StatRow, StatTile, PageHeader, Chip, ModeChip, Spinner } from '../components/viz/primitives';
+import { Play, Square, Activity, DollarSign, TrendingUp, AlertTriangle, Shield, ShoppingCart, List, Database, ChevronDown, ChevronRight, LayoutDashboard } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { io } from 'socket.io-client';
@@ -11,23 +12,6 @@ import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { useConfirm } from '../components/confirmContext.js';
 
 // API Base URL
-
-function StatCard({ title, value, subtext, icon: _Icon, color }) {
-  return (
-    <div className="bg-surface p-6 rounded-xl border border-line">
-      <div className="flex justify-between items-start mb-4">
-        <div>
-          <p className="text-fg-4 text-sm font-medium">{title}</p>
-          <h3 className="text-2xl font-bold mt-1 text-fg">{value}</h3>
-        </div>
-        <div className={`p-3 rounded-lg bg-${color}-500/10 text-${color}-500`}>
-          <Icon className="w-6 h-6" />
-        </div>
-      </div>
-      {subtext && <p className="text-sm text-fg-5">{subtext}</p>}
-    </div>
-  );
-}
 
 export default function Dashboard() {
   const confirm = useConfirm();
@@ -550,25 +534,25 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="p-8 space-y-8">
-      {/* Header */}
-      <div className="flex justify-between items-center">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-3xl font-bold text-fg">Live Dashboard</h1>
-            <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-              (status.mode === 'LIVE' || status.mode === 'live') 
-                ? 'bg-red-500/20 text-red-400 border border-red-500/50' 
-                : 'bg-blue-500/20 text-blue-400 border border-blue-500/50'
-            }`}>
-              {(status.mode === 'LIVE' || status.mode === 'live') ? '🔴 LIVE TRADING' : '📝 PAPER TRADING'}
-            </span>
-          </div>
-          <p className="text-fg-4 mt-1">
-            {status.active_strategy} • {status.fyers_connected ? '🟢 Fyers Connected' : '🔴 Fyers Disconnected'}
-          </p>
-          
-          {/* Resource Monitor Widget */}
+    <div className="p-6 space-y-6">
+      {/* Header — one PageHeader for every page; the mode and the broker
+          session are chips beside the title, the system monitor sits in the
+          actions slot on the right. */}
+      <PageHeader
+        icon={LayoutDashboard}
+        title="Live Dashboard"
+        badges={(
+          <>
+            <ModeChip mode={(status.mode === 'LIVE' || status.mode === 'live') ? 'LIVE' : 'PAPER'} />
+            <Chip tone={status.fyers_connected ? 'good' : 'critical'} title="Broker session">
+              {status.fyers_connected ? 'Fyers connected' : 'Fyers disconnected'}
+            </Chip>
+          </>
+        )}
+        subtitle={status.active_strategy}
+        actions={(
+          <>
+{/* Resource Monitor Widget */}
           {status.system_metrics && (
               <div className="mt-2 flex items-center gap-4 text-xs font-mono bg-slate-800/50 p-2 rounded border border-line w-fit">
                   <div className="flex items-center gap-2">
@@ -593,8 +577,9 @@ export default function Dashboard() {
                   </div>
               </div>
           )}
-        </div>
-      </div>
+          </>
+        )}
+      />
 
       {/* Web Session Health Banner — only renders when there's actually a problem */}
       {(sessionHealth.total_expired > 0 || sessionHealth.total_missing > 0) && (
@@ -664,26 +649,19 @@ export default function Dashboard() {
                   ? <span className="text-2xs px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 font-bold border border-red-500/40">⛔ KILL SWITCH</span>
                   : null}
           >
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                    <div className="flex flex-col gap-1 p-3 bg-slate-800 rounded">
-                        <span className="text-xs text-fg-4">Trading Window</span>
-                        <span className="font-bold text-fg">{globalConfig?.trade_start_time || "09:15"} - {globalConfig?.trade_end_time || "15:30"}</span>
-                    </div>
-                    <div className="flex flex-col gap-1 p-3 bg-slate-800 rounded">
-                        <span className="text-xs text-fg-4">Max Daily Loss</span>
-                        <span className="font-bold text-red-400">₹{(globalConfig?.max_daily_loss || 10000).toLocaleString('en-IN')}</span>
-                    </div>
-                    <div className="flex flex-col gap-1 p-3 bg-slate-800 rounded">
-                        <span className="text-xs text-fg-4">Max Trades/Day</span>
-                        <span className="font-bold text-fg">{globalConfig?.max_trades_per_day || 5}</span>
-                    </div>
-                    <div className="flex flex-col gap-1 p-3 bg-slate-800 rounded">
-                        <span className="text-xs text-fg-4">Kill Switch</span>
-                        <span className={`font-bold ${globalConfig?.kill_switch ? 'text-red-400' : 'text-green-400'}`}>
-                            {globalConfig?.kill_switch ? 'ENGAGED' : 'OFF'}
-                        </span>
-                    </div>
-                </div>
+                <StatRow cols={4}>
+                    <StatTile label="Trading window"
+                        value={`${globalConfig?.trade_start_time || '09:15'} – ${globalConfig?.trade_end_time || '15:30'}`}
+                        hint="New entries only inside this window" />
+                    <StatTile label="Max daily loss" tone="negative"
+                        value={`₹${(globalConfig?.max_daily_loss || 10000).toLocaleString('en-IN')}`}
+                        hint="Trips the daily halt" />
+                    <StatTile label="Max trades / day" value={String(globalConfig?.max_trades_per_day || 5)} hint="Cap on new entries per session" />
+                    <StatTile label="Kill switch"
+                        value={globalConfig?.kill_switch ? 'ENGAGED' : 'OFF'}
+                        tone={globalConfig?.kill_switch ? 'negative' : 'neutral'}
+                        hint={globalConfig?.kill_switch ? 'No new entries anywhere' : 'Trading permitted'} />
+                </StatRow>
           </CollapsibleCard>
 
           {/* DeploymentsPanel — full width; self-contained accordion (its own header folds it). */}
@@ -768,7 +746,7 @@ export default function Dashboard() {
               const colorFor = n => n > 0 ? 'text-emerald-400' : n < 0 ? 'text-rose-400' : 'text-fg-3';
               return (
                   <>
-                      <div className="flex-1 min-w-[160px] px-4 py-2 flex flex-col justify-center">
+                      <div className="flex-1 min-w-40 px-4 py-2 flex flex-col justify-center">
                           <div className="text-3xs uppercase tracking-wider text-fg-5 font-bold flex items-center gap-1.5">
                               <DollarSign className="w-3 h-3" /> Combined PnL
                           </div>
@@ -781,7 +759,7 @@ export default function Dashboard() {
                               <span className={colorFor(unrealized)}>Open {fmt(unrealized)}</span>
                           </div>
                       </div>
-                      <div className="flex-1 min-w-[140px] px-4 py-2 flex flex-col justify-center">
+                      <div className="flex-1 min-w-35 px-4 py-2 flex flex-col justify-center">
                           <div className="text-3xs uppercase tracking-wider text-fg-5 font-bold flex items-center gap-1.5">
                               <Activity className="w-3 h-3" /> Trades Today
                           </div>
@@ -792,7 +770,7 @@ export default function Dashboard() {
                               {openPositions > 0 ? `${openPositions} open now` : 'No open positions'}
                           </div>
                       </div>
-                      <div className="flex-1 min-w-[160px] px-4 py-2 flex flex-col justify-center">
+                      <div className="flex-1 min-w-40 px-4 py-2 flex flex-col justify-center">
                           <div className="text-3xs uppercase tracking-wider text-fg-5 font-bold flex items-center gap-1.5">
                               <AlertTriangle className="w-3 h-3" /> Daily Loss Used
                           </div>
@@ -809,7 +787,7 @@ export default function Dashboard() {
                               of ₹{maxLoss.toLocaleString()} cap
                           </div>
                       </div>
-                      <div className="flex-1 min-w-[160px] px-4 py-2 flex flex-col justify-center">
+                      <div className="flex-1 min-w-40 px-4 py-2 flex flex-col justify-center">
                           <div className="text-3xs uppercase tracking-wider text-fg-5 font-bold flex items-center gap-1.5">
                               <Shield className="w-3 h-3" /> Engine Status
                           </div>
@@ -946,6 +924,16 @@ export default function Dashboard() {
                           strategy:      { txt: '📐 Strategy',       cls: 'bg-slate-700/60 text-fg-3', desc: 'Strategy SL/TP — no AI override applied' },
                       }[followMode] || { txt: followMode, cls: 'bg-slate-700/60 text-fg-3' };
 
+                      // A take-profit further away than several times the option's
+                      // own premium is not a target, it is a corrupted level (seen
+                      // 3-Sep: TP ₹29,360 on a ₹570 option after a review applied an
+                      // absent new_tp as index level 0). The bar's range would be
+                      // dominated by it and the LTP marker collapses to a 0%-wide
+                      // sliver — which LOOKS like a rendering bug and hides the real
+                      // one. Flag it instead of drawing an invisible bar.
+                      const tpUnreachable = pos.entryPrice > 0 && brokerTp > 0
+                          && Math.abs(brokerTp - pos.entryPrice) > pos.entryPrice * 5;
+
                       // Progress bar — current option LTP between broker SL and broker TP
                       const totalRange = Math.abs(brokerTp - brokerSl) || 1;
                       const fromSl     = Math.abs(ltp - brokerSl);
@@ -1081,11 +1069,20 @@ export default function Dashboard() {
                                       <span className="text-fg-5 text-4xs uppercase tracking-wider flex items-center gap-1">
                                           <span className="text-amber-400">🛡</span> Broker SL/TP (option premium)
                                       </span>
-                                      <span className="text-4xs text-fg-6">{slDistPct.toFixed(1)}% / {tpDistPct.toFixed(1)}% from LTP</span>
+                                      {tpUnreachable ? (
+                                          <span
+                                              className="text-4xs px-1.5 py-0.5 rounded bg-rose-900/50 text-rose-200 ring-1 ring-rose-500/50 font-semibold"
+                                              title={`TP ₹${brokerTp.toFixed(2)} is ${(Math.abs(brokerTp - pos.entryPrice) / pos.entryPrice).toFixed(0)}× the entry premium away — this position has no reachable take-profit. It will only exit on SL, an AI floor, max-hold, or the square-off. Repair via POST /api/engine/position-levels or close it.`}
+                                          >
+                                              ⚠ TP unreachable — no take-profit on this position
+                                          </span>
+                                      ) : (
+                                          <span className="text-4xs text-fg-6">{slDistPct.toFixed(1)}% / {tpDistPct.toFixed(1)}% from LTP</span>
+                                      )}
                                   </div>
                                   <div className="flex justify-between text-3xs font-mono mb-1">
                                       <span className="text-rose-400">SL ₹{brokerSl.toFixed(2)}</span>
-                                      <span className="text-emerald-400">TP ₹{brokerTp.toFixed(2)}</span>
+                                      <span className={tpUnreachable ? 'text-rose-300 line-through' : 'text-emerald-400'}>TP ₹{brokerTp.toFixed(2)}</span>
                                   </div>
                                   <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden relative">
                                       <div
@@ -1515,7 +1512,7 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <div className="flex flex-col items-center justify-center h-48 text-fg-5 bg-slate-900/30 rounded-lg animate-pulse border border-line-0/50">
-                    <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mb-3"></div>
+                    <Spinner size="lg" showLabel={false} className="mb-3" />
                     <p className="text-sm font-medium">Connecting to Real-Time Feed...</p>
                 </div>
               )
@@ -1948,7 +1945,7 @@ export default function Dashboard() {
 
       {/* Activity Detail Modal */}
       {activityDetail && (
-          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={() => setActivityDetail(null)}>
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-[2px]" onClick={() => setActivityDetail(null)}>
               <div className="bg-surface border border-line-2 rounded-xl w-full max-w-2xl max-h-[80vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
                   <div className="p-4 border-b border-line flex justify-between items-center">
                       <h3 className="font-bold text-fg">
@@ -2062,7 +2059,7 @@ export default function Dashboard() {
 
       {/* TRADE CONFIRMATION MODAL */}
       {previewModal.isOpen && (
-          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-[2px]">
               <div className="bg-surface border border-line-2 rounded-xl w-full max-w-md shadow-2xl overflow-hidden">
                   
                   {/* Header */}
@@ -2091,7 +2088,7 @@ export default function Dashboard() {
                   <div className="p-6 space-y-4">
                       {previewModal.loading ? (
                           <div className="py-8 flex flex-col items-center justify-center text-fg-4">
-                              <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mb-2"></div>
+                              <Spinner size="lg" showLabel={false} className="mb-2" />
                               Fetching Live Price...
                           </div>
                       ) : (
@@ -2210,7 +2207,7 @@ export default function Dashboard() {
 
       {/* ── Signal Simulator Modal ── */}
       {simModal.isOpen && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={closeSimulator}>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-[2px] z-50 flex items-center justify-center p-4" onClick={closeSimulator}>
           <div className="bg-slate-900 border border-line rounded-xl w-full max-w-lg shadow-2xl" onClick={e => e.stopPropagation()}>
             {/* Header */}
             <div className="p-4 border-b border-line flex items-center justify-between">

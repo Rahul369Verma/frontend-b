@@ -1,4 +1,5 @@
 import React, { useState, useRef, useMemo } from 'react';
+import { PageHeader } from '../components/viz/primitives';
 import { useNavigate } from 'react-router-dom';
 import { Activity, Play, TrendingUp, AlertTriangle, Code, ChevronDown, ChevronRight, Check, Trophy, Square, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { useGlobalState } from '../context/GlobalContext';
@@ -615,11 +616,9 @@ export default function Optimizer() {
   };
 
   return (
-    <div className="p-8 space-y-8">
-      <h1 className="text-3xl font-bold text-fg flex items-center gap-3">
-        <Activity className="w-8 h-8 text-primary" />
-        Strategy Optimizer
-      </h1>
+    <div className="p-6 space-y-6">
+      <PageHeader icon={Activity} title="Strategy Optimizer"
+        subtitle="Grid-search a strategy's parameters with out-of-sample ranking, then bake the winner as its default." />
 
       <div className={`grid grid-cols-1 gap-8 ${configCollapsed ? 'lg:grid-cols-[3rem_1fr]' : 'lg:grid-cols-3'}`}>
         {configCollapsed ? (

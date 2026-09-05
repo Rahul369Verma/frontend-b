@@ -501,8 +501,8 @@ const DataManager = () => {
     );
 
     return (
-        <div className="p-6 bg-gray-900 min-h-screen text-fg">
-            <h1 className="text-2xl font-bold flex items-center gap-2 mb-6">
+        <div className="p-6 text-fg">
+            <h1 className="text-xl font-bold text-fg flex items-center gap-2 mb-6">
                 <FaDatabase className="text-blue-400" /> Data Archivist
             </h1>
 

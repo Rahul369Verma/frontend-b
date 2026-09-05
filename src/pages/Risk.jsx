@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { RefreshCw, ShieldAlert, Layers, Activity, PieChart, Gauge } from 'lucide-react';
+import { RefreshCw, ShieldAlert, Layers, Activity, PieChart, Gauge, SlidersHorizontal } from 'lucide-react';
 import {
     Card, StatTile, StatRow, Meter, DivergingBars, Heatmap, DataTable,
-    Legend, ShareBar, StatusBadge, Placeholder,
+    Legend, ShareBar, StatusBadge, Placeholder, PageHeader, Tabs,
 } from '../components/viz/primitives';
 import AttributionPanel from '../components/viz/AttributionPanel';
+import RiskLimitsPanel from '../components/risk/RiskLimitsPanel';
 import { inr, num, useChartTheme } from '../components/viz/tokens';
 import { pollInterval } from '../hooks/usePolling.js';
 import { API_URL } from '../config/api.js';
@@ -84,18 +85,17 @@ export default function Risk() {
         { key: 'stress', label: 'Stress', icon: ShieldAlert },
         { key: 'attribution', label: 'Attribution', icon: Activity },
         { key: 'portfolio', label: 'Portfolio', icon: PieChart },
+        // Sits last on purpose: the four tabs before it are what the book IS,
+        // this one is what the engine will REFUSE. You size limits from those.
+        { key: 'limits', label: 'Limits', icon: SlidersHorizontal },
     ];
 
     return (
         <div className="p-6 space-y-4">
-            <header className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                    <h1 className="text-2xl font-bold text-fg">Portfolio Risk</h1>
-                    <p className="text-xs text-fg-5 mt-0.5">
-                        Whole-account view across the single-leg and multi-leg engines. Read-only.
-                    </p>
-                </div>
-                <div className="flex items-center gap-2">
+            <PageHeader icon={Gauge} title="Portfolio Risk"
+                subtitle="Whole-account view across the single-leg and multi-leg engines. Read-only."
+                actions={(
+                    <>
                     {['attribution', 'portfolio'].includes(tab) && (
                         <select value={days} onChange={e => setDays(Number(e.target.value))}
                                 className="bg-surface border border-line rounded px-2 py-1.5 text-xs text-fg-3">
@@ -119,8 +119,8 @@ export default function Risk() {
                         <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
                         Refresh
                     </button>
-                </div>
-            </header>
+                    </>
+                )} />
 
             {/* Same tint/edge/ink recipe as StatusBadge, so the error banner
                 follows the theme's danger token instead of a fixed red that
@@ -136,26 +136,20 @@ export default function Risk() {
                 </div>
             )}
 
-            <nav className="flex gap-1 border-b border-line">
-                {tabs.map(t => (
-                    <button key={t.key} onClick={() => setTab(t.key)}
-                            className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition ${
-                                tab === t.key
-                                    ? 'border-primary text-fg'
-                                    : 'border-transparent text-fg-5 hover:text-fg-3'}`}>
-                        <t.icon className="w-4 h-4" />
-                        {t.label}
-                    </button>
-                ))}
+            <div className="flex items-end gap-2 border-b border-line-0">
+                <Tabs className="flex-1 border-b-0" ariaLabel="Risk views"
+                    tabs={tabs.map((t) => ({ id: t.key, label: t.label, icon: t.icon }))}
+                    value={tab} onChange={setTab} />
                 {lastAt && <span className="ml-auto self-center text-2xs text-fg-6">
                     updated {lastAt.toLocaleTimeString('en-IN')}
                 </span>}
-            </nav>
+            </div>
 
             {tab === 'book' && <LiveBook greeks={greeks} margin={margin} />}
             {tab === 'stress' && <Stress stress={stress} scenarios={scenarios} greeks={greeks} />}
             {tab === 'attribution' && <AttributionPanel data={attribution} context="live" />}
             {tab === 'portfolio' && <Portfolio factors={factors} />}
+            {tab === 'limits' && <RiskLimitsPanel />}
         </div>
     );
 }
