@@ -9,6 +9,7 @@ import { API_URL, SOCKET_URL } from '../config/api.js';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { useConfirm } from '../components/confirmContext.js';
 import { PageHeader, Chip } from '../components/viz/primitives';
+import { toast } from '../components/toastStore.js';
 
 // Build a Fyers futures symbol from an index key + expiry date.
 //   buildFuturesSymbol('NSE:NIFTYBANK-INDEX', '2026-06-30')
@@ -271,7 +272,7 @@ export default function TickStrategies() {
             await fetchRecordings();
         } catch (err) {
             setRecordings(prev);
-            alert('Stop failed: ' + (err.response?.data?.error || err.message));
+            toast.error('Stop failed: ' + (err.response?.data?.error || err.message));
             fetchRecordings();
         }
     };
@@ -285,7 +286,7 @@ export default function TickStrategies() {
             await fetchRecordings();
         } catch (err) {
             setRecordings(prev);
-            alert('Delete failed: ' + (err.response?.data?.error || err.message));
+            toast.error('Delete failed: ' + (err.response?.data?.error || err.message));
             fetchRecordings();
         }
     };
@@ -348,7 +349,7 @@ export default function TickStrategies() {
         } catch (err) {
             // Roll back the optimistic update.
             setStrategies(curr => curr.map(x => x._id === s._id ? { ...x, isActive: prev } : x));
-            alert('Toggle failed: ' + (err.response?.data?.error || err.message));
+            toast.error('Toggle failed: ' + (err.response?.data?.error || err.message));
             // Re-sync from server in case our snapshot has drifted.
             fetchAll();
         }
@@ -366,7 +367,7 @@ export default function TickStrategies() {
             await fetchAll();
         } catch (err) {
             setStrategies(prev);
-            alert('Delete failed: ' + (err.response?.data?.error || err.message));
+            toast.error('Delete failed: ' + (err.response?.data?.error || err.message));
             fetchAll();
         }
     };
@@ -381,14 +382,14 @@ export default function TickStrategies() {
         try {
             await axios.post(`${API_URL}/tick-strategies/halt`, { reason, actor: 'operator' });
             await fetchAll();
-        } catch (err) { alert('Halt failed: ' + (err.response?.data?.error || err.message)); }
+        } catch (err) { toast.error('Halt failed: ' + (err.response?.data?.error || err.message)); }
     };
     const handleResume = async () => {
         if (!await confirm('Resume tick engine? New entries will be permitted again.')) return;
         try {
             await axios.post(`${API_URL}/tick-strategies/resume`, { actor: 'operator' });
             await fetchAll();
-        } catch (err) { alert('Resume failed: ' + (err.response?.data?.error || err.message)); }
+        } catch (err) { toast.error('Resume failed: ' + (err.response?.data?.error || err.message)); }
     };
     const handleKillAll = async () => {
         const openCount = snapshot?.totals?.openPositions || 0;
@@ -397,9 +398,9 @@ export default function TickStrategies() {
         if (!await confirm({ title: 'Kill all positions', body: `Confirm KILL ALL: close ${openCount} position(s) at last LTP and halt entries?`, danger: true, confirmLabel: 'Kill all positions', requireText: 'KILL' })) return;
         try {
             const res = await axios.post(`${API_URL}/tick-strategies/kill-all`, { reason, actor: 'operator' });
-            alert(`Closed ${res.data.closed} position(s). Engine is halted.`);
+            toast.info(`Closed ${res.data.closed} position(s). Engine is halted.`);
             await fetchAll();
-        } catch (err) { alert('Kill-all failed: ' + (err.response?.data?.error || err.message)); }
+        } catch (err) { toast.error('Kill-all failed: ' + (err.response?.data?.error || err.message)); }
     };
 
     // ── PERMANENT power switch ──────────────────────────────────────────────
@@ -431,11 +432,11 @@ export default function TickStrategies() {
                 enabled, reason, actor: 'operator',
             });
             if (!enabled) {
-                alert(`Tick engine paused. Closed ${res.data.positionsClosed || 0} position(s). It will stay off until you resume it — including across restarts.`);
+                toast.info(`Tick engine paused. Closed ${res.data.positionsClosed || 0} position(s). It will stay off until you resume it — including across restarts.`);
             }
             await fetchAll();
         } catch (err) {
-            alert(`${enabled ? 'Resume' : 'Pause'} failed: ` + (err.response?.data?.error || err.message));
+            toast.error(`${enabled ? 'Resume' : 'Pause'} failed: ` + (err.response?.data?.error || err.message));
         } finally { setPowerBusy(false); }
     };
 
@@ -554,10 +555,10 @@ export default function TickStrategies() {
                 being held off deliberately — say so rather than looking idle. */}
             {snapshot?.engine?.pauseCheckFailed && !snapshot?.engine?.paused && (
                 <div className="bg-amber-950 border border-amber-700 rounded-xl p-4 flex items-start gap-3">
-                    <AlertTriangle className="w-6 h-6 text-amber-400 flex-shrink-0 mt-0.5" />
+                    <AlertTriangle className="w-6 h-6 text-warning flex-shrink-0 mt-0.5" />
                     <div className="flex-1">
-                        <h3 className="text-amber-200 font-bold mb-1">Tick engine held OFF — pause state unknown</h3>
-                        <p className="text-amber-200/80 text-sm">
+                        <h3 className="text-warning font-bold mb-1">Tick engine held OFF — pause state unknown</h3>
+                        <p className="text-warning/80 text-sm">
                             The engine could not read its pause switch from the database at startup, so it did not
                             start. Running it blind could re-impose load you had switched off. Press Start once the
                             database is reachable.
@@ -576,15 +577,15 @@ export default function TickStrategies() {
             {/* Halt banner — pulses red when engine is halted */}
             {snapshot?.engine?.halted && !snapshot?.engine?.paused && (
                 <div className="bg-red-950 border border-red-700 rounded-xl p-4 flex items-start gap-3 animate-pulse">
-                    <Octagon className="w-6 h-6 text-red-400 flex-shrink-0 mt-0.5" />
+                    <Octagon className="w-6 h-6 text-danger flex-shrink-0 mt-0.5" />
                     <div className="flex-1">
-                        <h3 className="text-red-200 font-bold mb-1">🛑 Tick engine is HALTED — no new entries will fire</h3>
-                        <p className="text-red-200/80 text-sm">
+                        <h3 className="text-danger font-bold mb-1">🛑 Tick engine is HALTED — no new entries will fire</h3>
+                        <p className="text-danger/80 text-sm">
                             Halted by <span className="font-mono">{snapshot.engine.haltActor || 'system'}</span>:
                             {' '}<span className="font-semibold">{snapshot.engine.haltReason || '(no reason)'}</span>
                             {snapshot.engine.haltAt && ` · since ${new Date(snapshot.engine.haltAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} IST`}
                         </p>
-                        <p className="text-red-200/60 text-xs mt-1">
+                        <p className="text-danger/60 text-xs mt-1">
                             Open positions still exit normally on TP/SL/max-hold.
                         </p>
                     </div>
@@ -609,7 +610,7 @@ export default function TickStrategies() {
                         })
                         : '—';
                     return (
-                        <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-green-500/20 text-green-300 border border-green-500/40">
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-green-500/20 text-success border border-green-500/40">
                             ● {exch} Open — closes {closesAt} IST
                         </span>
                     );
@@ -624,7 +625,7 @@ export default function TickStrategies() {
                     });
                 }
                 return (
-                    <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-warning border border-amber-500/40">
                         ● {exch} Closed — next open {dayLabel} {timeLabel} IST
                     </span>
                 );
@@ -650,7 +651,7 @@ export default function TickStrategies() {
                             value={`${pos ? '+' : '−'}₹${Math.abs(Math.round(net)).toLocaleString('en-IN')}`}
                             icon={pos ? TrendingUp : TrendingDown}
                             color={pos ? 'green' : 'rose'}
-                            valueClass={pos ? 'text-emerald-400' : 'text-rose-400'}
+                            valueClass={pos ? 'text-success' : 'text-danger'}
                             subtext={`${limit > 0 ? `auto-halt at −₹${limit.toLocaleString('en-IN')} · ` : ''}${entries}${maxEntries > 0 ? `/${maxEntries}` : ''} entries today`}
                         />
                     );
@@ -662,7 +663,7 @@ export default function TickStrategies() {
                 <h2 className="text-lg font-bold text-fg mb-4">Deployed Strategies</h2>
                 {merged.length === 0 ? (
                     <div className="text-fg-5 text-sm italic text-center py-8">
-                        No tick strategies yet. Click <span className="text-amber-400 font-semibold">New Tick Strategy</span> to deploy one — e.g. a Large Order Detector on NIFTY futures to catch institutional fills.
+                        No tick strategies yet. Click <span className="text-warning font-semibold">New Tick Strategy</span> to deploy one — e.g. a Large Order Detector on NIFTY futures to catch institutional fills.
                     </div>
                 ) : (
                     <div className="space-y-3">
@@ -777,18 +778,18 @@ export default function TickStrategies() {
                                             <td className="py-2 pr-3 text-fg-4 font-mono text-xs whitespace-nowrap">{new Date(t.entryTime).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</td>
                                             <td className="py-2 pr-3 text-fg-3">{t.strategyName}</td>
                                             <td className="py-2 pr-3 font-mono text-fg-3 text-xs">{t.symbol}</td>
-                                            <td className={`py-2 pr-3 font-bold ${t.direction === 'LONG' ? 'text-green-400' : 'text-red-400'}`}>{t.direction}</td>
+                                            <td className={`py-2 pr-3 font-bold ${t.direction === 'LONG' ? 'text-success' : 'text-danger'}`}>{t.direction}</td>
                                             <td className="py-2 pr-3 text-right font-mono">{t.entryPrice?.toFixed(2)}</td>
                                             <td className="py-2 pr-3 text-right font-mono" title={liveOpen ? 'Live LTP (position still open)' : ''}>
                                                 {displayExit}
                                             </td>
-                                            <td className={`py-2 pr-3 text-right font-mono font-bold ${displayPnl == null ? 'text-fg-5' : (displayPnl >= 0 ? 'text-green-400' : 'text-red-400')}`}
+                                            <td className={`py-2 pr-3 text-right font-mono font-bold ${displayPnl == null ? 'text-fg-5' : (displayPnl >= 0 ? 'text-success' : 'text-danger')}`}
                                                 title={liveOpen ? 'Unrealized — updates live' : ''}>
                                                 {displayPnl != null
                                                     ? (displayPnl >= 0 ? '+' : '') + displayPnl.toFixed(2) + (liveOpen ? ' (live)' : '')
                                                     : '—'}
                                             </td>
-                                            <td className={`py-2 pr-3 text-right font-mono ${netRupees == null ? 'text-fg-5' : (netRupees >= 0 ? 'text-green-400' : 'text-red-400')}`}
+                                            <td className={`py-2 pr-3 text-right font-mono ${netRupees == null ? 'text-fg-5' : (netRupees >= 0 ? 'text-success' : 'text-danger')}`}
                                                 title={netTooltip}>
                                                 {netRupees != null
                                                     ? (netRupees >= 0 ? '+' : '') + Math.round(netRupees).toLocaleString()
@@ -798,7 +799,7 @@ export default function TickStrategies() {
                                                 {displayHoldMs ? `${(displayHoldMs / 1000).toFixed(1)}s` : '—'}
                                             </td>
                                             <td className="py-2 pr-3">
-                                                <span className={`text-xs px-2 py-0.5 rounded ${t.status === 'OPEN' ? 'bg-amber-500/20 text-amber-300 animate-pulse' : 'bg-slate-700 text-fg-4'}`}>{t.status}</span>
+                                                <span className={`text-xs px-2 py-0.5 rounded ${t.status === 'OPEN' ? 'bg-amber-500/20 text-warning animate-pulse' : 'bg-slate-700 text-fg-4'}`}>{t.status}</span>
                                             </td>
                                         </tr>
                                     );
@@ -955,7 +956,7 @@ export default function TickStrategies() {
                                 </select>
                                 {selected ? (
                                     <p className="text-xs text-fg-4 mt-2 leading-relaxed p-2 bg-slate-800/60 border border-line rounded">
-                                        <span className="text-amber-300 font-semibold">{selected.name}: </span>
+                                        <span className="text-warning font-semibold">{selected.name}: </span>
                                         {selected.description}
                                     </p>
                                 ) : (
@@ -1105,11 +1106,11 @@ function StrategyCard({ strategy: s, typeMeta, engineMarketOpen, onToggle, onEdi
                         </div>
                         <p className="text-xs text-fg-5 mt-0.5">
                             {rt?.errors?.autoDeactivatedAt && !s.isActive
-                                ? <span className="text-red-400 font-semibold">⚠️ Auto-deactivated (errors)</span>
+                                ? <span className="text-danger font-semibold">⚠️ Auto-deactivated (errors)</span>
                                 : (s.isActive ? `${streamDot} Listening to ticks${streamSuffix}` : '⏸ Paused')}
                             {rt?.errors?.total > 0 && (
                                 <span
-                                    className={`ml-2 ${rt.errors.consecutive > 0 ? 'text-red-400' : 'text-amber-400'}`}
+                                    className={`ml-2 ${rt.errors.consecutive > 0 ? 'text-danger' : 'text-warning'}`}
                                     title={`Last error: ${rt.errors.lastMessage}\n${rt.errors.consecutive > 0 ? `Consecutive: ${rt.errors.consecutive}` : 'Recovered'}`}
                                 >
                                     · {rt.errors.total} err{rt.errors.total === 1 ? '' : 's'}
@@ -1117,7 +1118,7 @@ function StrategyCard({ strategy: s, typeMeta, engineMarketOpen, onToggle, onEdi
                                 </span>
                             )}
                             {rt?.health && s.isActive && (
-                                <span className={`ml-2 ${rt.health.warnedNoVol ? 'text-amber-400' : 'text-fg-5'}`}>
+                                <span className={`ml-2 ${rt.health.warnedNoVol ? 'text-warning' : 'text-fg-5'}`}>
                                     · <span className={rt.health.ticksPerSec > 0 ? 'text-cyan-400 font-semibold' : ''}>{rt.health.ticksPerSec || 0} t/s</span>
                                     {' '}({rt.health.totalTicks} total
                                     {rt.health.totalTicks > 0 && (
@@ -1130,15 +1131,15 @@ function StrategyCard({ strategy: s, typeMeta, engineMarketOpen, onToggle, onEdi
                             {open && (
                                 <span className="ml-1">
                                     {' · '}
-                                    Open <span className={open.direction === 'LONG' ? 'text-green-400 font-semibold' : 'text-red-400 font-semibold'}>{open.direction}</span>
+                                    Open <span className={open.direction === 'LONG' ? 'text-success font-semibold' : 'text-danger font-semibold'}>{open.direction}</span>
                                     {' @ '}{open.entryPrice?.toFixed(2)}, held {(open.holdMs / 1000).toFixed(1)}s
                                     {open.unrealizedPoints != null && (
-                                        <span className={`ml-1 font-mono ${open.unrealizedPoints >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                        <span className={`ml-1 font-mono ${open.unrealizedPoints >= 0 ? 'text-success' : 'text-danger'}`}>
                                             ({open.unrealizedPoints >= 0 ? '+' : ''}{open.unrealizedPoints.toFixed(2)} pts)
                                         </span>
                                     )}
                                     {open.unrealizedOption?.net_pnl != null && (
-                                        <span className={`ml-1 font-mono ${open.unrealizedOption.net_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}
+                                        <span className={`ml-1 font-mono ${open.unrealizedOption.net_pnl >= 0 ? 'text-success' : 'text-danger'}`}
                                               title={`Estimated net option-leg PnL if closed now (gross ₹${open.unrealizedOption.gross_pnl?.toFixed(0)}, charges ₹${open.unrealizedOption.charges?.total?.toFixed(0)}, slippage ₹${open.unrealizedOption.slippage_cost?.toFixed(0)})`}>
                                             · est net ₹{open.unrealizedOption.net_pnl >= 0 ? '+' : ''}{open.unrealizedOption.net_pnl.toFixed(0)}
                                         </span>
@@ -1161,7 +1162,7 @@ function StrategyCard({ strategy: s, typeMeta, engineMarketOpen, onToggle, onEdi
                     <Stat
                         label="PnL pts"
                         value={(stats.totalPnl >= 0 ? '+' : '') + stats.totalPnl.toFixed(2)}
-                        color={stats.totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}
+                        color={stats.totalPnl >= 0 ? 'text-success' : 'text-danger'}
                     />
                     <Stat
                         label="Net ₹ (est)"
@@ -1170,10 +1171,10 @@ function StrategyCard({ strategy: s, typeMeta, engineMarketOpen, onToggle, onEdi
                                 ? (stats.optionNetPnl >= 0 ? '+' : '') + Math.round(stats.optionNetPnl).toLocaleString()
                                 : '—'
                         }
-                        color={(stats.optionNetPnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}
+                        color={(stats.optionNetPnl || 0) >= 0 ? 'text-success' : 'text-danger'}
                     />
                     <button onClick={onEdit} className="text-xs px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-fg-2">Edit</button>
-                    <button onClick={onDelete} className="p-2 rounded text-red-400 hover:bg-red-500/10" title="Delete">
+                    <button onClick={onDelete} className="p-2 rounded text-danger hover:bg-red-500/10" title="Delete">
                         <Trash2 className="w-4 h-4" />
                     </button>
                 </div>
@@ -1201,10 +1202,10 @@ function EventRow({ ev }) {
         : isStreamHealthy ? Activity
         : isEntry ? (ev.direction === 'LONG' ? TrendingUp : TrendingDown)
         : Clock;
-    const color = isWarn || isStreamStale ? 'text-amber-400'
-        : isStreamHealthy ? 'text-green-400'
-        : isEntry ? (ev.direction === 'LONG' ? 'text-green-400' : 'text-red-400')
-        : isExit ? (ev.pnl >= 0 ? 'text-green-400' : 'text-red-400')
+    const color = isWarn || isStreamStale ? 'text-warning'
+        : isStreamHealthy ? 'text-success'
+        : isEntry ? (ev.direction === 'LONG' ? 'text-success' : 'text-danger')
+        : isExit ? (ev.pnl >= 0 ? 'text-success' : 'text-danger')
         : 'text-fg-4';
     const rowCls = isWarn || isStreamStale
         ? 'bg-amber-900/20 border-amber-700/40'
@@ -1220,7 +1221,7 @@ function EventRow({ ev }) {
                     <span className="text-fg-3">{ev.strategyName}</span>
                     <span className="text-xs px-1.5 py-0.5 rounded bg-slate-700 text-fg-4 font-mono">{ev.symbol}</span>
                     {ev.direction && (
-                        <span className={`text-xs font-bold ${ev.direction === 'LONG' ? 'text-green-400' : 'text-red-400'}`}>{ev.direction}</span>
+                        <span className={`text-xs font-bold ${ev.direction === 'LONG' ? 'text-success' : 'text-danger'}`}>{ev.direction}</span>
                     )}
                     {isEntry && <span className="text-xs text-fg-4 font-mono">@ {ev.entryPrice?.toFixed(2)}</span>}
                     {ev.kind === 'EXIT' && (
@@ -1232,7 +1233,7 @@ function EventRow({ ev }) {
                     )}
                     <span className="text-xs text-fg-5 ml-auto font-mono">{new Date(ev.time).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</span>
                 </div>
-                <p className={`text-xs mt-0.5 ${isWarn || isStreamStale ? 'text-amber-200' : isStreamHealthy ? 'text-green-200' : 'text-fg-5 truncate'}`}>{ev.reason}</p>
+                <p className={`text-xs mt-0.5 ${isWarn || isStreamStale ? 'text-warning' : isStreamHealthy ? 'text-success' : 'text-fg-5 truncate'}`}>{ev.reason}</p>
             </div>
         </div>
     );
@@ -1249,7 +1250,7 @@ function Modal({ title, children, onClose, onSubmit, submitLabel, loading, error
                     <button onClick={onClose} className="text-fg-4 hover:text-fg text-xl leading-none">×</button>
                 </div>
                 <div className="space-y-4">{children}</div>
-                {error && <p className="mt-4 text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded p-3">{error}</p>}
+                {error && <p className="mt-4 text-sm text-danger bg-red-500/10 border border-red-500/30 rounded p-3">{error}</p>}
                 <div className="flex justify-end gap-2 mt-6">
                     <button onClick={onClose} className="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-fg-2">Cancel</button>
                     <button
@@ -1310,10 +1311,10 @@ function formatBytes(bytes) {
 function RecordingStatusPill({ status }) {
     let cls = 'bg-slate-700 text-fg-3';
     let pulsing = false;
-    if (status === 'RECORDING') { cls = 'bg-green-500/20 text-green-300 border border-green-500/40'; pulsing = true; }
+    if (status === 'RECORDING') { cls = 'bg-green-500/20 text-success border border-green-500/40'; pulsing = true; }
     else if (status === 'STOPPED') { cls = 'bg-slate-700 text-fg-3 border border-line-2'; }
-    else if (status === 'INCOMPLETE_STOPPED') { cls = 'bg-amber-500/20 text-amber-300 border border-amber-500/40'; }
-    else if (status === 'ERROR') { cls = 'bg-red-500/20 text-red-300 border border-red-500/40'; }
+    else if (status === 'INCOMPLETE_STOPPED') { cls = 'bg-amber-500/20 text-warning border border-amber-500/40'; }
+    else if (status === 'ERROR') { cls = 'bg-red-500/20 text-danger border border-red-500/40'; }
     return (
         <span className={`text-3xs font-semibold px-2 py-0.5 rounded ${cls} ${pulsing ? 'animate-pulse' : ''}`}>
             {status}
@@ -1333,7 +1334,7 @@ function RecordingList({ recordings, onStop, onDelete, onSample, onReplay }) {
     if (!recordings || recordings.length === 0) {
         return (
             <div className="text-fg-5 text-sm italic text-center py-8">
-                No recordings yet. Click <span className="text-amber-400 font-semibold">New Recording</span> to capture a live tick stream for replay.
+                No recordings yet. Click <span className="text-warning font-semibold">New Recording</span> to capture a live tick stream for replay.
             </div>
         );
     }
@@ -1372,7 +1373,7 @@ function RecordingList({ recordings, onStop, onDelete, onSample, onReplay }) {
                                     )}
                                 </div>
                                 {rec.errorMessage && (
-                                    <p className="text-xs text-red-400 mt-1 truncate" title={rec.errorMessage}>⚠ {rec.errorMessage}</p>
+                                    <p className="text-xs text-danger mt-1 truncate" title={rec.errorMessage}>⚠ {rec.errorMessage}</p>
                                 )}
                             </div>
                             <div className="flex items-center gap-4 text-sm">
@@ -1385,7 +1386,7 @@ function RecordingList({ recordings, onStop, onDelete, onSample, onReplay }) {
                                         <button
                                             onClick={() => onStop(rec)}
                                             title="Stop recording"
-                                            className="p-2 rounded text-amber-400 hover:bg-amber-500/10"
+                                            className="p-2 rounded text-warning hover:bg-amber-500/10"
                                         >
                                             <Square className="w-4 h-4" />
                                         </button>
@@ -1409,7 +1410,7 @@ function RecordingList({ recordings, onStop, onDelete, onSample, onReplay }) {
                                     <button
                                         onClick={() => onDelete(rec)}
                                         title="Delete recording"
-                                        className="p-2 rounded text-red-400 hover:bg-red-500/10"
+                                        className="p-2 rounded text-danger hover:bg-red-500/10"
                                         disabled={isActive}
                                     >
                                         <Trash2 className="w-4 h-4" />
@@ -2064,7 +2065,7 @@ function ReplayModal({ recording, types, onClose }) {
                     {running && (
                         <div className="text-fg-3 text-sm bg-slate-800/50 border border-line rounded p-3 flex items-center justify-between gap-3">
                             <div>
-                                Running replay — elapsed <span className="font-mono text-amber-300">{elapsedSec}s</span>.
+                                Running replay — elapsed <span className="font-mono text-warning">{elapsedSec}s</span>.
                                 Don't close this modal. Server timeout 5min.
                             </div>
                             <button
@@ -2105,7 +2106,7 @@ function ReplayResults({ result, expandedRun, onExpandRun }) {
             </div>
 
             {warnings.length > 0 && (
-                <div className="text-xs bg-amber-950/40 border border-amber-700/60 text-amber-200 rounded p-3 space-y-1">
+                <div className="text-xs bg-amber-950/40 border border-amber-700/60 text-warning rounded p-3 space-y-1">
                     <div className="font-bold">Replay warnings:</div>
                     <ul className="list-disc list-inside space-y-0.5">
                         {warnings.map((w, i) => <li key={i}>{w}</li>)}
@@ -2141,9 +2142,9 @@ function ReplayResults({ result, expandedRun, onExpandRun }) {
                                         return (
                                             <tr key={run.runIndex} className={`border-b border-line-0 ${isBest ? 'bg-amber-500/5' : ''}`}>
                                                 <td className="py-1.5 px-2 font-mono text-fg-3">
-                                                    #{run.runIndex}{isBest && <span className="ml-1 text-amber-400">★</span>}
+                                                    #{run.runIndex}{isBest && <span className="ml-1 text-warning">★</span>}
                                                 </td>
-                                                <td className={`py-1.5 px-2 text-right font-mono font-bold ${net >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                <td className={`py-1.5 px-2 text-right font-mono font-bold ${net >= 0 ? 'text-success' : 'text-danger'}`}>
                                                     {net >= 0 ? '+' : ''}{net.toFixed(2)}
                                                 </td>
                                                 <td className="py-1.5 px-2 text-right font-mono text-fg-3">{winRate.toFixed(0)}%</td>
@@ -2180,7 +2181,7 @@ function ReplayResults({ result, expandedRun, onExpandRun }) {
 function ReplayRunDetail({ run, isOptimizer }) {
     const stats = run?.stats || {};
     const trades = run?.trades || [];
-    const netCls = (stats.netPnl || 0) >= 0 ? 'text-green-400' : 'text-red-400';
+    const netCls = (stats.netPnl || 0) >= 0 ? 'text-success' : 'text-danger';
 
     return (
         <div className="space-y-3">
@@ -2210,7 +2211,7 @@ function ReplayRunDetail({ run, isOptimizer }) {
                 <ReplayStatBox
                     label="Max DD"
                     value={stats.maxDrawdown != null ? stats.maxDrawdown.toFixed(2) : '—'}
-                    color="text-red-400"
+                    color="text-danger"
                 />
             </div>
 
@@ -2233,10 +2234,10 @@ function ReplayRunDetail({ run, isOptimizer }) {
                         ) : trades.map((t, i) => (
                             <tr key={i} className="border-b border-line-0 hover:bg-slate-800/40">
                                 <td className="py-1 px-2 font-mono text-fg-3">{t.symbol}</td>
-                                <td className={`py-1 px-2 font-bold ${t.direction === 'LONG' ? 'text-green-400' : 'text-red-400'}`}>{t.direction}</td>
+                                <td className={`py-1 px-2 font-bold ${t.direction === 'LONG' ? 'text-success' : 'text-danger'}`}>{t.direction}</td>
                                 <td className="py-1 px-2 text-right font-mono">{t.entryPrice != null ? Number(t.entryPrice).toFixed(2) : '—'}</td>
                                 <td className="py-1 px-2 text-right font-mono">{t.exitPrice != null ? Number(t.exitPrice).toFixed(2) : '—'}</td>
-                                <td className={`py-1 px-2 text-right font-mono font-bold ${(t.pnlPoints || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                <td className={`py-1 px-2 text-right font-mono font-bold ${(t.pnlPoints || 0) >= 0 ? 'text-success' : 'text-danger'}`}>
                                     {(t.pnlPoints || 0) >= 0 ? '+' : ''}{(t.pnlPoints || 0).toFixed(2)}
                                 </td>
                                 <td className="py-1 px-2 text-right font-mono text-fg-4">{formatDuration(t.holdMs)}</td>

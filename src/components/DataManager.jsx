@@ -53,19 +53,24 @@ const MultiSelect = ({ options, selectedValues, onChange, placeholder = "Select.
     return (
         <div className="relative" ref={wrapperRef}>
             <label className="block text-sm text-fg-4 mb-1">{label}</label>
-            <div 
-                className="w-full bg-gray-900 border border-line p-2 rounded text-fg cursor-pointer flex justify-between items-center"
+            {/* The trigger of a custom dropdown is a button: as a <div> it took
+                no focus, so the control could not be opened from the keyboard. */}
+            <button
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded={isOpen}
+                className="w-full bg-gray-900 border border-line p-2 rounded text-fg cursor-pointer flex justify-between items-center text-left"
                 onClick={() => setIsOpen(!isOpen)}
             >
-                <div className="truncate">
+                <span className="truncate">
                     {selectedValues.length === 0 ? (
                         <span className="text-fg-5">{placeholder}</span>
                     ) : (
                         <span>{selectedValues.length} selected</span>
                     )}
-                </div>
-                <FaChevronDown className={`text-xs transition ${isOpen ? 'rotate-180' : ''}`} />
-            </div>
+                </span>
+                <FaChevronDown className={`text-xs transition ${isOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+            </button>
 
             {isOpen && (
                 <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-line rounded-md shadow-xl max-h-64 flex flex-col">
@@ -85,7 +90,7 @@ const MultiSelect = ({ options, selectedValues, onChange, placeholder = "Select.
                             <button onClick={handleSelectAll} className="text-blue-400 hover:text-blue-300">
                                 {selectedValues.length === filteredOptions.length && filteredOptions.length > 0 ? "Deselect All" : "Select All"}
                             </button>
-                            <button onClick={handleClear} className="text-red-400 hover:text-red-300">Clear</button>
+                            <button onClick={handleClear} className="text-danger hover:text-danger">Clear</button>
                         </div>
                     </div>
                     
@@ -402,7 +407,7 @@ const DataManager = () => {
                 <h2 className="text-xl font-bold flex items-center gap-2">
                     <FaDatabase className="text-purple-400" /> Live Option-Chain Archive
                     {oa && (
-                        <span className={`text-2xs px-2 py-0.5 rounded border font-semibold ${oa.running ? 'border-green-600 text-green-300 bg-green-900/25' : oa.active ? 'border-yellow-600 text-yellow-300 bg-yellow-900/20' : 'border-line-2 text-fg-4'}`}>
+                        <span className={`text-2xs px-2 py-0.5 rounded border font-semibold ${oa.running ? 'border-green-600 text-success bg-green-900/25' : oa.active ? 'border-yellow-600 text-warning bg-yellow-900/20' : 'border-line-2 text-fg-4'}`}>
                             {oa.running ? '● RECORDING' : oa.active ? 'IDLE' : 'INACTIVE'}
                         </span>
                     )}
@@ -426,7 +431,7 @@ const DataManager = () => {
 
             {!oa ? <div className="text-sm text-fg-5">Loading archive status…</div> : (<>
                 {!oa.active && (
-                    <div className="text-xs mb-4 p-2 rounded border border-yellow-800/60 bg-yellow-900/15 text-yellow-300">
+                    <div className="text-xs mb-4 p-2 rounded border border-yellow-800/60 bg-yellow-900/15 text-warning">
                         ⚠ Not recording — {oa.reason}. Environment: <strong>{oa.environment}</strong>.
                         Recording is production-only so the shared broker rate-limit stays available to live trading.
                     </div>
@@ -445,7 +450,7 @@ const DataManager = () => {
                     </div>
                     <div className="bg-gray-900/70 border border-line rounded p-3">
                         <div className="text-3xs text-fg-5 uppercase">Growth</div>
-                        <div className="text-lg font-bold text-green-300">{oa.growth ? `${fmtBytes(oa.growth.perDayBytes)}/day` : '—'}</div>
+                        <div className="text-lg font-bold text-success">{oa.growth ? `${fmtBytes(oa.growth.perDayBytes)}/day` : '—'}</div>
                         <div className="text-3xs text-fg-5">{oa.growth ? `~${fmtBytes(oa.growth.projected1yBytes)}/yr projected` : 'needs a full day of data'}</div>
                     </div>
                     <div className="bg-gray-900/70 border border-line rounded p-3">
@@ -458,17 +463,17 @@ const DataManager = () => {
                 {/* runtime */}
                 <div className="flex flex-wrap gap-x-5 gap-y-1 text-2xs font-mono text-fg-4 mb-4 px-3 py-2 rounded bg-gray-900/50 border border-line-0">
                     <span>env <span className="text-fg-2">{oa.environment}</span></span>
-                    <span>market <span className={oa.marketOpen?.open ? 'text-green-400' : 'text-fg-5'}>{oa.marketOpen?.open ? 'OPEN' : 'closed'}</span></span>
+                    <span>market <span className={oa.marketOpen?.open ? 'text-success' : 'text-fg-5'}>{oa.marketOpen?.open ? 'OPEN' : 'closed'}</span></span>
                     <span>every <span className="text-fg-2">{oa.config?.intervalSec}s</span></span>
                     <span>strikes <span className="text-fg-2">ATM±{oa.config?.strikesEachSide}</span></span>
                     <span>cycles <span className="text-fg-2">{fmtNum(oa.metrics?.cycles)}</span></span>
-                    <span>written <span className="text-green-300">{fmtNum(oa.metrics?.snapshots)}</span></span>
-                    <span>failures <span className={oa.metrics?.failures ? 'text-red-400' : 'text-fg-5'}>{fmtNum(oa.metrics?.failures)}</span></span>
+                    <span>written <span className="text-success">{fmtNum(oa.metrics?.snapshots)}</span></span>
+                    <span>failures <span className={oa.metrics?.failures ? 'text-danger' : 'text-fg-5'}>{fmtNum(oa.metrics?.failures)}</span></span>
                     <span>last cycle <span className="text-fg-2">{ago(oa.metrics?.lastCycleAt)}</span>{oa.metrics?.lastCycleMs != null ? ` (${oa.metrics.lastCycleMs}ms)` : ''}</span>
                     {oa.storage?.compressionRatio && <span>compression <span className="text-fg-2">{oa.storage.compressionRatio}×</span></span>}
                 </div>
                 {oa.metrics?.lastError && (
-                    <div className="text-2xs text-red-300 mb-3">last error: {oa.metrics.lastError.message} <span className="text-fg-6">({ago(oa.metrics.lastError.at)})</span></div>
+                    <div className="text-2xs text-danger mb-3">last error: {oa.metrics.lastError.message} <span className="text-fg-6">({ago(oa.metrics.lastError.at)})</span></div>
                 )}
 
                 {/* per-index coverage */}
@@ -516,7 +521,7 @@ const DataManager = () => {
                     {/* A. Futures Archiver */}
                     <div className="bg-gray-800 p-6 rounded-xl border border-line shadow-lg h-fit">
                         <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-                            <FaCloudDownloadAlt className="text-green-400" /> Futures & AI Dataset
+                            <FaCloudDownloadAlt className="text-success" /> Futures & AI Dataset
                         </h2>
                         <div className="space-y-4">
                             <div>
@@ -562,7 +567,7 @@ const DataManager = () => {
                             </button>
                             
                             {archiveStatus && (
-                                <div className={`p-2 rounded text-center text-sm ${archiveStatus.includes('Error') ? 'bg-red-900/30 text-red-300' : 'bg-green-900/30 text-green-300'}`}>
+                                <div className={`p-2 rounded text-center text-sm ${archiveStatus.includes('Error') ? 'bg-red-900/30 text-danger' : 'bg-green-900/30 text-success'}`}>
                                     {archiveStatus}
                                 </div>
                             )}
@@ -570,9 +575,9 @@ const DataManager = () => {
                     </div>
 
                     {/* B. SPOT Archiver (New) */}
-                    <div className="bg-gray-800 p-6 rounded-xl border border-line shadow-lg h-fit text-orange-100 border-orange-900/50">
+                    <div className="bg-gray-800 p-6 rounded-xl border border-line shadow-lg h-fit text-warning border-orange-900/50">
                         <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-                             <FaDatabase className="text-orange-400" /> SPOT Data Archiver
+                             <FaDatabase className="text-warning" /> SPOT Data Archiver
                         </h2>
                         <p className="text-sm text-fg-4 mb-4">
                              Archive actual Index/Equity data for specific custom ranges.
@@ -639,7 +644,7 @@ const DataManager = () => {
                             </button>
 
                              {spotStatus && (
-                                <div className={`p-2 rounded text-center text-sm ${spotStatus.includes('Error') ? 'bg-red-900/30 text-red-300' : 'bg-orange-900/30 text-orange-300'}`}>
+                                <div className={`p-2 rounded text-center text-sm ${spotStatus.includes('Error') ? 'bg-red-900/30 text-danger' : 'bg-orange-900/30 text-warning'}`}>
                                     {spotStatus}
                                 </div>
                             )}
@@ -653,7 +658,7 @@ const DataManager = () => {
                         </h2>
                          <p className="text-sm text-fg-4 mb-4">
                              Fetches 1-minute history for <b>Current Month</b> Options (CE/PE) around the ATM.
-                            <br/><span className="text-xs text-orange-400">⚠️ Rate Limited: Takes ~30s for 20 strikes.</span>
+                            <br/><span className="text-xs text-warning">⚠️ Rate Limited: Takes ~30s for 20 strikes.</span>
                         </p>
 
                         <div className="space-y-4">
@@ -711,7 +716,7 @@ const DataManager = () => {
                             </button>
 
                              {optStatus && (
-                                <div className={`p-2 rounded text-center text-sm ${optStatus.includes('Error') ? 'bg-red-900/30 text-red-300' : 'bg-purple-900/30 text-purple-300'}`}>
+                                <div className={`p-2 rounded text-center text-sm ${optStatus.includes('Error') ? 'bg-red-900/30 text-danger' : 'bg-purple-900/30 text-purple-300'}`}>
                                     {optStatus}
                                 </div>
                             )}
@@ -722,7 +727,7 @@ const DataManager = () => {
                 {/* 2. Existing Archives List */}
                 <div className="bg-gray-800 p-6 rounded-xl border border-line shadow-lg">
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-                        <FaFolderOpen className="text-yellow-400" /> Local Archives
+                        <FaFolderOpen className="text-warning" /> Local Archives
                     </h2>
                     
                     {Object.keys(archives).length === 0 ? (
@@ -750,9 +755,9 @@ const DataManager = () => {
                                     tagLabel = 'OPT';
                                 } else if (isSpot) {
                                     borderClass = 'border-orange-800';
-                                    textClass = 'text-orange-300';
+                                    textClass = 'text-warning';
                                     tagBg = 'bg-orange-900';
-                                    tagText = 'text-orange-200';
+                                    tagText = 'text-warning';
                                     tagLabel = 'SPOT';
                                 }
 
@@ -765,7 +770,7 @@ const DataManager = () => {
                                     <div className="flex flex-wrap gap-2">
                                         {files.map((f, i) => (
                                             <div key={i} className="px-2 py-1 bg-gray-800 rounded text-xs border border-line text-fg-3 flex items-center gap-1">
-                                                <span className={`${isOption ? 'text-purple-400' : (isSpot ? 'text-orange-400' : 'text-green-400')} font-mono`}>
+                                                <span className={`${isOption ? 'text-purple-400' : (isSpot ? 'text-warning' : 'text-success')} font-mono`}>
                                                     {isOption ? f.label : `${f.resolution}m`}
                                                 </span>
                                                 {!isOption && <span className="opacity-50">CSV</span>}

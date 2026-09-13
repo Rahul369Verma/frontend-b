@@ -26,7 +26,7 @@ export function Help({ k, className = '' }) {
                         <span className="block text-2xs text-fg-2 mb-1.5">{h.short}</span>
                         <span className="block text-3xs text-fg-4 leading-relaxed">{h.detail}</span>
                         {h.gotcha && (
-                            <span className="block text-3xs text-amber-300/90 leading-relaxed mt-1.5 pt-1.5 border-t border-line">
+                            <span className="block text-3xs text-warning/90 leading-relaxed mt-1.5 pt-1.5 border-t border-line">
                                 <span className="font-semibold">Watch out: </span>{h.gotcha}
                             </span>
                         )}
@@ -41,7 +41,7 @@ export function Tile({ label, value, sub, good, bad, warn, help, title }) {
     return (
         <div className="bg-slate-800/60 border border-line rounded p-2" title={title}>
             <div className="text-3xs text-fg-5">{label}{help ? <Help k={help} /> : null}</div>
-            <div className={`text-sm font-semibold ${good ? 'text-emerald-300' : bad ? 'text-red-300' : warn ? 'text-amber-300' : 'text-fg-2'}`}>{value}</div>
+            <div className={`text-sm font-semibold ${good ? 'text-success' : bad ? 'text-danger' : warn ? 'text-warning' : 'text-fg-2'}`}>{value}</div>
             {sub ? <div className="text-4xs text-fg-5 font-mono mt-0.5">{sub}</div> : null}
         </div>
     );

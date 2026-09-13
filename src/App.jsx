@@ -8,6 +8,7 @@ import ThemeProvider from './theme/ThemeContext.jsx';
 import ThemePanel from './theme/ThemePanel.jsx';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 import ConfirmProvider from './components/ConfirmDialog.jsx';
+import Toaster from './components/Toast.jsx';
 import { pollInterval } from './hooks/usePolling.js';
 import { ALL_ROUTES, NAV_ITEMS } from './config/nav.js';
 import { useT } from './config/useT.js';
@@ -327,6 +328,9 @@ function App() {
     <ThemeProvider>
       <AuthProvider>
         <ConfirmProvider>
+          {/* One mount, near the root: notifications must outlive the page that
+              raised them (a deploy toast should survive navigating away). */}
+          <Toaster />
         <AuthGate>
           <GlobalProvider>
             <Router>

@@ -134,9 +134,9 @@ const PROFILE_LABELS = {
 
 function KpiCard({ label, value, sub, color = 'indigo', pulse = false }) {
     const colors = {
-        emerald: 'border-emerald-500/30 bg-emerald-500/5 text-emerald-400',
-        rose:    'border-rose-500/30    bg-rose-500/5    text-rose-400',
-        amber:   'border-amber-500/30   bg-amber-500/5   text-amber-400',
+        emerald: 'border-emerald-500/30 bg-emerald-500/5 text-success',
+        rose:    'border-rose-500/30    bg-rose-500/5    text-danger',
+        amber:   'border-amber-500/30   bg-amber-500/5   text-warning',
         indigo:  'border-indigo-500/30  bg-indigo-500/5  text-indigo-400',
         slate:   'border-line-2/40   bg-slate-800/40  text-fg-3',
     };
@@ -151,9 +151,9 @@ function KpiCard({ label, value, sub, color = 'indigo', pulse = false }) {
 
 function StatusBadge({ status }) {
     const map = {
-        PASS: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
-        FAIL: 'bg-rose-500/20    text-rose-300    border-rose-500/40',
-        WARN: 'bg-amber-500/20   text-amber-300   border-amber-500/40',
+        PASS: 'bg-emerald-500/20 text-success border-emerald-500/40',
+        FAIL: 'bg-rose-500/20    text-danger    border-rose-500/40',
+        WARN: 'bg-amber-500/20   text-warning   border-amber-500/40',
         SKIP: 'bg-slate-700/50   text-fg-4   border-line-2/40',
     };
     return (
@@ -219,7 +219,7 @@ function ResultRow({ row, expanded, onToggle }) {
                                     <span className="text-fg-5">Delta (MAE): <span className="text-fg font-mono">{row.value.toExponential(4)}</span></span>
                                     <span className="text-fg-5">Limit: <span className="text-fg font-mono">{row.threshold.toExponential(4)}</span></span>
                                     <span className="text-fg-5">Bars: <span className="text-fg font-mono">{row.bars.toLocaleString()}</span></span>
-                                    <span className="text-fg-5">Headroom: <span className={`font-mono ${row.threshold > 0 && row.value / row.threshold < 0.5 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                    <span className="text-fg-5">Headroom: <span className={`font-mono ${row.threshold > 0 && row.value / row.threshold < 0.5 ? 'text-success' : 'text-warning'}`}>
                                         {row.threshold > 0 ? `${(row.value / row.threshold * 100).toFixed(1)}% of limit` : '—'}
                                     </span></span>
                                 </div>
@@ -401,16 +401,16 @@ export default function ParityAuditDashboard() {
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-xl font-bold text-fg flex items-center gap-2">
-                        <span className="text-amber-400">⚡</span> Parity Audit Dashboard
+                        <span className="text-warning">⚡</span> Parity Audit Dashboard
                     </h1>
                     <p className="text-xs text-fg-5 mt-0.5">
                         Numerical consistency: Standard (pandas_ta/SB3) vs. Nitro (JAX/XLA) — first 100 warm-up bars skipped automatically
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
-                    {isDone  && <span className="text-2xs text-emerald-400 font-semibold">✓ Audit complete</span>}
-                    {isFailed && <span className="text-2xs text-rose-400 font-semibold">✗ Audit failed</span>}
-                    {isRunning && <span className="text-2xs text-amber-400 animate-pulse">Syncing engines…</span>}
+                    {isDone  && <span className="text-2xs text-success font-semibold">✓ Audit complete</span>}
+                    {isFailed && <span className="text-2xs text-danger font-semibold">✗ Audit failed</span>}
+                    {isRunning && <span className="text-2xs text-warning animate-pulse">Syncing engines…</span>}
                 </div>
             </div>
 
@@ -451,7 +451,7 @@ export default function ParityAuditDashboard() {
                     <div>
                         <label htmlFor="parityauditdashboard-feature-profile-2" className="text-xs text-fg-4 uppercase tracking-wider font-bold block mb-1">
                             Feature Profile
-                            <span className="ml-2 text-3xs text-amber-400/70 font-normal normal-case">
+                            <span className="ml-2 text-3xs text-warning/70 font-normal normal-case">
                                 {PROFILE_LABELS[config.profile]}
                             </span>
                         </label>
@@ -522,7 +522,7 @@ export default function ParityAuditDashboard() {
                 </div>
 
                 {/* Warm-up note */}
-                <div className="flex items-start gap-2 text-2xs text-amber-400/70 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2">
+                <div className="flex items-start gap-2 text-2xs text-warning/70 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2">
                     <FaExclamationTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
                     <span>
                         Warm-up bars are skipped before comparison. Wilder's smoothing (RSI, ATR, ADX) and rolling z-norm
@@ -661,9 +661,9 @@ export default function ParityAuditDashboard() {
                     <div className="flex items-center gap-2 px-4 py-2.5 border-b border-line bg-slate-900/80">
                         <FaTerminal className="w-3.5 h-3.5 text-fg-5" />
                         <span className="text-xs text-fg-4 font-bold uppercase tracking-wider">Validation Log</span>
-                        {isRunning && <span className="text-3xs text-amber-400 animate-pulse ml-auto">● Streaming</span>}
-                        {isDone   && <span className="text-3xs text-emerald-400 ml-auto">● Completed</span>}
-                        {isFailed && <span className="text-3xs text-rose-400 ml-auto">● Failed</span>}
+                        {isRunning && <span className="text-3xs text-warning animate-pulse ml-auto">● Streaming</span>}
+                        {isDone   && <span className="text-3xs text-success ml-auto">● Completed</span>}
+                        {isFailed && <span className="text-3xs text-danger ml-auto">● Failed</span>}
                     </div>
                     {/* bg-bg-2 (sunken-surface role), not bg-black: `--color-black` is pinned to
                         #000 in every theme by design, so text-fg-3 on it collapses to 1.2-1.8:1
@@ -676,7 +676,7 @@ export default function ParityAuditDashboard() {
                         className="h-64 overflow-y-auto bg-bg-2 p-3 text-xs font-mono text-fg-3 whitespace-pre-wrap leading-relaxed"
                     >
                         {logs || 'Waiting for output…'}
-                        {isRunning && <span className="animate-pulse text-amber-400">█</span>}
+                        {isRunning && <span className="animate-pulse text-warning">█</span>}
                     </div>
                 </div>
             )}

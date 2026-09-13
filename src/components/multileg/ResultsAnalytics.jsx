@@ -180,7 +180,7 @@ export default function ResultsAnalytics({
                 </div>
             )}
 
-            {err ? <div className="text-xs text-red-400">Analytics failed: {err}</div>
+            {err ? <div className="text-xs text-danger">Analytics failed: {err}</div>
                 : !summary ? <div className="text-xs text-fg-5">{loading ? 'Loading…' : 'No analytics available.'}</div>
                 : summary.trades === 0 ? (
                     <div className="text-xs text-fg-5">
@@ -224,7 +224,7 @@ export default function ResultsAnalytics({
                         </div>
 
                         {num(summary.excludedQuarantined) > 0 && (
-                            <div className="text-2xs text-amber-300 border border-amber-800/60 bg-amber-950/10 rounded px-2 py-1.5">
+                            <div className="text-2xs text-warning border border-amber-800/60 bg-amber-950/10 rounded px-2 py-1.5">
                                 ⚠ {summary.excludedQuarantined} quarantined trade{num(summary.excludedQuarantined) === 1 ? '' : 's'} excluded
                                 from every figure on this panel. They were booked on prices that never existed, so any P&L they
                                 carry is fiction. They are still listed in the trades table below, struck through, so the correction
@@ -315,8 +315,8 @@ export default function ResultsAnalytics({
                                                         <td className="truncate max-w-[11rem]" title={String(r.key ?? '')}>{rowLabel(r.key)}</td>
                                                         <td className="text-right">{fmt(r.trades)}</td>
                                                         <td className="text-right text-fg-4">{num(r.winRate) == null ? '—' : `${fmt(r.winRate)}%`}</td>
-                                                        <td className={`text-right font-semibold ${num(r.net) > 0 ? 'text-emerald-300' : num(r.net) < 0 ? 'text-red-300' : 'text-fg-4'}`}>{rup(r.net)}</td>
-                                                        <td className={`text-right ${num(r.perTrade) > 0 ? 'text-emerald-300' : num(r.perTrade) < 0 ? 'text-red-300' : 'text-fg-4'}`}>{rup(r.perTrade)}</td>
+                                                        <td className={`text-right font-semibold ${num(r.net) > 0 ? 'text-success' : num(r.net) < 0 ? 'text-danger' : 'text-fg-4'}`}>{rup(r.net)}</td>
+                                                        <td className={`text-right ${num(r.perTrade) > 0 ? 'text-success' : num(r.perTrade) < 0 ? 'text-danger' : 'text-fg-4'}`}>{rup(r.perTrade)}</td>
                                                     </tr>
                                                 ))}
                                             </tbody>

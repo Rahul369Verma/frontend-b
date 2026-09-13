@@ -87,7 +87,7 @@ export default function LoginPage() {
 
                         {/* Error */}
                         {error && (
-                            <div className="flex items-start gap-2 bg-red-900/20 border border-red-700/50 rounded-lg p-3 text-sm text-red-200">
+                            <div className="flex items-start gap-2 bg-red-900/20 border border-red-700/50 rounded-lg p-3 text-sm text-danger">
                                 <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
                                 <span>{error}</span>
                             </div>

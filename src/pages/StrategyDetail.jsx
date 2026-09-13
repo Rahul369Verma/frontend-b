@@ -401,7 +401,7 @@ export default function StrategyDetail() {
             />
 
             {error && (
-                <div className="mb-4 p-3 bg-red-900/20 border border-red-700/50 rounded text-red-300 text-sm">
+                <div className="mb-4 p-3 bg-red-900/20 border border-red-700/50 rounded text-danger text-sm">
                     {error}
                 </div>
             )}
@@ -415,8 +415,8 @@ export default function StrategyDetail() {
                     <span>id <span className="font-mono text-fg-4" title={String(currentDeployment._id)}>{String(currentDeployment._id).slice(-8)}</span></span>
                     <span>strategy <span className="text-fg">{currentDeployment.strategyName}</span></span>
                     <span>resolution <span className="text-fg">{currentDeployment.params?.resolution || '?'}m</span></span>
-                    <span>mode <span className={currentDeployment.tradeMode === 'LIVE' ? 'text-red-300' : 'text-blue-300'}>{currentDeployment.tradeMode || 'PAPER'}</span></span>
-                    <span>{currentDeployment.isActive ? <span className="text-emerald-300">active</span> : <span className="text-fg-5">inactive</span>}</span>
+                    <span>mode <span className={currentDeployment.tradeMode === 'LIVE' ? 'text-danger' : 'text-blue-300'}>{currentDeployment.tradeMode || 'PAPER'}</span></span>
+                    <span>{currentDeployment.isActive ? <span className="text-success">active</span> : <span className="text-fg-5">inactive</span>}</span>
                     {currentDeployment.params?.lots != null && <span>lots <span className="text-fg">{currentDeployment.params.lots}</span></span>}
                     {currentDeployment.params?.sl_points != null && <span>SL <span className="text-fg">{currentDeployment.params.sl_points}</span></span>}
                     {currentDeployment.params?.tp_points != null && <span>TP <span className="text-fg">{currentDeployment.params.tp_points}</span></span>}
@@ -426,7 +426,7 @@ export default function StrategyDetail() {
             )}
 
             {truncated && (
-                <div className="mb-4 p-3 bg-amber-900/20 border border-amber-700/50 rounded text-amber-300 text-xs">
+                <div className="mb-4 p-3 bg-amber-900/20 border border-amber-700/50 rounded text-warning text-xs">
                     Showing the newest {truncated.shown.toLocaleString()} of {truncated.total.toLocaleString()} matching trades.
                     KPIs and charts reflect this subset — narrow the date range for a complete view of an older window.
                 </div>
@@ -652,14 +652,14 @@ function TradesTable({ trades, openPos }) {
                     <tbody>
                         {filtered.slice(0, 200).map((t, i) => {
                             const pnl = tradePnl(t);
-                            const pnlCls = pnl > 0 ? 'text-emerald-400' : pnl < 0 ? 'text-red-400' : 'text-fg-3';
+                            const pnlCls = pnl > 0 ? 'text-success' : pnl < 0 ? 'text-danger' : 'text-fg-3';
                             return (
                                 <tr key={t._id || t.trade_id || i} className="border-b border-line-0 hover:bg-slate-800/40">
                                     <td className="px-2 py-1.5 text-fg-3">{shortTime(t.entryTime || t.timestamp)}</td>
                                     <td className="px-2 py-1.5 text-fg-3">{shortTime(t.exitTime || t.timestamp)}</td>
                                     <td className="px-2 py-1.5 text-fg-3 font-mono">{shortSymbol(t.tradingsymbol || t.symbol)}</td>
                                     <td className="px-2 py-1.5">
-                                        <span className={`px-1.5 py-0.5 rounded text-3xs ${(t.type || t.side) === 'CE' || (t.side === 'CALL') ? 'bg-emerald-900/40 text-emerald-300' : 'bg-red-900/40 text-red-300'}`}>
+                                        <span className={`px-1.5 py-0.5 rounded text-3xs ${(t.type || t.side) === 'CE' || (t.side === 'CALL') ? 'bg-emerald-900/40 text-success' : 'bg-red-900/40 text-danger'}`}>
                                             {t.type || t.side}
                                         </span>
                                     </td>
@@ -886,7 +886,7 @@ function DistributionView({ histogram, hourMap, kpis }) {
                 {/* Anything outside the grid is NAMED, not dropped. The grid used to
                     end at 15:30 and silently discard every later entry. */}
                 {hourMap.outside?.length > 0 && (
-                    <div className="text-3xs text-amber-300/80 mt-1">
+                    <div className="text-3xs text-warning/80 mt-1">
                         ⚠ {hourMap.outside.length} trade(s) entered outside the session window and are not in this grid
                         ({fmtINR(hourMap.outside.reduce((a, o) => a + (o.pnl || 0), 0))} net) — check their timestamps.
                     </div>

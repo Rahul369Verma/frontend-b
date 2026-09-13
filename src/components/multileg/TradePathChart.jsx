@@ -47,7 +47,7 @@ function Stat({ label, value, good, bad, warn, title }) {
     return (
         <div className="min-w-[5rem]" title={title}>
             <div className="text-4xs text-fg-6 uppercase tracking-wide">{label}</div>
-            <div className={`text-2xs font-mono ${good ? 'text-emerald-300' : bad ? 'text-red-300' : warn ? 'text-amber-300' : 'text-fg-2'}`}>{value}</div>
+            <div className={`text-2xs font-mono ${good ? 'text-success' : bad ? 'text-danger' : warn ? 'text-warning' : 'text-fg-2'}`}>{value}</div>
         </div>
     );
 }

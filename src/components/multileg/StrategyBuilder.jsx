@@ -48,10 +48,10 @@ const MAX_LEGS = 12;   // the server rejects a 13th — refuse locally rather th
 const RATIO_MULTIPLIERS = [1, 2, 3, 5, 10];
 
 const GRADE_STYLE = {
-    good: 'text-emerald-300 border-emerald-700/50 bg-emerald-950/20',
+    good: 'text-success border-emerald-700/50 bg-emerald-950/20',
     fair: 'text-sky-300 border-sky-700/50 bg-sky-950/20',
-    poor: 'text-amber-300 border-amber-700/50 bg-amber-950/10',
-    untradeable: 'text-red-300 border-red-700/50 bg-red-950/25',
+    poor: 'text-warning border-amber-700/50 bg-amber-950/10',
+    untradeable: 'text-danger border-red-700/50 bg-red-950/25',
     unknown: 'text-fg-4 border-line-2 bg-slate-800/40',
 };
 const GRADE_NOTE = {
@@ -599,7 +599,7 @@ export default function StrategyBuilder() {
     // ── error banner (all three server shapes are distinct problems) ─────────
     const errorBanner = err && (
         <div className={`rounded-lg border p-2.5 mb-3 ${err.status === 422 ? 'border-amber-700/60 bg-amber-950/20' : 'border-red-800/60 bg-red-950/20'}`}>
-            <div className={`text-2xs font-semibold ${err.status === 422 ? 'text-amber-200' : 'text-red-200'}`}>
+            <div className={`text-2xs font-semibold ${err.status === 422 ? 'text-warning' : 'text-danger'}`}>
                 {err.status === 400 && '✕ Invalid structure'}
                 {err.status === 422 && (err.badExpiries?.length
                     ? '⚠ That is not a real expiry date'
@@ -608,11 +608,11 @@ export default function StrategyBuilder() {
                 {![400, 422, 503].includes(err.status) && '✕ Analyze failed'}
             </div>
             <div className="text-2xs text-fg-3 mt-0.5 break-words">{err.error}</div>
-            {err.hint && <div className="text-3xs text-amber-300/90 mt-1">{err.hint}</div>}
+            {err.hint && <div className="text-3xs text-warning/90 mt-1">{err.hint}</div>}
             {err.status === 422 && Array.isArray(err.legs) && (
                 <div className="text-3xs text-fg-4 font-mono mt-1 space-y-0.5">
                     {err.legs.map((l, i) => (
-                        <div key={i} className={num(l.premium) > 0 ? 'text-fg-5' : 'text-amber-300'}>
+                        <div key={i} className={num(l.premium) > 0 ? 'text-fg-5' : 'text-warning'}>
                             {num(l.premium) > 0 ? '✓' : '✕'} {l.action} {l.ratio > 1 ? `${l.ratio}× ` : ''}{l.type} {fmt(l.strike)} {l.expiry} — {num(l.premium) > 0 ? `₹${fmt(l.premium, 2)}` : 'no quote'}
                         </div>
                     ))}
@@ -668,7 +668,7 @@ export default function StrategyBuilder() {
                     {num(chain?.pcr) != null && <span>PCR {fmt(chain.pcr, 2)}</span>}
                     {num(chain?.maxPain) != null && <span>max pain {fmt(chain.maxPain)}</span>}
                     {chain?.ageSec != null && (
-                        <span className={chain.stale ? 'text-amber-400' : 'text-fg-6'}>
+                        <span className={chain.stale ? 'text-warning' : 'text-fg-6'}>
                             chain {chain.ageSec < 90 ? `${chain.ageSec}s` : `${Math.round(chain.ageSec / 60)}m`} old{chain.stale ? ' · ⚠ stale' : ''}
                         </span>
                     )}
@@ -679,19 +679,19 @@ export default function StrategyBuilder() {
                 </div>
 
                 {chainErr && (
-                    <div className="text-2xs text-red-300 mt-2 rounded border border-red-800/60 bg-red-950/20 p-2">
+                    <div className="text-2xs text-danger mt-2 rounded border border-red-800/60 bg-red-950/20 p-2">
                         ✕ Chain unavailable — {chainErr}. You can still build: type strikes by hand and the server prices each leg live.
                     </div>
                 )}
                 {chainDead && (
-                    <div className="text-2xs text-amber-300 mt-2 rounded border border-amber-700/50 bg-amber-950/15 p-2">
+                    <div className="text-2xs text-warning mt-2 rounded border border-amber-700/50 bg-amber-950/15 p-2">
                         ⚠ No chain data for {shortSym(symbol)} — neither an archived snapshot nor a live broker chain came back.
                         The ladder has strikes but no premiums, IV, OI or greeks. Premiums are still fetched live when the structure is
                         analysed, so you can type strikes in by hand and it will price them.
                     </div>
                 )}
                 {chain?.expiryListed === false && (
-                    <div className="text-2xs text-amber-300 mt-2 rounded border border-amber-700/50 bg-amber-950/15 p-2">
+                    <div className="text-2xs text-warning mt-2 rounded border border-amber-700/50 bg-amber-950/15 p-2">
                         ⚠ <b>{chain.expiryRequested || chain.expiry}</b> is not an expiry the broker lists for {shortSym(symbol)}.
                         No contracts exist on that date, so nothing can be priced. Pick one from the Expiry dropdown —
                         {Array.isArray(chain.expiries) && chain.expiries.length
@@ -764,7 +764,7 @@ export default function StrategyBuilder() {
                     Template offsets are relative to ATM in strike steps, toward OTM. They are resolved to absolute strikes here — edit anything afterwards; the structure is no longer template-bound.
                 </div>
                 {seededFar && (
-                    <div className="text-3xs text-amber-300 mt-1">⚠ This template has a FAR-expiry leg. A +7-day placeholder was seeded — set the real far expiry on that leg before trusting the numbers.</div>
+                    <div className="text-3xs text-warning mt-1">⚠ This template has a FAR-expiry leg. A +7-day placeholder was seeded — set the real far expiry on that leg before trusting the numbers.</div>
                 )}
             </div>
 
@@ -776,7 +776,7 @@ export default function StrategyBuilder() {
                     {(resp?.warnings || []).map((w, i) => {
                         const severe = /undefined maximum loss|ruinous|uncovered/i.test(w);
                         return (
-                            <div key={i} className={`rounded-lg border p-2 text-2xs ${severe ? 'border-red-800/60 bg-red-950/20 text-red-200' : 'border-amber-700/50 bg-amber-950/15 text-amber-200'}`}>
+                            <div key={i} className={`rounded-lg border p-2 text-2xs ${severe ? 'border-red-800/60 bg-red-950/20 text-danger' : 'border-amber-700/50 bg-amber-950/15 text-warning'}`}>
                                 {severe ? '⛔ ' : '⚠ '}{w}
                             </div>
                         );
@@ -787,7 +787,7 @@ export default function StrategyBuilder() {
                             <span className={`text-3xs px-2 py-0.5 rounded border font-semibold uppercase ${GRADE_STYLE[liq.grade] || GRADE_STYLE.unknown}`}>{liq.grade || 'unknown'}</span>
                             <span className="text-3xs text-fg-4">worst leg half-spread<Help k="max-half-spread-pct" /> {pct(liq.worstHalfSpreadPct, 2)}</span>
                             <span className="text-3xs text-fg-4">round-trip {rup(liq.roundTripRupees)}</span>
-                            <span className={`text-3xs ${num(liq.costPctOfGross) > 10 ? 'text-red-300' : 'text-fg-4'}`}>{pct(liq.costPctOfGross, 1)} of gross</span>
+                            <span className={`text-3xs ${num(liq.costPctOfGross) > 10 ? 'text-danger' : 'text-fg-4'}`}>{pct(liq.costPctOfGross, 1)} of gross</span>
                             <span className="text-3xs text-fg-6">{GRADE_NOTE[liq.grade] || GRADE_NOTE.unknown}</span>
                         </div>
                     )}
@@ -807,7 +807,7 @@ export default function StrategyBuilder() {
                             <button onClick={syncExpiries} disabled={!legs.length || !(chain?.expiry || expiry)} className={btnCls}
                                 title="Set every leg to the selected expiry">sync expiries</button>
                             <button onClick={clearLegs} disabled={!legs.length}
-                                className="text-3xs px-2 py-0.5 rounded border border-line-2 bg-slate-800 text-fg-4 hover:text-red-300 disabled:opacity-30">clear</button>
+                                className="text-3xs px-2 py-0.5 rounded border border-line-2 bg-slate-800 text-fg-4 hover:text-danger disabled:opacity-30">clear</button>
                         </div>
                     </div>
 
@@ -857,12 +857,21 @@ export default function StrategyBuilder() {
                                 const pl = ri >= 0 ? (an?.perLeg?.[ri] || null) : null;
                                 const active = activeLegId === l.id;
                                 return (
+                                    // Selecting a leg IS an action, so this is a real
+                                    // control: role + tabIndex + key handling make it
+                                    // reachable and operable without a mouse. (Its
+                                    // children stopPropagation; that does not make the
+                                    // row itself presentational.)
                                     <div key={l.id}
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-pressed={active}
+                                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveLegId(l.id); } }}
                                         onClick={() => setActiveLegId(l.id)}
                                         className={`rounded border p-1.5 cursor-pointer ${active ? 'border-primary/70 bg-primary/5' : 'border-line bg-slate-800/40'}`}>
                                         <div className="flex flex-wrap items-center gap-1">
                                             <button onClick={(e) => { e.stopPropagation(); patchLeg(l.id, { action: l.action === 'BUY' ? 'SELL' : 'BUY' }); }}
-                                                className={`w-11 text-3xs py-1 rounded border font-semibold ${l.action === 'BUY' ? 'border-emerald-700/60 bg-emerald-950/40 text-emerald-300' : 'border-red-700/60 bg-red-950/40 text-red-300'}`}>
+                                                className={`w-11 text-3xs py-1 rounded border font-semibold ${l.action === 'BUY' ? 'border-emerald-700/60 bg-emerald-950/40 text-success' : 'border-red-700/60 bg-red-950/40 text-danger'}`}>
                                                 {l.action === 'BUY' ? 'BUY' : 'SELL'}
                                             </button>
                                             <button onClick={(e) => { e.stopPropagation(); patchLeg(l.id, { type: l.type === 'CE' ? 'PE' : 'CE', premium: '' }); }}
@@ -894,7 +903,7 @@ export default function StrategyBuilder() {
                                                 <button onClick={(e) => { e.stopPropagation(); dupLeg(l.id); }} disabled={legs.length >= MAX_LEGS}
                                                     className="text-3xs px-1.5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-fg disabled:opacity-30" title="Duplicate this leg">⧉</button>
                                                 <button onClick={(e) => { e.stopPropagation(); removeLeg(l.id); }}
-                                                    className="text-3xs px-1.5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-red-300" title="Remove this leg">✕</button>
+                                                    className="text-3xs px-1.5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-danger" title="Remove this leg">✕</button>
                                             </div>
                                         </div>
                                         <div className="text-4xs font-mono text-fg-5 mt-1 flex flex-wrap gap-x-2">
@@ -902,7 +911,7 @@ export default function StrategyBuilder() {
                                             {rl && (
                                                 <>
                                                     <span>prem ₹{fmt(rl.premium, 2)}</span>
-                                                    <span className={rl.premiumSource === 'user' ? 'text-amber-400' : rl.premiumSource === 'mid' ? 'text-emerald-400' : 'text-sky-400'}
+                                                    <span className={rl.premiumSource === 'user' ? 'text-warning' : rl.premiumSource === 'mid' ? 'text-success' : 'text-sky-400'}
                                                         title={rl.premiumSource === 'user' ? 'you pinned this price' : rl.premiumSource === 'mid' ? 'mid of the live bid/ask' : 'last traded price — no two-sided quote'}>
                                                         {rl.premiumSource || '—'}
                                                     </span>
@@ -919,7 +928,7 @@ export default function StrategyBuilder() {
                                                     )}
                                                     {l.premium === '' && num(rl.premium) > 0 && (
                                                         <button onClick={(e) => { e.stopPropagation(); patchLeg(l.id, { premium: String(rl.premium) }); }}
-                                                            className="text-fg-5 hover:text-amber-300" title="Pin this price so the analysis stops re-fetching it">📌 pin</button>
+                                                            className="text-fg-5 hover:text-warning" title="Pin this price so the analysis stops re-fetching it">📌 pin</button>
                                                     )}
                                                 </>
                                             )}
@@ -930,7 +939,7 @@ export default function StrategyBuilder() {
                             })}
                         </div>
                     )}
-                    {legs.length >= MAX_LEGS && <div className="text-3xs text-amber-400 mt-1.5">Leg cap reached — the server refuses more than {MAX_LEGS}.</div>}
+                    {legs.length >= MAX_LEGS && <div className="text-3xs text-warning mt-1.5">Leg cap reached — the server refuses more than {MAX_LEGS}.</div>}
 
                     {/* SAVE */}
                     <div className="mt-3 pt-2.5 border-t border-line-0 flex flex-wrap items-center gap-2">
@@ -940,7 +949,7 @@ export default function StrategyBuilder() {
                             className="text-2xs px-3 py-1.5 rounded border border-primary/40 bg-primary/15 text-primary-ink hover:bg-primary/25 disabled:opacity-30">
                             {saving ? 'saving…' : '💾 Save structure'}
                         </button>
-                        {saveState && <span className={`text-3xs ${saveState.ok ? 'text-emerald-300' : 'text-red-300'}`}>{saveState.msg}</span>}
+                        {saveState && <span className={`text-3xs ${saveState.ok ? 'text-success' : 'text-danger'}`}>{saveState.msg}</span>}
                     </div>
                     <div className="text-4xs text-fg-6 mt-1">Saved as a <span className="font-mono">custom</span> structure with absolute strikes — it is a snapshot of these legs, not a relative recipe that re-centres on a future ATM.</div>
                 </div>
@@ -1071,8 +1080,8 @@ export default function StrategyBuilder() {
                                                 <td className="text-fg-3 pr-4">±{fmt(b.sd)}σ</td>
                                                 <td className="text-right text-fg-3 px-3">{fmt(b.points, 1)}</td>
                                                 <td className="text-right text-fg-4 px-3">{pct(b.pct, 1)}</td>
-                                                <td className="text-right text-red-300 px-3">{fmt(b.down)}</td>
-                                                <td className="text-right text-emerald-300 px-3">{fmt(b.up)}</td>
+                                                <td className="text-right text-danger px-3">{fmt(b.down)}</td>
+                                                <td className="text-right text-success px-3">{fmt(b.up)}</td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -1087,13 +1096,13 @@ export default function StrategyBuilder() {
                         <button type="button" onClick={() => setChargesOpen(o => !o)}
                             className={`mt-2.5 w-full text-left rounded-lg border p-2 flex flex-wrap items-center gap-x-3 gap-y-1 ${chargesHeavy ? 'border-amber-700/50 bg-amber-950/15' : 'border-line-0 bg-slate-800/30'}`}>
                             <span className="text-2xs font-semibold text-fg-2">{chargesOpen ? '▾' : '▸'} 💸 Round-trip charges (estimate)</span>
-                            <span className={`text-2xs font-semibold ${chargesHeavy ? 'text-amber-300' : 'text-fg-3'}`}>{rup(chargesRupees, 0)}</span>
-                            <span className={`text-3xs ${chargesHeavy ? 'text-amber-300' : 'text-fg-5'}`}>
+                            <span className={`text-2xs font-semibold ${chargesHeavy ? 'text-warning' : 'text-fg-3'}`}>{rup(chargesRupees, 0)}</span>
+                            <span className={`text-3xs ${chargesHeavy ? 'text-warning' : 'text-fg-5'}`}>
                                 {chargePctOfBest != null ? `${pct(chargePctOfBest, 1)} of max profit`
                                     : an.unboundedProfit ? 'max profit is unbounded — no percentage to compare against'
                                         : 'no positive best case to compare against'}
                             </span>
-                            {chargesHeavy && <span className="text-3xs text-amber-300">⚠ more than a quarter of everything this structure can make</span>}
+                            {chargesHeavy && <span className="text-3xs text-warning">⚠ more than a quarter of everything this structure can make</span>}
                         </button>
                         {chargesOpen && (
                             <div className="text-3xs text-fg-4 rounded-b-lg border border-t-0 border-line-0 bg-slate-900/40 p-2.5 space-y-1">
@@ -1104,7 +1113,7 @@ export default function StrategyBuilder() {
                                 <div>
                                     Half of it (the entry side) is spent the moment the structure is opened and cannot be avoided by holding on. Every other number on this page is GROSS, so this is the money standing between them and what you actually keep.
                                 </div>
-                                <div className={chargesHeavy ? 'text-amber-300' : 'text-fg-5'}>
+                                <div className={chargesHeavy ? 'text-warning' : 'text-fg-5'}>
                                     {chargePctOfBest != null
                                         ? `Max profit ${rup(bestCase)} · charges ${rup(chargesRupees, 0)} = ${pct(chargePctOfBest, 1)} of it.${chargesHeavy ? ' That is past the 25% line where costs stop being a rounding error and start being the trade.' : ''}`
                                         : an.unboundedProfit
@@ -1248,8 +1257,8 @@ function DeltaTile({ label, base, now, digits = 0, suffix = '', money = false, u
     return (
         <div className="bg-slate-800/60 border border-line rounded p-2">
             <div className="text-3xs text-fg-5">{label}</div>
-            <div className={`text-sm font-semibold ${unboundedNow ? 'text-red-300' : 'text-fg-2'}`}>{val}</div>
-            {delta && <div className={`text-4xs font-mono mt-0.5 ${dir > 0 ? 'text-emerald-400' : dir < 0 ? 'text-red-400' : 'text-fg-5'}`}>{delta}</div>}
+            <div className={`text-sm font-semibold ${unboundedNow ? 'text-danger' : 'text-fg-2'}`}>{val}</div>
+            {delta && <div className={`text-4xs font-mono mt-0.5 ${dir > 0 ? 'text-success' : dir < 0 ? 'text-danger' : 'text-fg-5'}`}>{delta}</div>}
         </div>
     );
 }

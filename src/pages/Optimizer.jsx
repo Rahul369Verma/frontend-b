@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useId } from 'react';
 import { PageHeader } from '../components/viz/primitives';
 import { useNavigate } from 'react-router-dom';
 import { Activity, Play, TrendingUp, AlertTriangle, Code, ChevronDown, ChevronRight, Check, Trophy, Square, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
@@ -66,6 +66,9 @@ const fmtPF = (v) => {
 };
 
 export default function Optimizer() {
+  // Stable, collision-free ids for the two switches' visible labels.
+  const stopMatchLabelId = useId();
+  const oosLabelId = useId();
   const navigate = useNavigate();
   const {
     optimizerParams: config,
@@ -777,7 +780,7 @@ export default function Optimizer() {
                   <option value="Real Option Data">Real Option Data (Slow & Accurate)</option>
                 </select>
                 {config.backtest_mode === 'Real Option Data' && (
-                  <div className="text-3xs text-orange-400 mt-1 flex items-center gap-1">
+                  <div className="text-3xs text-warning mt-1 flex items-center gap-1">
                     <AlertTriangle className="w-3 h-3" />
                     <span>Warning: Extremely slow! Fetches option history for every trade.</span>
                   </div>
@@ -897,23 +900,44 @@ export default function Optimizer() {
                 carry: on a light theme the face alone is 1.3-1.8:1 against the track, and
                 it is the RING that delineates it (4.4-6.3:1). Dark themes are the mirror —
                 the face carries it and the ring is a subtle inner edge. */}
+            {/* A SWITCH, NOT A DIV. This was a <div onClick> — invisible to
+                keyboard and to screen readers, so the setting simply could not be
+                changed without a mouse and was never announced as on or off. A
+                real <button role="switch"> gets Tab, Space/Enter and state for
+                free; the label is clickable too, which doubles the hit area. */}
+            {/* A <label> around a role="switch" button is not a label/control pair:
+                a label must point at a form control. `aria-labelledby` on the
+                switch, naming the visible text, is the pattern that actually
+                announces "Stop on First Match, switch, on". */}
             <div className="flex items-center gap-3 p-3 bg-slate-800 rounded-lg border border-line">
-              <div className={`w-10 h-6 rounded-full p-1 cursor-pointer transition-colors ${stopOnMatch ? 'bg-green-500' : 'bg-slate-600'}`}
-                onClick={() => setStopOnMatch(!stopOnMatch)}>
-                <div className={`w-4 h-4 bg-white border border-gray-300 rounded-full transition-transform ${stopOnMatch ? 'translate-x-4' : 'translate-x-0'}`} />
-              </div>
-              <span className="text-sm font-medium text-fg-3">Stop on First Match (per strategy)</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={stopOnMatch}
+                aria-labelledby={stopMatchLabelId}
+                onClick={() => setStopOnMatch(!stopOnMatch)}
+                className={`w-10 h-6 shrink-0 rounded-full p-1 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${stopOnMatch ? 'bg-success' : 'bg-slate-600'}`}
+              >
+                <span className={`block w-4 h-4 bg-white border border-gray-300 rounded-full transition-transform ${stopOnMatch ? 'translate-x-4' : 'translate-x-0'}`} />
+              </button>
+              <span id={stopMatchLabelId} className="text-sm font-medium text-fg-3">Stop on First Match (per strategy)</span>
             </div>
 
             {/* ── Out-of-sample (walk-forward) validation ─────────────── */}
             <div className="p-3 bg-slate-800 rounded-lg border border-line space-y-2">
               <div className="flex items-center gap-3">
-                <div className={`w-10 h-6 rounded-full p-1 cursor-pointer transition-colors ${config.oos_enabled ? 'bg-emerald-500' : 'bg-slate-600'}`}
-                  onClick={() => setConfig({ ...config, oos_enabled: !config.oos_enabled })}>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={config.oos_enabled}
+                  aria-labelledby={oosLabelId}
+                  onClick={() => setConfig({ ...config, oos_enabled: !config.oos_enabled })}
+                  className={`w-10 h-6 shrink-0 rounded-full p-1 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${config.oos_enabled ? 'bg-success' : 'bg-slate-600'}`}
+                >
                   {/* Same knob recipe as the Stop-on-First-Match switch above. */}
-                  <div className={`w-4 h-4 bg-white border border-gray-300 rounded-full transition-transform ${config.oos_enabled ? 'translate-x-4' : 'translate-x-0'}`} />
-                </div>
-                <span className="text-sm font-medium text-fg-3">Out-of-Sample Validation 🛡️</span>
+                  <span className={`block w-4 h-4 bg-white border border-gray-300 rounded-full transition-transform ${config.oos_enabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                </button>
+                <span id={oosLabelId} className="text-sm font-medium text-fg-3">Out-of-Sample Validation 🛡️</span>
               </div>
               <p className="text-2xs text-fg-5">
                 Optimizes on the earlier part of the range and <span className="text-fg-3">validates on a held-out tail</span> it never saw — so overfit sets (great in-sample, bad out-of-sample) are flagged, not picked.
@@ -941,7 +965,7 @@ export default function Optimizer() {
             </button>
 
             {error && (
-              <div className="p-3 bg-red-500/10 border border-red-500/50 rounded text-red-400 text-sm flex items-center gap-2">
+              <div className="p-3 bg-red-500/10 border border-red-500/50 rounded text-danger text-sm flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4" />
                 {error}
               </div>
@@ -974,10 +998,10 @@ export default function Optimizer() {
               <div className="text-center space-y-2">
                 <p className="text-xl font-bold text-fg">Running Optimization...</p>
                 {overallEtaLabel && (
-                  <p className="text-sm text-amber-300 font-semibold" title="Estimated time for the WHOLE run — the current strategy's remaining time plus every strategy still queued.">
+                  <p className="text-sm text-warning font-semibold" title="Estimated time for the WHOLE run — the current strategy's remaining time plus every strategy still queued.">
                     ⏳ Overall ETA: {overallEtaLabel}
                     {progress.totalStrategies > 1 && (
-                      <span className="text-amber-300/60 font-normal"> · all {progress.totalStrategies} strategies</span>
+                      <span className="text-warning/60 font-normal"> · all {progress.totalStrategies} strategies</span>
                     )}
                   </p>
                 )}
@@ -990,7 +1014,7 @@ export default function Optimizer() {
                   </p>
                 )}
                 <p className="text-fg-4">Overall {progress.current} of {progress.total}</p>
-                <p className="text-green-400 font-medium">Found {progress.matches} matches in current strategy</p>
+                <p className="text-success font-medium">Found {progress.matches} matches in current strategy</p>
               </div>
 
               <button
@@ -1010,7 +1034,7 @@ export default function Optimizer() {
               <div className="flex justify-between items-start gap-3">
                 <div>
                   <h3 className="text-xl font-bold flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-green-400" />
+                    <TrendingUp className="w-5 h-5 text-success" />
                     Optimization Results
                   </h3>
                   {/* Run context — what these results were optimized on (from the
@@ -1029,7 +1053,7 @@ export default function Optimizer() {
                         {rc.capital != null && <span>· ₹{Number(rc.capital).toLocaleString('en-IN')}</span>}
                         {rc.backtest_mode && <span>· {rc.backtest_mode}</span>}
                         {rc.oos_enabled && rc.oos_split_date && (
-                          <span className="text-emerald-400">· 🛡️ OOS: train→{rc.oos_split_date}, test after ({Math.round((rc.oos_fraction ?? 0.3) * 100)}%)</span>
+                          <span className="text-success">· 🛡️ OOS: train→{rc.oos_split_date}, test after ({Math.round((rc.oos_fraction ?? 0.3) * 100)}%)</span>
                         )}
                       </div>
                     );
@@ -1038,7 +1062,7 @@ export default function Optimizer() {
                 <div className="flex flex-col items-end gap-1.5 shrink-0">
                   <span className="text-sm text-fg-4 flex items-center gap-2">
                     {results.stopped && (
-                      <span className="text-2xs px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300">
+                      <span className="text-2xs px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/40 text-warning">
                         ⏹ Stopped early{results.completed_strategies != null ? ` · ${results.completed_strategies}/${progress.totalStrategies || results.completed_strategies} strategies` : ''}
                       </span>
                     )}
@@ -1049,7 +1073,7 @@ export default function Optimizer() {
                       onClick={toggleDeflateRank}
                       title={"Anti data-mining ranking. Penalizes the in-sample→out-of-sample performance gap (overfitting) and the best-of-N selection bias from trying thousands of param-sets (López de Prado / Bailey, 'Deflated Sharpe'). ON is recommended — it re-ranks instantly, no re-run. OFF ranks by the raw robust score."}
                       className={`text-2xs px-2.5 py-1 rounded-full border transition-colors ${deflateRank
-                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-success hover:bg-emerald-500/25'
                         : 'bg-slate-700/60 border-line-2 text-fg-3 hover:bg-slate-700'}`}
                     >
                       {deflateRank ? '🛡️ Anti-overfit ranking: ON' : 'Anti-overfit ranking: OFF'}
@@ -1074,7 +1098,7 @@ export default function Optimizer() {
                   // latter is the honest, important signal when OOS is on.
                   const overfitOnly = hasOos && totalMatches > 0;
                   return (
-                    <div className="p-4 bg-yellow-500/10 border border-yellow-500/40 rounded-lg text-yellow-300 text-sm flex items-center gap-2">
+                    <div className="p-4 bg-yellow-500/10 border border-yellow-500/40 rounded-lg text-warning text-sm flex items-center gap-2">
                       <AlertTriangle className="w-4 h-4 shrink-0" />
                       {overfitOnly
                         ? 'No strategy held up out-of-sample. Every candidate that looked good on the training window failed on the held-out window — i.e. overfit. Nothing here is safe to trade as-is; widen the date range, loosen the filters, or try other strategies. (Sets are still listed below for inspection, dimmed.)'
@@ -1086,31 +1110,31 @@ export default function Optimizer() {
                 return (
                   <div className="p-4 bg-gradient-to-r from-amber-500/10 to-slate-900/0 border border-amber-500/40 rounded-lg">
                     <div className="flex items-center gap-2 mb-3 flex-wrap">
-                      <Trophy className="w-5 h-5 text-amber-400" />
-                      <span className="text-amber-300 font-bold">Best Strategy: {winner.label}</span>
+                      <Trophy className="w-5 h-5 text-warning" />
+                      <span className="text-warning font-bold">Best Strategy: {winner.label}</span>
                       <span className="text-xs text-fg-4">(score {fmtScore(hasOos && winner.best.robust ? activeRank(winner.best) : winner.best.score)})</span>
                       {hasOos && winner.best.oos && (
                         winner.best.robust
-                          ? <span className="text-2xs px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-300">🛡️ Holds up out-of-sample</span>
-                          : <span className="text-2xs px-2 py-0.5 rounded-full bg-red-500/15 border border-red-500/40 text-red-300">⚠ Overfit — fails out-of-sample</span>
+                          ? <span className="text-2xs px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-success">🛡️ Holds up out-of-sample</span>
+                          : <span className="text-2xs px-2 py-0.5 rounded-full bg-red-500/15 border border-red-500/40 text-danger">⚠ Overfit — fails out-of-sample</span>
                       )}
                     </div>
                     <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 text-center">
-                      <div><div className="text-2xs text-fg-4">PnL{hasOos ? ' (IS)' : ''}</div><div className="font-mono text-green-400">{fmtPnL(m.totalPnL)}</div></div>
-                      <div><div className="text-2xs text-fg-4">Win Rate</div><div className="text-green-400">{m.winRate}%</div></div>
+                      <div><div className="text-2xs text-fg-4">PnL{hasOos ? ' (IS)' : ''}</div><div className="font-mono text-success">{fmtPnL(m.totalPnL)}</div></div>
+                      <div><div className="text-2xs text-fg-4">Win Rate</div><div className="text-success">{m.winRate}%</div></div>
                       <div><div className="text-2xs text-fg-4">Trades</div><div>{m.totalTrades}</div></div>
-                      <div><div className="text-2xs text-fg-4">Max DD</div><div className="text-red-400">{m.maxDrawdown}%</div></div>
+                      <div><div className="text-2xs text-fg-4">Max DD</div><div className="text-danger">{m.maxDrawdown}%</div></div>
                       <div><div className="text-2xs text-fg-4">Sharpe</div><div className="text-blue-400">{m.sharpeRatio}</div></div>
                       <div><div className="text-2xs text-fg-4">Profit Factor</div><div className="text-purple-300">{fmtPF(m.profitFactor)}</div></div>
                     </div>
                     {hasOos && winner.best.oos && (
                       <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 text-center mt-2 pt-2 border-t border-amber-500/20">
-                        <div><div className="text-2xs text-emerald-400">OOS PnL</div><div className={`font-mono ${(winner.best.oos.totalPnL ?? 0) > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fmtPnL(winner.best.oos.totalPnL)}</div></div>
-                        <div><div className="text-2xs text-emerald-400">OOS Win%</div><div className="text-emerald-300">{winner.best.oos.winRate}%</div></div>
-                        <div><div className="text-2xs text-emerald-400">OOS Trades</div><div>{winner.best.oos.totalTrades}</div></div>
-                        <div><div className="text-2xs text-emerald-400">OOS Max DD</div><div className="text-red-400">{winner.best.oos.maxDrawdown}%</div></div>
-                        <div><div className="text-2xs text-emerald-400">OOS Sharpe</div><div className="text-blue-400">{winner.best.oos.sharpeRatio}</div></div>
-                        <div><div className="text-2xs text-emerald-400">OOS PF</div><div className="text-purple-300">{fmtPF(winner.best.oos.profitFactor)}</div></div>
+                        <div><div className="text-2xs text-success">OOS PnL</div><div className={`font-mono ${(winner.best.oos.totalPnL ?? 0) > 0 ? 'text-success' : 'text-danger'}`}>{fmtPnL(winner.best.oos.totalPnL)}</div></div>
+                        <div><div className="text-2xs text-success">OOS Win%</div><div className="text-success">{winner.best.oos.winRate}%</div></div>
+                        <div><div className="text-2xs text-success">OOS Trades</div><div>{winner.best.oos.totalTrades}</div></div>
+                        <div><div className="text-2xs text-success">OOS Max DD</div><div className="text-danger">{winner.best.oos.maxDrawdown}%</div></div>
+                        <div><div className="text-2xs text-success">OOS Sharpe</div><div className="text-blue-400">{winner.best.oos.sharpeRatio}</div></div>
+                        <div><div className="text-2xs text-success">OOS PF</div><div className="text-purple-300">{fmtPF(winner.best.oos.profitFactor)}</div></div>
                       </div>
                     )}
                     {/* FULL-RANGE reconciliation — the single most-confusing thing
@@ -1121,15 +1145,15 @@ export default function Optimizer() {
                     {hasOos && winner.best.full && (
                       <div className="mt-3 pt-2 border-t border-amber-500/20 text-2xs flex flex-wrap items-center gap-x-3 gap-y-1">
                         <span className="text-fg-3 font-medium">📐 Full range (what the Backtester reproduces 1:1):</span>
-                        <span className="text-fg-4">PnL <span className={`font-mono ${(winner.best.full.totalPnL ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtPnL(winner.best.full.totalPnL)}</span></span>
+                        <span className="text-fg-4">PnL <span className={`font-mono ${(winner.best.full.totalPnL ?? 0) >= 0 ? 'text-success' : 'text-danger'}`}>{fmtPnL(winner.best.full.totalPnL)}</span></span>
                         <span className="text-fg-4">Win <span className="text-fg-2">{winner.best.full.winRate}%</span></span>
                         <span className="text-fg-4">Trades <span className="text-fg-2">{winner.best.full.totalTrades}{winner.best.full.tradingDays ? ` (${(winner.best.full.totalTrades / winner.best.full.tradingDays).toFixed(1)}/day)` : ''}</span></span>
-                        <span className="text-fg-4">Max DD <span className="text-red-400">{winner.best.full.maxDrawdown}%</span></span>
+                        <span className="text-fg-4">Max DD <span className="text-danger">{winner.best.full.maxDrawdown}%</span></span>
                         <span className="text-fg-5 w-full">↳ The “PnL (IS)” above is the in-sample {Math.round((1 - (results.runConfig?.oos_fraction ?? 0.3)) * 100)}% window used for selection — it is intentionally NOT what a full backtest shows.</span>
                       </div>
                     )}
                     <button
-                      className="mt-3 text-xs bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 px-3 py-1.5 rounded"
+                      className="mt-3 text-xs bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-warning px-3 py-1.5 rounded"
                       title={winner.best.full ? `Replays the exact recorded params over the full range — expect ≈ ${fmtPnL(winner.best.full.totalPnL)} PnL · ${winner.best.full.winRate}% win · ${winner.best.full.totalTrades} trades` : 'Replays the exact recorded params over the full range'}
                       onClick={() => handleTestClick(winner.best, winner.strategy)}>
                       Test best on Backtester →
@@ -1153,7 +1177,7 @@ export default function Optimizer() {
                       <th className="p-2">Max DD</th>
                       <th className="p-2">Sharpe</th>
                       <th className="p-2">PF</th>
-                      {hasOos && <th className="p-2 text-emerald-400">Out-of-Sample</th>}
+                      {hasOos && <th className="p-2 text-success">Out-of-Sample</th>}
                       <th className="p-2">Sets</th>
                     </tr>
                   </thead>
@@ -1176,33 +1200,33 @@ export default function Optimizer() {
                             <td className="p-2 font-bold text-primary">#{idx + 1}</td>
                             <td className="p-2 font-medium text-fg-2">
                               <span className="flex items-center gap-1.5">
-                                {isWinner && <Trophy className="w-3.5 h-3.5 text-amber-400" />}
+                                {isWinner && <Trophy className="w-3.5 h-3.5 text-warning" />}
                                 {g.label}
                               </span>
                             </td>
                             {g.best ? (
                               <>
-                                <td className="p-2 font-mono text-amber-300">
+                                <td className="p-2 font-mono text-warning">
                                   {hasOos
                                     ? (g.best.robust
                                         ? fmtScore(activeRank(g.best))
-                                        : <span className="text-red-400/70 text-2xs">overfit</span>)
+                                        : <span className="text-danger/70 text-2xs">overfit</span>)
                                     : fmtScore(g.best.score)}
                                 </td>
-                                <td className="p-2 text-green-400">{m.winRate}%</td>
+                                <td className="p-2 text-success">{m.winRate}%</td>
                                 <td className="p-2 font-mono">{fmtPnL(m.totalPnL)}</td>
                                 <td className="p-2">{m.totalTrades}{m.tradingDays ? <span className="text-fg-5" title="trades per trading day"> ({(m.totalTrades / m.tradingDays).toFixed(1)}/d)</span> : null}</td>
-                                <td className="p-2 text-red-400">{m.maxDrawdown}%</td>
+                                <td className="p-2 text-danger">{m.maxDrawdown}%</td>
                                 <td className="p-2 text-blue-400">{m.sharpeRatio}</td>
                                 <td className="p-2 text-purple-300">{fmtPF(m.profitFactor)}</td>
                                 {hasOos && (
                                   <td className="p-2">
                                     {g.best.oos ? (
                                       <span className="flex items-center gap-1.5">
-                                        <span className={`font-mono ${(g.best.oos.totalPnL ?? 0) > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fmtPnL(g.best.oos.totalPnL)}</span>
+                                        <span className={`font-mono ${(g.best.oos.totalPnL ?? 0) > 0 ? 'text-success' : 'text-danger'}`}>{fmtPnL(g.best.oos.totalPnL)}</span>
                                         {g.best.robust
-                                          ? <span className="text-3xs px-1 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/40 text-emerald-300">Robust ✓</span>
-                                          : <span className="text-3xs px-1 py-0.5 rounded bg-red-500/15 border border-red-500/40 text-red-300">Overfit ⚠</span>}
+                                          ? <span className="text-3xs px-1 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/40 text-success">Robust ✓</span>
+                                          : <span className="text-3xs px-1 py-0.5 rounded bg-red-500/15 border border-red-500/40 text-danger">Overfit ⚠</span>}
                                       </span>
                                     ) : <span className="text-fg-5">—</span>}
                                   </td>
@@ -1232,8 +1256,8 @@ export default function Optimizer() {
                                         <th className="p-2">Max DD</th>
                                         <th className="p-2">Sharpe</th>
                                         <th className="p-2">PF</th>
-                                        {hasOos && <th className="p-2 text-emerald-400">OOS PnL</th>}
-                                        {hasOos && <th className="p-2 text-emerald-400">OOS Win%</th>}
+                                        {hasOos && <th className="p-2 text-success">OOS PnL</th>}
+                                        {hasOos && <th className="p-2 text-success">OOS Win%</th>}
                                         {hasOos && <th className="p-2">Verdict</th>}
                                         <th className="p-2">Params</th>
                                         <th className="p-2">Action</th>
@@ -1251,31 +1275,31 @@ export default function Optimizer() {
                                             className={`border-b border-line-0/60 hover:bg-slate-800/40 cursor-pointer ${selectedResult === res ? 'bg-slate-800/70' : ''}`}
                                             onClick={() => setSelectedResult(res)}>
                                             <td className="p-2 font-bold text-primary">#{ridx + 1}</td>
-                                            <td className="p-2 font-mono text-amber-300">
+                                            <td className="p-2 font-mono text-warning">
                                               {hasOos
                                                 ? (res.robust
                                                     ? fmtScore(activeRank(res))
-                                                    : <span className="text-red-400/70 text-2xs">overfit</span>)
+                                                    : <span className="text-danger/70 text-2xs">overfit</span>)
                                                 : fmtScore(res.score)}
                                             </td>
-                                            <td className="p-2 text-green-400">{rm.winRate}%</td>
+                                            <td className="p-2 text-success">{rm.winRate}%</td>
                                             <td className="p-2 font-mono">{fmtPnL(rm.totalPnL)}</td>
                                             <td className="p-2">{rm.totalTrades}{rm.tradingDays ? <span className="text-fg-5" title="trades per trading day"> ({(rm.totalTrades / rm.tradingDays).toFixed(1)}/d)</span> : null}</td>
-                                            <td className="p-2 text-red-400">{rm.maxDrawdown}%</td>
+                                            <td className="p-2 text-danger">{rm.maxDrawdown}%</td>
                                             <td className="p-2 text-blue-400">{rm.sharpeRatio}</td>
                                             <td className="p-2 text-purple-300">{fmtPF(rm.profitFactor)}</td>
                                             {hasOos && (
-                                              <td className={`p-2 font-mono ${(res.oos?.totalPnL ?? 0) > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                              <td className={`p-2 font-mono ${(res.oos?.totalPnL ?? 0) > 0 ? 'text-success' : 'text-danger'}`}>
                                                 {res.oos ? fmtPnL(res.oos.totalPnL) : '—'}
                                                 {res.oos != null && <span className="text-fg-5"> ({res.oos.totalTrades}t)</span>}
                                               </td>
                                             )}
-                                            {hasOos && <td className="p-2 text-emerald-300">{res.oos ? `${res.oos.winRate}%` : '—'}</td>}
+                                            {hasOos && <td className="p-2 text-success">{res.oos ? `${res.oos.winRate}%` : '—'}</td>}
                                             {hasOos && (
                                               <td className="p-2">
                                                 {res.robust
-                                                  ? <span className="text-3xs px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/40 text-emerald-300">Robust ✓</span>
-                                                  : <span className="text-3xs px-1.5 py-0.5 rounded bg-red-500/15 border border-red-500/40 text-red-300">Overfit ⚠</span>}
+                                                  ? <span className="text-3xs px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/40 text-success">Robust ✓</span>
+                                                  : <span className="text-3xs px-1.5 py-0.5 rounded bg-red-500/15 border border-red-500/40 text-danger">Overfit ⚠</span>}
                                               </td>
                                             )}
                                             <td className="p-2 max-w-md">{renderParamChips(res.params)}</td>

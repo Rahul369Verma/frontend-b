@@ -9,6 +9,7 @@ import { useChartTheme } from '../theme/chartTheme.js';
 import { pollInterval } from '../hooks/usePolling.js';
 import { API_BASE } from '../config/api.js';
 import { useConfirm } from './confirmContext.js';
+import { toast } from './toastStore.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -85,11 +86,11 @@ function statusLabel(status) {
 
 function statusBadge(status) {
     const map = {
-        fetching_data: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+        fetching_data: 'bg-amber-500/20 text-warning border-amber-500/40',
         training:      'bg-indigo-500/20 text-indigo-300 border-indigo-500/40',
         running:       'bg-indigo-500/20 text-indigo-300 border-indigo-500/40',
-        completed:     'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
-        failed:        'bg-rose-500/20 text-rose-300 border-rose-500/40',
+        completed:     'bg-emerald-500/20 text-success border-emerald-500/40',
+        failed:        'bg-rose-500/20 text-danger border-rose-500/40',
         idle:          'bg-slate-500/20 text-fg-4 border-line-3/40',
     };
     return map[status] || map.idle;
@@ -125,7 +126,7 @@ function JobCard({ job, onStop, expanded, onToggleExpand }) {
                             </span>
                         )}
                         {job.engineMode === 'NITRO' && (
-                            <span className="text-3xs px-1.5 py-0.5 rounded border bg-amber-500/20 text-amber-300 border-amber-500/40 font-semibold tracking-wide">
+                            <span className="text-3xs px-1.5 py-0.5 rounded border bg-amber-500/20 text-warning border-amber-500/40 font-semibold tracking-wide">
                                 ⚡ NITRO
                             </span>
                         )}
@@ -170,8 +171,8 @@ function JobCard({ job, onStop, expanded, onToggleExpand }) {
                 <div className="px-4 pb-3">
                     <div className="flex justify-between text-3xs mb-1">
                         <span className="text-indigo-300 font-mono">{progress.text}{progress.isNitro ? '' : ' steps'}</span>
-                        <span className="text-emerald-400 font-mono">{progress.isNitro ? `reward ${progress.speed}` : `${progress.speed} steps/s`}</span>
-                        <span className="text-amber-400 font-mono">ETA: {progress.eta}</span>
+                        <span className="text-success font-mono">{progress.isNitro ? `reward ${progress.speed}` : `${progress.speed} steps/s`}</span>
+                        <span className="text-warning font-mono">ETA: {progress.eta}</span>
                     </div>
                     <div className="w-full bg-slate-800 rounded-full h-1.5">
                         <div
@@ -363,9 +364,9 @@ const AiManager = () => {
             });
             const data = await res.json();
             if (res.ok) { setTrainMetrics(data.metrics); fetchStatus(); }
-            else alert("Training Error: " + (data.error || data.detail));
+            else toast.error("Training Error: " + (data.error || data.detail));
         } catch (err) {
-            alert("Training Failed: " + err.message);
+            toast.error("Training Failed: " + err.message);
         } finally {
             setTraining(false);
         }
@@ -424,10 +425,10 @@ const AiManager = () => {
                 }, ...prev]);
                 setExpandedJobId(jobId); // auto-expand the new job
             } else {
-                alert("RL Training Error: " + (data.error || data.detail));
+                toast.error("RL Training Error: " + (data.error || data.detail));
             }
         } catch (err) {
-            alert("RL Training Failed: " + err.message);
+            toast.error("RL Training Failed: " + err.message);
         } finally {
             setLaunchingJob(false);
         }
@@ -447,10 +448,10 @@ const AiManager = () => {
                 setCheckpoints(prev => prev.filter(c => c.model_name !== ckpt.model_name));
                 fetchRlStatus();
             } else {
-                alert("Resume failed: " + (data.error || "Unknown error"));
+                toast.error("Resume failed: " + (data.error || "Unknown error"));
             }
         } catch (err) {
-            alert("Resume failed: " + err.message);
+            toast.error("Resume failed: " + err.message);
         } finally {
             setResumingModel(null);
         }
@@ -465,16 +466,16 @@ const AiManager = () => {
                 body: JSON.stringify({ job_id: job.jobId, symbol: job.symbol, customName: job.modelName })
             });
             const data = await res.json();
-            if (res.ok) alert("Stop signal sent! The process will exit cleanly in a moment.");
-            else        alert("Failed to stop: " + (data.error || "Unknown error"));
+            if (res.ok) toast.info("Stop signal sent! The process will exit cleanly in a moment.");
+            else        toast.error("Failed to stop: " + (data.error || "Unknown error"));
         } catch (err) {
-            alert("Failed to stop training: " + err.message);
+            toast.error("Failed to stop training: " + err.message);
         }
     };
 
     // ── Model upload / download / delete ─────────────────────────────────────
     const handleUploadModel = async () => {
-        if (!uploadFile) return alert("Please select a .zip file");
+        if (!uploadFile) return toast.info("Please select a .zip file");
         setUploadingModel(true);
         const formData = new FormData();
         formData.append('model_file', uploadFile);
@@ -482,10 +483,10 @@ const AiManager = () => {
         try {
             const res  = await fetch(`${API_BASE}/api/rl/upload`, { method: 'POST', body: formData });
             const data = await res.json();
-            if (res.ok) { alert("Model uploaded successfully!"); setUploadFile(null); fetchRlModels(); }
-            else alert("Upload failed: " + (data.error || "Unknown error"));
+            if (res.ok) { toast.success("Model uploaded successfully!"); setUploadFile(null); fetchRlModels(); }
+            else toast.error("Upload failed: " + (data.error || "Unknown error"));
         } catch (err) {
-            alert("Upload failed: " + err.message);
+            toast.error("Upload failed: " + err.message);
         } finally {
             setUploadingModel(false);
         }
@@ -516,10 +517,10 @@ const AiManager = () => {
             if (res.ok && data.metrics) {
                 setEvalResults(prev => ({ ...prev, [key]: data.metrics }));
             } else {
-                alert(`Evaluation failed: ${data.error || 'unknown error'}`);
+                toast.error(`Evaluation failed: ${data.error || 'unknown error'}`);
             }
         } catch (err) {
-            alert(`Evaluation error: ${err.message}`);
+            toast.error(`Evaluation error: ${err.message}`);
         } finally {
             setEvaluatingKey(null);
         }
@@ -531,7 +532,7 @@ const AiManager = () => {
             const zipFilename = filename.endsWith('_metadata.json') ? filename.replace('_metadata.json', '.zip') : filename;
             const res = await fetch(`${API_BASE}/api/rl/models/${zipFilename}`, { method: 'DELETE' });
             if (res.ok) fetchRlModels();
-            else { const d = await res.json(); alert("Delete failed: " + d.error); }
+            else { const d = await res.json(); toast.error("Delete failed: " + d.error); }
         } catch (err) { console.error(err); }
     };
 
@@ -550,8 +551,8 @@ const AiManager = () => {
             });
             const data = await res.json();
             if (res.ok) setBacktestResult(data);
-            else alert("Backtest Error: " + (data.error || data.detail));
-        } catch (err) { alert("Backtest Failed: " + err.message); }
+            else toast.error("Backtest Error: " + (data.error || data.detail));
+        } catch (err) { toast.error("Backtest Failed: " + err.message); }
         finally { setBacktesting(false); }
     };
 
@@ -655,7 +656,7 @@ const AiManager = () => {
                                 </button>
                                 {trainMetrics && (
                                     <div className="mt-4 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
-                                        <h3 className="text-emerald-400 font-bold mb-2">Training Results</h3>
+                                        <h3 className="text-success font-bold mb-2">Training Results</h3>
                                         <div className="grid grid-cols-2 gap-4 text-sm">
                                             <div className="flex justify-between"><span className="text-fg-4">Accuracy:</span><span className="text-fg font-mono">{(trainMetrics.val_accuracy * 100).toFixed(1)}%</span></div>
                                             <div className="flex justify-between"><span className="text-fg-4">F1 Score:</span><span className="text-fg font-mono">{(trainMetrics.val_f1 * 100).toFixed(1)}%</span></div>
@@ -717,7 +718,7 @@ const AiManager = () => {
                                         )}
                                     </select>
                                     {rlTrainConfig.symbol.startsWith('MCX:') && (
-                                        <p className="text-xs text-amber-400 mt-1">
+                                        <p className="text-xs text-warning mt-1">
                                             MCX commodity — data source set to FUTURES (continuous contract). Broker: Angel One. Intraday mode auto-enabled.
                                         </p>
                                     )}
@@ -728,7 +729,7 @@ const AiManager = () => {
                                     <label className="text-xs text-fg-4 uppercase tracking-wider font-bold flex items-center gap-2">
                                         Training Engine
                                         {rlTrainConfig.engineMode === 'NITRO' && (
-                                            <span className="text-3xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold">EXPERIMENTAL</span>
+                                            <span className="text-3xs px-1.5 py-0.5 rounded bg-amber-500/20 text-warning border border-amber-500/40 font-semibold">EXPERIMENTAL</span>
                                         )}
                                     </label>
                                     <div className="flex gap-2">
@@ -750,7 +751,7 @@ const AiManager = () => {
                                             onClick={() => setRlTrainConfig({ ...rlTrainConfig, engineMode: 'NITRO', nEpochs: 4, batchSize: 0, lrFinal: 0.0003 })}
                                             className={`flex-1 py-2 px-3 rounded-lg border text-sm font-semibold transition-all ${
                                                 rlTrainConfig.engineMode === 'NITRO'
-                                                    ? 'bg-amber-500/20 border-amber-500 text-amber-200'
+                                                    ? 'bg-amber-500/20 border-amber-500 text-warning'
                                                     : 'bg-slate-800/60 border-line text-fg-4 hover:border-line-2'
                                             }`}
                                         >
@@ -769,7 +770,7 @@ const AiManager = () => {
                                 {/* Nitro-specific params — only visible when NITRO selected */}
                                 {rlTrainConfig.engineMode === 'NITRO' && (
                                     <div className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/30 space-y-3">
-                                        <p className="text-3xs text-amber-400 font-semibold uppercase tracking-wider">⚡ Nitro Parallelism</p>
+                                        <p className="text-3xs text-warning font-semibold uppercase tracking-wider">⚡ Nitro Parallelism</p>
                                         <div className="grid grid-cols-2 gap-3">
                                             <div>
                                                 <label htmlFor="aimanager-parallel-envs-6" className="text-xs text-fg-4 font-semibold block mb-1">
@@ -811,7 +812,7 @@ const AiManager = () => {
                                                 <p className="text-3xs text-fg-6 mt-1">Pool = n_envs × n_steps transitions.</p>
                                             </div>
                                         </div>
-                                        <p className="text-3xs text-amber-400/70">
+                                        <p className="text-3xs text-warning/70">
                                             Pool size: {(rlTrainConfig.nitroNEnvs * rlTrainConfig.nitroNSteps).toLocaleString()} transitions/update
                                         </p>
                                     </div>
@@ -831,7 +832,7 @@ const AiManager = () => {
                                         <p className="text-xs text-fg-4 mt-0.5">
                                             Each training episode = one trading session. Positions are force-closed at session end with a penalty — the agent learns to exit before close instead of holding overnight.
                                             {rlTrainConfig.symbol.startsWith('MCX:') && (
-                                                <span className="text-amber-400"> Auto-enabled for MCX (14.5h session, no overnight carry).</span>
+                                                <span className="text-warning"> Auto-enabled for MCX (14.5h session, no overnight carry).</span>
                                             )}
                                             {!rlTrainConfig.symbol.startsWith('MCX:') && (
                                                 <span className="text-fg-5"> Recommended ON for NSE options — overnight theta decay and gap risk make holding across sessions unprofitable.</span>
@@ -977,7 +978,7 @@ const AiManager = () => {
                                                     {/* amber-400, not amber-600: 600 is a solid-bg/border shade, and
                                                         as ink it was already failing on dark (2.2-2.5:1). 400 is the
                                                         accent-INK shade and inverts with the mode: >=4.4:1 in all 12. */}
-                                                    <span className="ml-1 text-3xs text-amber-400 font-normal">fixed · no decay in Nitro</span>
+                                                    <span className="ml-1 text-3xs text-warning font-normal">fixed · no decay in Nitro</span>
                                                 </label>
                                                 <select id="aimanager-learning-rate-17" value={rlTrainConfig.lrInitial} onChange={(e) => setRlTrainConfig({...rlTrainConfig, lrInitial: parseFloat(e.target.value)})} className="w-full bg-slate-900 border border-amber-700/50 rounded p-2 text-sm focus:border-amber-500 outline-none">
                                                     <option value={0.001}>1e-3 — Aggressive (fast but unstable)</option>
@@ -986,7 +987,7 @@ const AiManager = () => {
                                                     <option value={0.0001}>1e-4 — Conservative</option>
                                                     <option value={0.00003}>3e-5 — Very slow (fine-tuning)</option>
                                                 </select>
-                                                <p className="text-3xs text-amber-400/70 mt-1">JAX Nitro applies a constant LR across all phases — LR End / linear decay is not used.</p>
+                                                <p className="text-3xs text-warning/70 mt-1">JAX Nitro applies a constant LR across all phases — LR End / linear decay is not used.</p>
                                             </div>
                                         ) : (
                                             <div className="grid grid-cols-2 gap-4">
@@ -1295,7 +1296,7 @@ const AiManager = () => {
                                                                         <button onClick={() => downloadFile(model.best_model)} className="text-xs text-violet-400 hover:text-violet-300 transition-colors">↓ Best ({model.best_model_size_kb ? `${model.best_model_size_kb} KB` : '...'})</button>
                                                                     )}
                                                                     <button onClick={() => downloadFile(model._metadata_file || (model.model_file || '').replace(/_ppo_final\.zip$/, '_metadata.json').replace(/\.zip$/, '_metadata.json'))} className="text-xs text-fg-4 hover:text-fg-3 transition-colors">↓ Meta</button>
-                                                                    <button onClick={() => handleDeleteModel(model.model_file || `${model.symbol}_ppo_final.zip`)} className="text-xs text-rose-400 hover:text-rose-400 transition-colors">Delete</button>
+                                                                    <button onClick={() => handleDeleteModel(model.model_file || `${model.symbol}_ppo_final.zip`)} className="text-xs text-danger hover:text-danger transition-colors">Delete</button>
                                                                     {/* OOS Evaluate buttons */}
                                                                     <div className="border-t border-line/50 pt-1.5 mt-0.5 flex flex-col items-end gap-1">
                                                                         {(() => {
@@ -1310,25 +1311,25 @@ const AiManager = () => {
                                                                                 <button
                                                                                     onClick={() => handleEvaluateModel(model, 'final')}
                                                                                     disabled={!!evaluatingKey}
-                                                                                    className="text-3xs text-amber-400 hover:text-amber-300 disabled:text-fg-6 transition-colors"
+                                                                                    className="text-3xs text-warning hover:text-warning disabled:text-fg-6 transition-colors"
                                                                                 >{isFinalEval ? '⏳ Evaluating...' : 'Eval Final'}</button>
                                                                                 {model.best_model && (
                                                                                     <button
                                                                                         onClick={() => handleEvaluateModel(model, 'best')}
                                                                                         disabled={!!evaluatingKey}
-                                                                                        className="text-3xs text-emerald-400 hover:text-emerald-300 disabled:text-fg-6 transition-colors"
+                                                                                        className="text-3xs text-success hover:text-success disabled:text-fg-6 transition-colors"
                                                                                     >{isBestEval ? '⏳ Evaluating...' : 'Eval Best'}</button>
                                                                                 )}
                                                                                 {(finalResult || bestResult) && (
                                                                                     <div className="mt-1 text-4xs text-left w-full space-y-0.5 border border-line/50 rounded p-1.5 bg-slate-800/60">
-                                                                                        {[['final', finalResult, 'text-amber-300'], ['best', bestResult, 'text-emerald-300']].map(([label, r, cls]) =>
+                                                                                        {[['final', finalResult, 'text-warning'], ['best', bestResult, 'text-success']].map(([label, r, cls]) =>
                                                                                             r && (
                                                                                                 <div key={label}>
                                                                                                     <span className={`font-bold uppercase ${cls}`}>{label}</span>
                                                                                                     <span className="text-fg-4"> · {r.n_trades}T · WR </span>
-                                                                                                    <span className={r.win_rate >= 0.5 ? 'text-emerald-400' : 'text-rose-400'}>{(r.win_rate * 100).toFixed(1)}%</span>
+                                                                                                    <span className={r.win_rate >= 0.5 ? 'text-success' : 'text-danger'}>{(r.win_rate * 100).toFixed(1)}%</span>
                                                                                                     <span className="text-fg-4"> · </span>
-                                                                                                    <span className={r.total_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{r.total_pnl > 0 ? '+' : ''}{r.total_pnl}</span>
+                                                                                                    <span className={r.total_pnl >= 0 ? 'text-success' : 'text-danger'}>{r.total_pnl > 0 ? '+' : ''}{r.total_pnl}</span>
                                                                                                     <span className="text-fg-5"> · S:{r.sharpe?.toFixed(2)}</span>
                                                                                                 </div>
                                                                                             )
@@ -1356,7 +1357,7 @@ const AiManager = () => {
                 <div className="space-y-6">
                     <div className="bg-slate-800/50 border border-line rounded-xl p-6">
                         <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                            <FaChartLine className="text-emerald-400" /> AI Backtest
+                            <FaChartLine className="text-success" /> AI Backtest
                         </h2>
                         <div className="space-y-4">
                             <div className="grid grid-cols-2 gap-4">
@@ -1404,7 +1405,7 @@ const AiManager = () => {
                                 {backtesting ? 'Running Backtest...' : 'Run Backtest'}
                             </button>
                             {!status.model_trained && (
-                                <div className="flex items-center gap-2 text-rose-400 text-xs justify-center">
+                                <div className="flex items-center gap-2 text-danger text-xs justify-center">
                                     <FaExclamationTriangle /> Model must be trained first
                                 </div>
                             )}
@@ -1445,7 +1446,7 @@ const AiManager = () => {
                 <div className="mt-6">
                     <div className="flex items-center justify-between mb-3">
                         <h2 className="text-base font-bold text-fg-3 flex items-center gap-2">
-                            <FaSync className="text-amber-400" />
+                            <FaSync className="text-warning" />
                             Resumable Training
                             <span className="text-xs text-fg-5 font-normal">({checkpoints.length} interrupted)</span>
                         </h2>
@@ -1459,7 +1460,7 @@ const AiManager = () => {
                                 <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-2 mb-1">
                                         <span className="font-semibold text-sm text-fg truncate">{ckpt.model_name}</span>
-                                        <span className="text-xs text-amber-400 font-mono">{ckpt.pct_complete}%</span>
+                                        <span className="text-xs text-warning font-mono">{ckpt.pct_complete}%</span>
                                     </div>
                                     <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
                                         <div
@@ -1475,7 +1476,7 @@ const AiManager = () => {
                                 <button
                                     onClick={() => handleResumeTraining(ckpt)}
                                     disabled={resumingModel === ckpt.model_name}
-                                    className="shrink-0 px-4 py-1.5 rounded-lg text-sm font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                    className="shrink-0 px-4 py-1.5 rounded-lg text-sm font-semibold bg-amber-500/20 text-warning border border-amber-500/30 hover:bg-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                 >
                                     {resumingModel === ckpt.model_name ? 'Resuming…' : 'Resume'}
                                 </button>
@@ -1490,10 +1491,10 @@ const AiManager = () => {
                 <div className="mt-8 bg-slate-800/50 border border-line rounded-xl p-6">
                     <h2 className="text-xl font-bold mb-6">Backtest Performance</h2>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-                        <ResultCard label="Total Return"  value={`₹${backtestResult.total_pnl?.toFixed(2)}`}    color={backtestResult.total_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
+                        <ResultCard label="Total Return"  value={`₹${backtestResult.total_pnl?.toFixed(2)}`}    color={backtestResult.total_pnl >= 0 ? 'text-success' : 'text-danger'} />
                         <ResultCard label="Win Rate"      value={`${(backtestResult.win_rate * 100).toFixed(1)}%`} color="text-blue-400" />
                         <ResultCard label="Trades"        value={backtestResult.total_trades}                    color="text-fg" />
-                        <ResultCard label="Drawdown"      value={`₹${backtestResult.max_drawdown?.toFixed(2)}`}  color="text-rose-400" />
+                        <ResultCard label="Drawdown"      value={`₹${backtestResult.max_drawdown?.toFixed(2)}`}  color="text-danger" />
                     </div>
                     <div className="h-64 w-full bg-slate-900 rounded-lg p-4">
                         <ResponsiveContainer width="100%" height="100%">

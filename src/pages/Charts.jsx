@@ -78,8 +78,8 @@ function LevelsLine({ levels, side, entryPremium }) {
     const at = (pts, sign) => (prem != null && n(pts) != null ? ` → ${round2(prem + sign * long * n(pts))}` : '');
     return (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-fg-4">
-            {n(L.slPoints) != null && <span>SL <b className="text-negative">{round2(L.slPoints)}pt</b><span className="text-fg-5">{at(L.slPoints, -1)}</span></span>}
-            {n(L.tpPoints) != null && <span>TP <b className="text-positive">{round2(L.tpPoints)}pt</b><span className="text-fg-5">{at(L.tpPoints, +1)}</span></span>}
+            {n(L.slPoints) != null && <span>SL <b className="text-danger">{round2(L.slPoints)}pt</b><span className="text-fg-5">{at(L.slPoints, -1)}</span></span>}
+            {n(L.tpPoints) != null && <span>TP <b className="text-success">{round2(L.tpPoints)}pt</b><span className="text-fg-5">{at(L.tpPoints, +1)}</span></span>}
             {n(L.strategyIndexSl) != null && <span>index SL <b className="text-fg-2">{int(L.strategyIndexSl)}</b></span>}
             {n(L.aiSpotSl) != null && <span>AI SL <b className="text-fg-2">{int(L.aiSpotSl)}</b></span>}
             {n(L.aiSpotTp) != null && <span>AI TP <b className="text-fg-2">{int(L.aiSpotTp)}</b></span>}
@@ -140,7 +140,7 @@ function MultilegDetail({ sel }) {
             {worst && worst.pnl < 0 && (
                 <div className="text-fg-5">
                     The damage came from the {String(worst.action).toUpperCase() === 'SELL' ? 'short' : 'long'} {worst.strike} {worst.type}:
-                    {' '}<b className="text-negative">{round2(worst.pnl)}</b> per unit as its premium went {worst.entryPrice} → {worst.exitPrice}.
+                    {' '}<b className="text-danger">{round2(worst.pnl)}</b> per unit as its premium went {worst.entryPrice} → {worst.exitPrice}.
                 </div>
             )}
 
@@ -384,7 +384,7 @@ export default function Charts() {
                             type="button"
                             onClick={() => commitLines([])}
                             title={`Remove all ${lines.length} line(s) on ${symbol.replace(/^(NSE|BSE):/, '')} ${resolution}`}
-                            className="px-2 py-1 rounded border border-line text-2xs text-fg-4 hover:text-negative inline-flex items-center gap-1"
+                            className="px-2 py-1 rounded border border-line text-2xs text-fg-4 hover:text-danger inline-flex items-center gap-1"
                         >
                             <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
                             Clear {lines.length}
@@ -410,7 +410,7 @@ export default function Charts() {
 
             {/* mode ↔ symbol mismatch is a real trap: say it rather than draw nothing */}
             {mode === 'premium' && isIndex && (
-                <div className="text-2xs text-amber-300/90 border border-amber-700/40 bg-amber-950/20 rounded p-2">
+                <div className="text-2xs text-warning/90 border border-amber-700/40 bg-amber-950/20 rounded p-2">
                     ⚠ You are charting an <b>index</b> with option-premium levels selected. An index has no premium, so no stops or targets will appear.
                     Pick a traded option from the Symbol list, or click a single-leg trade below and choose “open the option”.
                 </div>

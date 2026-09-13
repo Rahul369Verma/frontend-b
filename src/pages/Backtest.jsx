@@ -52,6 +52,7 @@ import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 import { API_URL } from '../config/api.js';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { useConfirm } from '../components/confirmContext.js';
+import { toast } from '../components/toastStore.js';
 
 // Fallback model list — used only if /api/ai-confirmation/models fails.
 // Live list comes from Python's MODEL_REGISTRY via the API.
@@ -94,7 +95,7 @@ function modelBadgeFor(id) {
     if (id.startsWith('claude-web/')) {
         return {
             short: `${id.replace('claude-web/claude-', '')} 🍪`,
-            cls: 'bg-amber-900/40 text-amber-200',
+            cls: 'bg-amber-900/40 text-warning',
             vendor: 'claude-web',
         };
     }
@@ -108,14 +109,14 @@ function modelBadgeFor(id) {
     if (id.startsWith('claude-')) {
         return {
             short: id.replace('claude-', '').replace(/-\d{8}$/, ''),
-            cls: 'bg-orange-900/40 text-orange-200',
+            cls: 'bg-orange-900/40 text-warning',
             vendor: 'anthropic',
         };
     }
     if (id.startsWith('gemma-')) {
         return {
             short: id.replace('gemma-', ''),
-            cls: 'bg-green-900/40 text-green-200',
+            cls: 'bg-green-900/40 text-success',
             vendor: 'gemma',
         };
     }
@@ -847,7 +848,7 @@ export default function Backtest() {
           }
       });
       if (Object.keys(updates).length === 0) {
-          alert('No suggestions selected — nothing to apply.');
+          toast.warning('No suggestions selected — nothing to apply.');
           return;
       }
       setParams(prev => ({ ...prev, ...updates }));
@@ -855,7 +856,7 @@ export default function Backtest() {
   };
 
   const handleSaveDefault = async () => {
-    if (!params.strategy) return alert("Please select a strategy first.");
+    if (!params.strategy) return toast.info("Please select a strategy first.");
     const ok = await confirm(`Are you sure you want to update GLOBAL DEFAULTS for ${params.strategy}? This will affect all new backtests.`);
     if (!ok) return;
 
@@ -872,11 +873,11 @@ export default function Backtest() {
             strategy: params.strategy,
             params: strategyParams
         });
-        alert("✅ Global Defaults Saved!");
+        toast.success("✅ Global Defaults Saved!");
         // Update local state to reflect new defaults
         setStrategyDefaults(prev => ({ ...prev, [params.strategy]: strategyParams }));
     } catch (err) {
-        alert("❌ Save Failed: " + (err.response?.data?.error || err.message));
+        toast.error("❌ Save Failed: " + (err.response?.data?.error || err.message));
     }
   };
 
@@ -901,10 +902,10 @@ export default function Backtest() {
               end_date: params.end_date,
               capital: params.capital
           });
-          alert("✅ Configuration Saved!");
+          toast.success("✅ Configuration Saved!");
           setSavedConfigs(prev => [res.data, ...prev.filter(c => c._id !== res.data._id)]);
       } catch (err) {
-          alert("❌ Save Failed: " + (err.response?.data?.error || err.message));
+          toast.error("❌ Save Failed: " + (err.response?.data?.error || err.message));
       }
   };
 
@@ -937,7 +938,7 @@ export default function Backtest() {
   };
 
   const handleDeployLive = async () => {
-    if (!params.symbol) return alert("Please select a symbol.");
+    if (!params.symbol) return toast.info("Please select a symbol.");
     // Warn if format is incorrect
     if (!params.symbol.includes(':')) {
         const proceed = await confirm(`⚠️ Symbol '${params.symbol}' does not look like a Fyers symbol (e.g., NSE:NIFTYBANK-INDEX). \n\nThe backend will reject this. Do you want to try anyway?`);
@@ -982,9 +983,9 @@ export default function Backtest() {
                 tradeMode: 'LIVE'
             });
         }
-        alert(`🚀 Deployed to Live Bot for ${params.symbol}! Check the Multi-Strategy Deployments panel on the Dashboard.`);
+        toast.success(`🚀 Deployed to Live Bot for ${params.symbol}! Check the Multi-Strategy Deployments panel on the Dashboard.`);
     } catch (err) {
-        alert("❌ Deploy Failed: " + (err.response?.data?.error || err.message));
+        toast.error("❌ Deploy Failed: " + (err.response?.data?.error || err.message));
     }
   };
 
@@ -1041,7 +1042,7 @@ export default function Backtest() {
         // Server confirmed clean cancel — no error, just bail.
         setResult(null);
       } else if (res.data.error) {
-        alert("Backtest Error: " + res.data.error);
+        toast.error("Backtest Error: " + res.data.error);
         setResult(null);
       } else {
         setResult(res.data);
@@ -1057,7 +1058,7 @@ export default function Backtest() {
       if (axios.isCancel(err) || err.name === 'CanceledError' || err.name === 'AbortError') {
         setResult(null);
       } else {
-        alert("Backtest failed: " + err.message);
+        toast.error("Backtest failed: " + err.message);
       }
     } finally {
       backtestAbortRef.current = null;
@@ -1304,9 +1305,9 @@ export default function Backtest() {
                         const newParams = { ...systemDefaults, ...parsed };
                         
                         setParams(newParams);
-                        alert("✅ Parameters Imported Successfully");
+                        toast.success("✅ Parameters Imported Successfully");
                     } catch (e) {
-                        alert("❌ Invalid JSON: " + e.message);
+                        toast.error("❌ Invalid JSON: " + e.message);
                     }
                 }
             }}
@@ -1380,7 +1381,7 @@ export default function Backtest() {
              {/* Live Bot Config Loader */}
              {liveConfigs.length > 0 && (
                  <div className="bg-slate-800 p-3 rounded border border-line-2">
-                     <label htmlFor="backtest-load-deployed-strategy-live--2" className="block text-xs font-bold text-green-400 mb-2">📂 Load Deployed Strategy (Live Bot)</label>
+                     <label htmlFor="backtest-load-deployed-strategy-live--2" className="block text-xs font-bold text-success mb-2">📂 Load Deployed Strategy (Live Bot)</label>
                      <select id="backtest-load-deployed-strategy-live--2"
                          className="w-full bg-slate-900 border border-line-3 rounded p-2 text-fg text-sm"
                          onChange={(e) => {
@@ -1478,7 +1479,7 @@ export default function Backtest() {
                 const reloadPresets = () => {
                     axios.get(`${API_URL}/config/strategies/presets`)
                         .then(res => setStrategyPresets(res.data || {}))
-                        .catch(err => { console.error("Failed to fetch strategy presets", err); alert('Presets fetch failed — is the backend restarted with the /config/strategies/presets endpoint?'); });
+                        .catch(err => { console.error("Failed to fetch strategy presets", err); toast.error('Presets fetch failed — is the backend restarted with the /config/strategies/presets endpoint?'); });
                 };
                 return (
                     <div>
@@ -1515,7 +1516,7 @@ export default function Backtest() {
                             ))}
                         </select>
                         {applied && (
-                            <div className={`text-2xs mt-1 leading-relaxed ${applied.evidence === 'validated' ? 'text-emerald-400/90' : 'text-fg-4'}`}>
+                            <div className={`text-2xs mt-1 leading-relaxed ${applied.evidence === 'validated' ? 'text-success/90' : 'text-fg-4'}`}>
                                 <span className="font-bold">{applied.evidence === 'validated' ? '✓ Validated on archives: ' : '≈ Principled (backtest before deploying): '}</span>
                                 {applied.desc}
                                 <div className="mt-1 flex flex-wrap gap-1">
@@ -1524,7 +1525,7 @@ export default function Backtest() {
                                         <span className="text-fg-5">restored strategy defaults (no overrides)</span>
                                     )}
                                     {Object.entries(applied.params).map(([k, v]) => (
-                                        <span key={k} className="px-1.5 py-0.5 rounded bg-slate-800 border border-line text-amber-200/90 font-mono text-3xs">
+                                        <span key={k} className="px-1.5 py-0.5 rounded bg-slate-800 border border-line text-warning/90 font-mono text-3xs">
                                             {k}={String(v)}
                                         </span>
                                     ))}
@@ -2183,7 +2184,7 @@ export default function Backtest() {
 
                     {params.enable_ai_confirmation && (
                         <div className="mt-2 pt-2 border-t border-purple-900/30 space-y-3">
-                            <div className="flex items-center gap-1.5 text-3xs text-amber-400/80">
+                            <div className="flex items-center gap-1.5 text-3xs text-warning/80">
                                 <span>⚠</span>
                                 <span>Ensure <code className="bg-slate-900 px-1 rounded">GOOGLE_AI_STUDIO_API_KEY</code> is set in <code className="bg-slate-900 px-1 rounded">.env</code>.</span>
                             </div>
@@ -2193,7 +2194,7 @@ export default function Backtest() {
                                 <div className="flex items-center justify-between mb-1.5">
                                     <label className="text-3xs text-fg-3 font-medium">Select Models</label>
                                     {(params.ai_models || []).length > 1 && (
-                                        <span className="text-3xs text-green-400">
+                                        <span className="text-3xs text-success">
                                             ⚡ Parallel — signals split across {(params.ai_models || []).length} models
                                         </span>
                                     )}
@@ -2238,10 +2239,10 @@ export default function Backtest() {
                                     })()}
                                 </div>
                                 {(params.ai_models || []).length === 0 && (
-                                    <p className="text-3xs text-red-400 mt-1">⚠ Select at least one model</p>
+                                    <p className="text-3xs text-danger mt-1">⚠ Select at least one model</p>
                                 )}
                                 {(params.ai_models || []).length > 1 && (
-                                    <p className="text-3xs text-green-400/80 mt-1">
+                                    <p className="text-3xs text-success/80 mt-1">
                                         ~{Math.ceil(100 / (params.ai_models || []).length)}% of signals per model — total time ≈ single-model time.
                                     </p>
                                 )}
@@ -2280,7 +2281,7 @@ export default function Backtest() {
                                     />
                                     <p className="text-3xs text-fg-5 mt-0.5">
                                         {(params.ai_concurrency || 1) > 1
-                                            ? <span className="text-amber-400/80">⚡ {params.ai_concurrency}× faster — use only for Claude/unlimited models</span>
+                                            ? <span className="text-warning/80">⚡ {params.ai_concurrency}× faster — use only for Claude/unlimited models</span>
                                             : 'Safe for all models. Increase for Claude (no quota).'}
                                     </p>
                                 </div>
@@ -2309,13 +2310,13 @@ export default function Backtest() {
                                             });
                                         }}
                                     />
-                                    <span className="text-xs text-amber-200 font-semibold">
+                                    <span className="text-xs text-warning font-semibold">
                                         🍪 Use Claude.ai Web Session (Team plan — no API credits needed)
                                     </span>
                                 </label>
                                 {!!params.use_claude_web_session && (
                                     <>
-                                        <p className="text-3xs text-red-300/80 leading-snug">
+                                        <p className="text-3xs text-danger/80 leading-snug">
                                             ⚠️ <b>Violates Anthropic ToS.</b> Risk of Claude.ai account suspension.
                                             Forced serial (1 call at a time) to reduce detection. No key rotation.
                                             Re-paste sessionKey when it expires (typically every few weeks).
@@ -2324,12 +2325,12 @@ export default function Backtest() {
                                             Update once, every backtest and every deployed strategy picks up the new value. */}
                                         <div className="text-3xs text-fg-4 bg-slate-900/40 border border-line rounded p-2">
                                             🍪 Cookies (<code>sessionKey</code> + <code>org_id</code>) are managed globally in{' '}
-                                            <a href="/settings" className="text-amber-300 underline hover:text-amber-200">Settings → AI Web Cookies</a>.
+                                            <a href="/settings" className="text-warning underline hover:text-warning">Settings → AI Web Cookies</a>.
                                             Update there once; every backtest and deployed strategy uses the same values.
                                         </div>
                                         <div className="grid grid-cols-1 gap-2">
                                             <div>
-                                                <label htmlFor="backtest-claude-model-38" className="block text-3xs text-amber-300 mb-1">Claude model</label>
+                                                <label htmlFor="backtest-claude-model-38" className="block text-3xs text-warning mb-1">Claude model</label>
                                                 <select id="backtest-claude-model-38"
                                                     className="w-full bg-slate-900 border border-amber-700/40 rounded p-1.5 text-fg text-xs"
                                                     value={params.claude_web_model || 'claude-web/claude-sonnet-4-6'}
@@ -2350,7 +2351,7 @@ export default function Backtest() {
                                         </div>
                                         {/* Batched-call control — only meaningful for Claude.ai web (serial-only path) */}
                                         <div>
-                                            <label className="block text-3xs text-amber-300 mb-1">
+                                            <label className="block text-3xs text-warning mb-1">
                                                 Batch size <span className="text-fg-5">(signals per request, 1–10)</span>
                                             </label>
                                             <div className="flex items-center gap-2">
@@ -2363,7 +2364,7 @@ export default function Backtest() {
                                                     value={parseInt(params.claude_web_batch_size, 10) || 1}
                                                     onChange={e => setParams({ ...params, claude_web_batch_size: parseInt(e.target.value, 10) })}
                                                 />
-                                                <span className="font-mono text-xs text-amber-200 w-8 text-right">
+                                                <span className="font-mono text-xs text-warning w-8 text-right">
                                                     {parseInt(params.claude_web_batch_size, 10) || 1}×
                                                 </span>
                                             </div>
@@ -2412,7 +2413,7 @@ export default function Backtest() {
                                 </label>
                                 {!!params.use_gemini_web_session && (
                                     <>
-                                        <p className="text-3xs text-red-300/80 leading-snug">
+                                        <p className="text-3xs text-danger/80 leading-snug">
                                             ⚠️ <b>Violates Google ToS.</b> Risk of Google account suspension.
                                             Forced serial (1 call at a time) to reduce detection. No key rotation.
                                             <code className="bg-slate-900 px-1">__Secure-1PSIDTS</code> rotates every
@@ -2498,7 +2499,7 @@ export default function Backtest() {
                                                     claude_thinking_enabled: e.target.checked,
                                                 })}
                                             />
-                                            <span className="text-xs text-orange-200 font-semibold">
+                                            <span className="text-xs text-warning font-semibold">
                                                 🧠 Claude Extended Thinking (slower, better-reasoned)
                                             </span>
                                         </label>
@@ -2512,7 +2513,7 @@ export default function Backtest() {
                                                     (matches claude.ai's UI dropdown for Opus 4.8).
                                                 </p>
                                                 <div>
-                                                    <label htmlFor="backtest-thinking-effort-40" className="block text-3xs text-orange-300 mb-1">
+                                                    <label htmlFor="backtest-thinking-effort-40" className="block text-3xs text-warning mb-1">
                                                         Thinking effort <span className="text-fg-5">(higher = more reasoning, slower)</span>
                                                     </label>
                                                     <select id="backtest-thinking-effort-40"
@@ -2543,7 +2544,7 @@ export default function Backtest() {
                                                         Anthropic API: mapped to <code>budget_tokens</code> for the thinking block.
                                                     </p>
                                                 </div>
-                                                <p className="text-3xs text-amber-400/80 leading-snug">
+                                                <p className="text-3xs text-warning/80 leading-snug">
                                                     ⚠️ When thinking is on, temperature is forced to 1.0 (the API requires it).
                                                     Decisions may vary slightly between runs — that's expected.
                                                 </p>
@@ -2590,7 +2591,7 @@ export default function Backtest() {
                                 </span>
                             </label>
                             {params.ai_enable_web_research && !params.use_claude_web_session && (
-                                <p className="ml-6 text-3xs text-amber-400/80 leading-snug">
+                                <p className="ml-6 text-3xs text-warning/80 leading-snug">
                                     ⚠ Web research needs Claude.ai web session. Anthropic API + Gemini paths
                                     will ignore this flag. Enable a <code>claude-web/*</code> model + paste a
                                     sessionKey to use it.
@@ -2641,7 +2642,7 @@ export default function Backtest() {
                                             />
                                             <span className="text-3xs text-fg-4">minutes (5–60)</span>
                                         </div>
-                                        <p className="ml-6 text-3xs text-amber-400/80 leading-snug">
+                                        <p className="ml-6 text-3xs text-warning/80 leading-snug">
                                             ⚠ <b>Autonomous mode</b>: AI suggestions are applied without confirmation.
                                             Sanity-checked (correct side of entry, valid levels) but otherwise trusted.
                                             Watch the Live Activity Feed for actions logged with <code>phase=in_trade</code>.
@@ -2866,7 +2867,7 @@ export default function Backtest() {
                     {params.strategy === 'rl_agent' && (
                         <div className="col-span-2 mt-1">
                             <div className="border border-orange-900/50 bg-orange-950/20 rounded-lg p-3">
-                                <div className="text-xs font-bold text-orange-400 mb-2">⚡ RL Safety Controls</div>
+                                <div className="text-xs font-bold text-warning mb-2">⚡ RL Safety Controls</div>
                                 <div className="grid grid-cols-2 gap-2">
                                     <div>
                                         <label htmlFor="backtest-max-hold-candles-46" className="block text-xs text-fg-4 mb-1">⏰ Max Hold Candles</label>
@@ -3007,7 +3008,7 @@ export default function Backtest() {
                                             })}
                                         </div>
                                         {(params.ensemble_models || []).length > 0 && (params.ensemble_models || []).length < 2 && (
-                                            <div className="text-3xs text-orange-400 mt-1">⚠ Select at least 2 models for ensemble voting to work.</div>
+                                            <div className="text-3xs text-warning mt-1">⚠ Select at least 2 models for ensemble voting to work.</div>
                                         )}
                                         <div className="text-3xs text-fg-5 mt-1">
                                             Ensemble runs all selected models on the same candles, then takes a majority vote on direction. Improves accuracy by reducing single-model bias.
@@ -3126,7 +3127,7 @@ export default function Backtest() {
             </button>
             <button 
                 onClick={handleDeployLive}
-                className="bg-green-800 hover:bg-green-800 text-xs py-2 rounded text-green-100 border border-green-700 shadow-sm"
+                className="bg-green-800 hover:bg-green-800 text-xs py-2 rounded text-success border border-green-700 shadow-sm"
                 title="Configure Live Bot for this symbol"
             >
                 🚀 Deploy Live
@@ -3164,7 +3165,7 @@ export default function Backtest() {
               {result.warnings && result.warnings.length > 0 && (
                 <div className="space-y-2">
                   {result.warnings.map((w, i) => (
-                    <div key={i} className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/40 text-amber-300 rounded-lg px-4 py-3 text-sm">
+                    <div key={i} className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/40 text-warning rounded-lg px-4 py-3 text-sm">
                       <span className="mt-0.5">⚠️</span>
                       <span>{w}</span>
                     </div>
@@ -3195,13 +3196,13 @@ export default function Backtest() {
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 <div className="p-4 bg-slate-800 rounded-lg">
                   <p className="text-fg-4 text-sm">Total P&L</p>
-                  <p className={`text-xl font-bold ${result.metrics.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  <p className={`text-xl font-bold ${result.metrics.totalPnL >= 0 ? 'text-success' : 'text-danger'}`}>
                     ₹{result.metrics.totalPnL.toFixed(2)}
                   </p>
                 </div>
                 <div className="p-4 bg-slate-800 rounded-lg">
                   <p className="text-fg-4 text-sm">Avg PnL / Trade</p>
-                  <p className={`text-xl font-bold ${result.metrics.avgPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  <p className={`text-xl font-bold ${result.metrics.avgPnL >= 0 ? 'text-success' : 'text-danger'}`}>
                     ₹{result.metrics.avgPnL}
                   </p>
                 </div>
@@ -3215,11 +3216,11 @@ export default function Backtest() {
                 </div>
                 <div className="p-4 bg-slate-800 rounded-lg">
                   <p className="text-fg-4 text-sm">Max Drawdown</p>
-                  <p className="text-xl font-bold text-red-400">{result.metrics.maxDrawdown}%</p>
+                  <p className="text-xl font-bold text-danger">{result.metrics.maxDrawdown}%</p>
                 </div>
                 <div className="p-4 bg-slate-800 rounded-lg">
                   <p className="text-fg-4 text-sm">Sharpe Ratio</p>
-                  <p className={`text-xl font-bold ${result.metrics.sharpeRatio >= 1 ? 'text-green-400' : result.metrics.sharpeRatio > 0 ? 'text-yellow-400' : 'text-red-400'}`}>
+                  <p className={`text-xl font-bold ${result.metrics.sharpeRatio >= 1 ? 'text-success' : result.metrics.sharpeRatio > 0 ? 'text-warning' : 'text-danger'}`}>
                     {result.metrics.sharpeRatio}
                   </p>
                 </div>
@@ -3257,7 +3258,7 @@ export default function Backtest() {
                     </div>
                   )}
                   <button
-                    className="ml-1 px-2.5 py-1 text-xs bg-red-800/60 hover:bg-red-800 text-red-200 rounded border border-red-600/50 transition-colors whitespace-nowrap"
+                    className="ml-1 px-2.5 py-1 text-xs bg-red-800/60 hover:bg-red-800 text-danger rounded border border-red-600/50 transition-colors whitespace-nowrap"
                     title="Stop AI processing — keeps decisions received so far"
                     onClick={async () => {
                       setAiPolling(false);
@@ -3314,7 +3315,7 @@ export default function Backtest() {
                 // themes. 800 is the tint role and inverts with the ink. Worst now 7.93.
                 const viewModes = [
                   { key: 'strategy', label: 'Strategy', enabled: true,                                    color: 'bg-slate-600 text-fg' },
-                  { key: 'ai_sl',    label: 'AI SL',    enabled: hasAiSlData,                             color: 'bg-amber-800/60 text-amber-200' },
+                  { key: 'ai_sl',    label: 'AI SL',    enabled: hasAiSlData,                             color: 'bg-amber-800/60 text-warning' },
                   { key: 'ai_tp',    label: 'AI TP',    enabled: hasAiTpData,                             color: 'bg-sky-800/60 text-sky-200' },
                   { key: 'ai_both',  label: 'AI SL+TP', enabled: hasAiSlData && hasAiTpData,             color: 'bg-violet-800/60 text-violet-200' },
                   { key: 'ai_fve',   label: 'AI FVE',   enabled: hasAiSlData && hasAiTpData, needsData: !hasFveData, color: 'bg-teal-800/60 text-teal-200',
@@ -3348,7 +3349,7 @@ export default function Backtest() {
                       )}
                       {hasAiSimAvail && (
                         <button
-                          className={`text-xs px-3 py-1 rounded border transition-colors ${showAiSim ? 'bg-green-800/60 border-green-600 text-green-200' : 'bg-slate-700 border-line-2 text-fg-3 hover:border-green-600 hover:text-green-300'}`}
+                          className={`text-xs px-3 py-1 rounded border transition-colors ${showAiSim ? 'bg-green-800/60 border-green-600 text-success' : 'bg-slate-700 border-line-2 text-fg-3 hover:border-green-600 hover:text-success'}`}
                           onClick={() => { setShowAiSim(s => !s); }}
                         >
                           📊 {showAiSim ? 'AI View ✓' : 'Compare AI SL/TP'}
@@ -3365,7 +3366,7 @@ export default function Backtest() {
                         <div className="grid grid-cols-4 gap-2 text-center">
                           <div className="bg-slate-700/60 rounded p-2">
                             <p className="text-3xs text-fg-4">Strategy P&L</p>
-                            <p className={`text-sm font-bold ${aiSimData.originalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            <p className={`text-sm font-bold ${aiSimData.originalPnl >= 0 ? 'text-success' : 'text-danger'}`}>
                               ₹{aiSimData.originalPnl.toFixed(0)}
                             </p>
                           </div>
@@ -3377,13 +3378,13 @@ export default function Backtest() {
                               {aiSlTpView === 'ai_both'  && 'AI SL + AI TP P&L'}
                               {aiSlTpView === 'ai_fve'   && 'AI SL+TP + Fair Entry P&L'}
                             </p>
-                            <p className={`text-sm font-bold ${aiSimData.totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            <p className={`text-sm font-bold ${aiSimData.totalPnl >= 0 ? 'text-success' : 'text-danger'}`}>
                               ₹{aiSimData.totalPnl.toFixed(0)}
                             </p>
                           </div>
                           <div className="bg-slate-700/60 rounded p-2">
                             <p className="text-3xs text-fg-4">Difference</p>
-                            <p className={`text-sm font-bold ${diff >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            <p className={`text-sm font-bold ${diff >= 0 ? 'text-success' : 'text-danger'}`}>
                               {diff >= 0 ? '+' : ''}₹{diff.toFixed(0)}
                             </p>
                           </div>
@@ -3400,17 +3401,17 @@ export default function Backtest() {
                           </div>
                           <div className="bg-slate-700/60 rounded p-2">
                             <p className="text-3xs text-fg-4">Rejected Trades</p>
-                            <p className="text-sm font-bold text-red-400/80">{aiSimData.rejectedCount}</p>
+                            <p className="text-sm font-bold text-danger/80">{aiSimData.rejectedCount}</p>
                           </div>
                           <div className="bg-slate-700/60 rounded p-2">
                             <p className="text-3xs text-fg-4">AI Sharpe</p>
-                            <p className={`text-sm font-bold ${aiSimData.sharpe >= 1 ? 'text-green-400' : aiSimData.sharpe > 0 ? 'text-yellow-400' : 'text-red-400'}`}>
+                            <p className={`text-sm font-bold ${aiSimData.sharpe >= 1 ? 'text-success' : aiSimData.sharpe > 0 ? 'text-warning' : 'text-danger'}`}>
                               {aiSimData.sharpe}
                             </p>
                           </div>
                           <div className="bg-slate-700/60 rounded p-2">
                             <p className="text-3xs text-fg-4">AI Max DD</p>
-                            <p className={`text-sm font-bold ${aiSimData.maxDrawdown > 20 ? 'text-red-400' : aiSimData.maxDrawdown > 10 ? 'text-yellow-400' : 'text-green-400'}`}>
+                            <p className={`text-sm font-bold ${aiSimData.maxDrawdown > 20 ? 'text-danger' : aiSimData.maxDrawdown > 10 ? 'text-warning' : 'text-success'}`}>
                               -{aiSimData.maxDrawdown}%
                             </p>
                           </div>
@@ -3518,14 +3519,14 @@ export default function Backtest() {
                         <th className="px-4 py-3 bg-slate-800">PnL</th>
                         <th className="px-4 py-3 bg-slate-800">Reason</th>
                         {showAiSim && aiSimData && <>
-                          <th className="px-4 py-3 bg-green-900/20 text-green-400/80 border-l border-green-700/30" title="AI-suggested stop-loss index level">AI SL</th>
-                          <th className="px-4 py-3 bg-green-900/20 text-green-400/80" title="AI-suggested take-profit index level">AI TP</th>
+                          <th className="px-4 py-3 bg-green-900/20 text-success/80 border-l border-green-700/30" title="AI-suggested stop-loss index level">AI SL</th>
+                          <th className="px-4 py-3 bg-green-900/20 text-success/80" title="AI-suggested take-profit index level">AI TP</th>
                           {(aiSlTpView === 'ai_fve' || (aiSlTpView === 'ai_both' && result.trades.some(t => t.aiConfirmation?.suggested_entry_spot != null))) && (
                             <th className="px-4 py-3 bg-teal-900/20 text-teal-400/80" title="Fair Value Entry: spot level AI suggested for limit entry; SKIPPED if not reached within 15 min of signal">AI FVE Entry</th>
                           )}
-                          <th className="px-4 py-3 bg-green-900/20 text-green-400/80" title="Underlying index level where AI scenario exited">AI Exit Spot</th>
-                          <th className="px-4 py-3 bg-green-900/20 text-green-400/80">AI Reason</th>
-                          <th className="px-4 py-3 bg-green-900/20 text-green-400/80">AI Est. P&L</th>
+                          <th className="px-4 py-3 bg-green-900/20 text-success/80" title="Underlying index level where AI scenario exited">AI Exit Spot</th>
+                          <th className="px-4 py-3 bg-green-900/20 text-success/80">AI Reason</th>
+                          <th className="px-4 py-3 bg-green-900/20 text-success/80">AI Est. P&L</th>
                         </>}
                       </tr>
                     </thead>
@@ -3548,19 +3549,19 @@ export default function Backtest() {
                           <td className="px-4 py-3 font-mono text-xs">{trade.option_symbol || '-'}</td>
                           <td className="px-4 py-3 text-fg-4 text-xs">{trade.volume || '-'}</td>
                           <td className="px-4 py-3 text-fg-5 text-xs">{trade.avg_volume ? Math.round(trade.avg_volume) : '-'}</td>
-                          <td className={`px-4 py-3 font-bold text-xs ${trade.type === 'CE' || trade.type === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>
+                          <td className={`px-4 py-3 font-bold text-xs ${trade.type === 'CE' || trade.type === 'BUY' ? 'text-success' : 'text-danger'}`}>
                             {trade.type}
                           </td>
                           <td className="px-4 py-3 text-xs max-w-[9.375rem]">
                             {trade.ai_decision ? (
                               <div className="flex flex-col items-start gap-0.5">
-                                <span className={`px-1.5 py-0.5 rounded font-bold whitespace-nowrap ${trade.ai_decision === 'CONFIRM' ? 'bg-green-900/50 text-green-300' : 'bg-red-900/50 text-red-300'}`}>
+                                <span className={`px-1.5 py-0.5 rounded font-bold whitespace-nowrap ${trade.ai_decision === 'CONFIRM' ? 'bg-green-900/50 text-success' : 'bg-red-900/50 text-danger'}`}>
                                   {trade.ai_decision === 'CONFIRM' ? '✓' : '✗'} {trade.ai_decision}
                                   {trade.ai_confidence ? <span className="font-normal ml-1 opacity-70">{(trade.ai_confidence * 100).toFixed(0)}%</span> : null}
                                 </span>
                                 {trade.aiConfirmation?.reasoning && (
                                   <span
-                                    className={`italic leading-tight cursor-help ${trade.ai_decision === 'CONFIRM' ? 'text-green-400/70' : 'text-red-400/70'}`}
+                                    className={`italic leading-tight cursor-help ${trade.ai_decision === 'CONFIRM' ? 'text-success/70' : 'text-danger/70'}`}
                                     style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
                                     title={trade.aiConfirmation.reasoning}
                                   >
@@ -3581,7 +3582,7 @@ export default function Backtest() {
                                       className="flex items-center gap-0.5 text-4xs px-1 py-0.5 rounded bg-slate-700/60 text-fg-4 hover:text-fg-2 hover:bg-slate-600/60 transition-colors"
                                     >
                                       {promptCopyState[`first_${idx}`] === 'done'
-                                        ? <><Check size={9} className="text-green-400" /> Copied</>
+                                        ? <><Check size={9} className="text-success" /> Copied</>
                                         : promptCopyState[`first_${idx}`] === 'copying'
                                         ? <><Copy size={9} className="animate-pulse" /> …</>
                                         : <><Copy size={9} /> Prompt</>}
@@ -3593,7 +3594,7 @@ export default function Backtest() {
                                         className="flex items-center gap-0.5 text-4xs px-1 py-0.5 rounded bg-slate-700/60 text-fg-4 hover:text-fg-2 hover:bg-slate-600/60 transition-colors"
                                       >
                                         {responseCopyState[idx] === 'done'
-                                          ? <><Check size={9} className="text-green-400" /> Copied</>
+                                          ? <><Check size={9} className="text-success" /> Copied</>
                                           : <><Copy size={9} /> Response</>}
                                       </button>
                                     )}
@@ -3628,7 +3629,7 @@ export default function Backtest() {
                               : Number(trade.entryPrice).toFixed(2)}
                           </td>
                           {/* SL: always spot level; tooltip shows source details */}
-                          <td className="px-4 py-3 text-red-300 text-xs cursor-help border-b border-dashed border-red-500/30"
+                          <td className="px-4 py-3 text-danger text-xs cursor-help border-b border-dashed border-red-500/30"
                             title={trade.slDetails
                               ? trade.slDetails.chosen === 'SWING'
                                 ? `Mode: Swing | Extreme: ${trade.slDetails.swingExtreme ?? 'N/A'} | Dist: ${trade.slDetails.slDist ?? 'N/A'} | R:R: ${trade.slDetails.rrRatio ?? 'N/A'}`
@@ -3639,7 +3640,7 @@ export default function Backtest() {
                               : '-'}
                           </td>
                           {/* TP: always spot level */}
-                          <td className="px-4 py-3 text-green-300 text-xs">
+                          <td className="px-4 py-3 text-success text-xs">
                             {(showSpotView && hasSpotData ? trade.spot_tp : trade.tp)
                               ? Number(showSpotView && hasSpotData ? trade.spot_tp : trade.tp).toFixed(2)
                               : '-'}
@@ -3652,7 +3653,7 @@ export default function Backtest() {
                               ? (trade.spot_exit ? Number(trade.spot_exit).toFixed(2) : '-')
                               : Number(trade.exitPrice).toFixed(2)}
                           </td>
-                          <td className={`px-4 py-3 font-bold text-xs ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          <td className={`px-4 py-3 font-bold text-xs ${trade.pnl >= 0 ? 'text-success' : 'text-danger'}`}>
                             {Number(trade.pnl).toFixed(2)}
                           </td>
                           <td className="px-4 py-3 text-fg-4 text-xs">{trade.reason}</td>
@@ -3668,11 +3669,11 @@ export default function Backtest() {
                               <>
                                 <td className="px-4 py-3 text-xs font-mono border-l border-green-700/20"
                                   title={aiSl ? `AI SL: ${Number(aiSl).toFixed(2)} (${isCE ? 'below' : 'above'} entry)` : 'No AI SL'}>
-                                  {aiSl ? <span className="text-red-300/80">{Number(aiSl).toFixed(0)}</span> : <span className="text-fg-6">-</span>}
+                                  {aiSl ? <span className="text-danger/80">{Number(aiSl).toFixed(0)}</span> : <span className="text-fg-6">-</span>}
                                 </td>
                                 <td className="px-4 py-3 text-xs font-mono"
                                   title={aiTp ? `AI TP: ${Number(aiTp).toFixed(2)} (${isCE ? 'above' : 'below'} entry)` : 'No AI TP'}>
-                                  {aiTp ? <span className="text-green-300/80">{Number(aiTp).toFixed(0)}</span> : <span className="text-fg-6">-</span>}
+                                  {aiTp ? <span className="text-success/80">{Number(aiTp).toFixed(0)}</span> : <span className="text-fg-6">-</span>}
                                 </td>
                                 {(aiSlTpView === 'ai_fve' || (aiSlTpView === 'ai_both' && result.trades.some(t => t.aiConfirmation?.suggested_entry_spot != null))) && (
                                   <td className="px-4 py-3 text-xs font-mono"
@@ -3688,8 +3689,8 @@ export default function Backtest() {
                                       <span className="text-fg-6">-</span>
                                     ) : sim?.fair_skipped ? (
                                       <span className="flex flex-col gap-0.5">
-                                        <span className="px-1.5 py-0.5 rounded text-3xs bg-orange-900/50 text-orange-300 font-semibold whitespace-nowrap">⏭ Not reached</span>
-                                        {trade.aiConfirmation?.suggested_entry_spot > 0 && <span className="text-orange-400/60 text-3xs">target {Number(trade.aiConfirmation.suggested_entry_spot).toFixed(0)}</span>}
+                                        <span className="px-1.5 py-0.5 rounded text-3xs bg-orange-900/50 text-warning font-semibold whitespace-nowrap">⏭ Not reached</span>
+                                        {trade.aiConfirmation?.suggested_entry_spot > 0 && <span className="text-warning/60 text-3xs">target {Number(trade.aiConfirmation.suggested_entry_spot).toFixed(0)}</span>}
                                       </span>
                                     ) : sim?.fair_entry_spot ? (
                                       <span className="flex flex-col gap-0.5">
@@ -3713,14 +3714,14 @@ export default function Backtest() {
                                     <td className="px-4 py-3 text-fg-5 text-xs font-mono">-</td>
                                     <td className="px-4 py-3 text-xs">
                                       {isReject
-                                        ? <span className="px-1 py-0.5 rounded text-3xs bg-red-900/30 text-red-400" title="AI rejected this trade — not taken">REJECTED</span>
+                                        ? <span className="px-1 py-0.5 rounded text-3xs bg-red-900/30 text-danger" title="AI rejected this trade — not taken">REJECTED</span>
                                         : sim?.fair_skipped
-                                        ? <span className="px-1 py-0.5 rounded text-3xs bg-orange-900/30 text-orange-400" title="Fair value level not reached within 15 min — trade not entered">FVE SKIPPED</span>
+                                        ? <span className="px-1 py-0.5 rounded text-3xs bg-orange-900/30 text-warning" title="Fair value level not reached within 15 min — trade not entered">FVE SKIPPED</span>
                                         : <span className="px-1 py-0.5 rounded text-3xs bg-slate-700 text-fg-4">NO DATA</span>}
                                     </td>
-                                    <td className={`px-4 py-3 text-xs font-bold ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                    <td className={`px-4 py-3 text-xs font-bold ${pnl >= 0 ? 'text-success' : 'text-danger'}`}>
                                       {isReject || sim?.fair_skipped ? <span title={sim?.fair_skipped ? 'Trade skipped — fair entry not reached' : 'Trade not taken — AI rejected'}>₹0</span> : Number(pnl).toFixed(2)}
-                                      {!isReject && !sim?.fair_skipped && <span className={`block text-3xs font-normal ${diff >= 0 ? 'text-green-400/70' : 'text-red-400/70'}`}>{diff >= 0 ? '↑+' : '↓'}{diff.toFixed(0)}</span>}
+                                      {!isReject && !sim?.fair_skipped && <span className={`block text-3xs font-normal ${diff >= 0 ? 'text-success/70' : 'text-danger/70'}`}>{diff >= 0 ? '↑+' : '↓'}{diff.toFixed(0)}</span>}
                                     </td>
                                   </>
                                 ) : (
@@ -3730,13 +3731,13 @@ export default function Backtest() {
                                       {Number(sim.ai_sim_exit.spot).toFixed(2)}
                                     </td>
                                     <td className="px-4 py-3 text-xs">
-                                      <span className={`px-1 py-0.5 rounded text-3xs ${sim.ai_sim_exit.reason === 'TP_HIT' ? 'bg-green-900/50 text-green-300' : sim.ai_sim_exit.reason === 'SL_HIT' ? 'bg-red-900/50 text-red-300' : 'bg-slate-700 text-fg-4'}`}>
+                                      <span className={`px-1 py-0.5 rounded text-3xs ${sim.ai_sim_exit.reason === 'TP_HIT' ? 'bg-green-900/50 text-success' : sim.ai_sim_exit.reason === 'SL_HIT' ? 'bg-red-900/50 text-danger' : 'bg-slate-700 text-fg-4'}`}>
                                         {sim.ai_sim_exit.reason}
                                       </span>
                                     </td>
-                                    <td className={`px-4 py-3 text-xs font-bold ${sim.ai_sim_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                    <td className={`px-4 py-3 text-xs font-bold ${sim.ai_sim_pnl >= 0 ? 'text-success' : 'text-danger'}`}>
                                       {Number(sim.ai_sim_pnl).toFixed(2)}
-                                      <span className={`block text-3xs font-normal ${(sim.ai_sim_pnl - trade.pnl) >= 0 ? 'text-green-400/70' : 'text-red-400/70'}`}>{(sim.ai_sim_pnl - trade.pnl) >= 0 ? '↑+' : '↓'}{(sim.ai_sim_pnl - trade.pnl).toFixed(0)}</span>
+                                      <span className={`block text-3xs font-normal ${(sim.ai_sim_pnl - trade.pnl) >= 0 ? 'text-success/70' : 'text-danger/70'}`}>{(sim.ai_sim_pnl - trade.pnl) >= 0 ? '↑+' : '↓'}{(sim.ai_sim_pnl - trade.pnl).toFixed(0)}</span>
                                     </td>
                                   </>
                                 )}
@@ -3773,7 +3774,9 @@ export default function Backtest() {
           // actual error from Python, which is more accurate than a stale browser check.
           return (
               <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-[2px]" onClick={onClose}>
-                  <div className="bg-surface border border-violet-700/50 rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+                  {/* Presentational: exists only to stop the click bubbling to the
+                      backdrop — it is not itself an control. */}
+                  <div className="bg-surface border border-violet-700/50 rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}> role="presentation"
                       {/* Header */}
                       <div className="p-4 border-b border-violet-700/30 bg-violet-950/20 flex justify-between items-center">
                           <div>
@@ -3837,7 +3840,7 @@ export default function Backtest() {
                               {isWebSession && (
                                   <div className="bg-slate-900/40 border border-line rounded p-3 text-2xs text-fg-3">
                                       🍪 Web-session models read cookies from{' '}
-                                      <a href="/settings" className="text-amber-300 underline hover:text-amber-200">Settings → AI Web Cookies</a>.
+                                      <a href="/settings" className="text-warning underline hover:text-warning">Settings → AI Web Cookies</a>.
                                       If cookies aren't saved there, the call will fail at runtime with the actual reason.
                                   </div>
                               )}
@@ -3861,7 +3864,7 @@ export default function Backtest() {
                               </details>
 
                               {askAiModal.error && (
-                                  <div className="bg-red-900/30 border border-red-700/50 rounded p-3 text-xs text-red-200">
+                                  <div className="bg-red-900/30 border border-red-700/50 rounded p-3 text-xs text-danger">
                                       ❌ {askAiModal.error}
                                   </div>
                               )}
@@ -3922,7 +3925,7 @@ export default function Backtest() {
                                               {keys.length} parameter{keys.length !== 1 ? 's' : ''} suggested
                                           </span>
                                           <span className="text-fg-5">·</span>
-                                          <span className="text-fg-3">Confidence: <span className={`font-bold ${conf >= 70 ? 'text-emerald-400' : conf >= 50 ? 'text-amber-400' : 'text-rose-400'}`}>{conf}%</span></span>
+                                          <span className="text-fg-3">Confidence: <span className={`font-bold ${conf >= 70 ? 'text-success' : conf >= 50 ? 'text-warning' : 'text-danger'}`}>{conf}%</span></span>
                                           <span className="text-fg-5">·</span>
                                           <span className="text-fg-5">{Math.round((askAiModal.elapsedMs || 0) / 1000)}s</span>
                                       </div>
@@ -3949,19 +3952,19 @@ export default function Backtest() {
                                               {analysis.verdict && <p className="text-violet-200 font-semibold">⚖️ {analysis.verdict}</p>}
                                               {asArr(analysis.strengths).length > 0 && (
                                                   <div>
-                                                      <p className="text-emerald-400 font-bold text-3xs uppercase tracking-wider mb-1">Strengths</p>
+                                                      <p className="text-success font-bold text-3xs uppercase tracking-wider mb-1">Strengths</p>
                                                       <ul className="list-disc list-inside text-fg-3 space-y-0.5">{asArr(analysis.strengths).map((s, i) => <li key={i}>{s}</li>)}</ul>
                                                   </div>
                                               )}
                                               {asArr(analysis.weaknesses).length > 0 && (
                                                   <div>
-                                                      <p className="text-rose-400 font-bold text-3xs uppercase tracking-wider mb-1">Weaknesses</p>
+                                                      <p className="text-danger font-bold text-3xs uppercase tracking-wider mb-1">Weaknesses</p>
                                                       <ul className="list-disc list-inside text-fg-3 space-y-0.5">{asArr(analysis.weaknesses).map((s, i) => <li key={i}>{s}</li>)}</ul>
                                                   </div>
                                               )}
                                               {asArr(analysis.recommended_changes).length > 0 && (
                                                   <div>
-                                                      <p className="text-amber-400 font-bold text-3xs uppercase tracking-wider mb-1">What to change</p>
+                                                      <p className="text-warning font-bold text-3xs uppercase tracking-wider mb-1">What to change</p>
                                                       <ul className="list-disc list-inside text-fg-3 space-y-0.5">{asArr(analysis.recommended_changes).map((s, i) => <li key={i}>{s}</li>)}</ul>
                                                   </div>
                                               )}
@@ -4007,7 +4010,7 @@ export default function Backtest() {
                                                           <td className="p-2 font-mono text-fg-3">{k}</td>
                                                           <td className="p-2 text-right font-mono text-fg-4">{String(cur)}</td>
                                                           <td className="p-2 text-center text-fg-6">→</td>
-                                                          <td className={`p-2 text-right font-mono font-bold ${sameValue ? 'text-fg-5' : 'text-emerald-300'}`}>
+                                                          <td className={`p-2 text-right font-mono font-bold ${sameValue ? 'text-fg-5' : 'text-success'}`}>
                                                               {String(sug)}{sameValue && <span className="text-fg-6 text-3xs ml-1">(no change)</span>}
                                                           </td>
                                                       </tr>
@@ -4059,7 +4062,9 @@ export default function Backtest() {
           aria-label={`Trade ${tradeChart.idx + 1} chart`}
           onClick={() => setTradeChart(null)}
         >
-          <div className="w-full max-w-5xl rounded-lg border border-line bg-slate-900 shadow-xl" onClick={(e) => e.stopPropagation()}>
+          {/* Presentational: exists only to stop the click bubbling to the
+              backdrop — it is not itself an control. */}
+          <div className="w-full max-w-5xl rounded-lg border border-line bg-slate-900 shadow-xl" onClick={(e) => e.stopPropagation()}> role="presentation"
             <div className="flex items-start justify-between gap-4 border-b border-line px-4 py-3">
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-fg-2">
@@ -4099,7 +4104,7 @@ export default function Backtest() {
                     {tradeChart.data.priceLines.filter(l => l.kind !== 'entry').map(l => (
                       <span key={l.kind} style={{ color: l.color }}>{l.title}</span>
                     ))}
-                    <span className={(Number(tradeChart.data.trade.pnl) || 0) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                    <span className={(Number(tradeChart.data.trade.pnl) || 0) >= 0 ? 'text-success' : 'text-danger'}>
                       P&L ₹{Math.round(Number(tradeChart.data.trade.pnl) || 0).toLocaleString('en-IN')}
                     </span>
                     <span className="text-fg-5">{tradeChart.data.trade.reason}</span>

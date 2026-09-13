@@ -33,6 +33,7 @@ import axios from 'axios';
 import { API_URL } from '../config/api.js';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { useConfirm } from './confirmContext.js';
+import { toast } from './toastStore.js';
 
 
 // Fallback list — used only if /api/strategies/registry doesn't respond
@@ -235,7 +236,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
             return res;
         } catch (err) {
             const msg = err.response?.data?.error || err.message;
-            alert(`${label} failed: ${msg}`);
+            toast.error(`${label} failed: ${msg}`);
             throw err;
         }
     }
@@ -372,7 +373,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                 <div className="flex items-center gap-2 flex-wrap mb-4">
                     {[
                         { key: 'all',      label: 'All',      cls: 'bg-slate-700 text-fg-2' },
-                        { key: 'live',     label: 'Live',     cls: 'bg-red-800/40 text-red-200 border-red-700' },
+                        { key: 'live',     label: 'Live',     cls: 'bg-red-800/40 text-danger border-red-700' },
                         { key: 'paper',    label: 'Paper',    cls: 'bg-blue-800/40 text-blue-200 border-blue-700' },
                         { key: 'inactive', label: 'Inactive', cls: 'bg-slate-700/40 text-fg-4 border-line-2' },
                     ].map(chip => {
@@ -400,7 +401,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
             )}
 
             {error && (
-                <div className="mb-3 px-3 py-2 rounded bg-rose-950/40 border border-rose-700 text-rose-200 text-xs">
+                <div className="mb-3 px-3 py-2 rounded bg-rose-950/40 border border-rose-700 text-danger text-xs">
                     {error}
                 </div>
             )}
@@ -494,8 +495,8 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
 function PnlBadge({ label, stats }) {
     const has = stats && stats.trades > 0;
     const cls = !has ? 'text-fg-5 border-line bg-slate-800/40'
-        : stats.pnl > 0 ? 'text-emerald-300 border-emerald-700/50 bg-emerald-900/20'
-        : stats.pnl < 0 ? 'text-red-300 border-red-700/50 bg-red-900/20'
+        : stats.pnl > 0 ? 'text-success border-emerald-700/50 bg-emerald-900/20'
+        : stats.pnl < 0 ? 'text-danger border-red-700/50 bg-red-900/20'
         : 'text-fg-3 border-line-2 bg-slate-800/40';
     const title = has
         ? `Last ${label} (this deployment): ${stats.trades} closed trade${stats.trades === 1 ? '' : 's'}, ${stats.wins} win${stats.wins === 1 ? '' : 's'}`
@@ -640,7 +641,7 @@ function DeploymentCard({
                             />
                             <div className="w-9 h-5 bg-blue-500/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-red-500/80"></div>
                         </label>
-                        <span className={`text-xs ml-2 font-bold ${isLive ? 'text-red-400' : 'text-fg-4'}`}>LIVE</span>
+                        <span className={`text-xs ml-2 font-bold ${isLive ? 'text-danger' : 'text-fg-4'}`}>LIVE</span>
                     </div>
 
                     {/* AI confirmation toggle (switch — same affordance as PAPER/LIVE).
@@ -694,14 +695,19 @@ function DeploymentCard({
                             SL/TP
                         </span>
                     )}
-                    <span
-                        className="text-3xs font-mono text-fg-5"
+                    {/* A copy action is an action: as a <span> it was mouse-only
+                        and announced as plain text, so a keyboard user could not
+                        copy the id at all. */}
+                    <button
+                        type="button"
+                        aria-label={`Copy deployment ID ${d._id}`}
+                        className="text-3xs font-mono text-fg-5 hover:text-fg-3"
                         title={`Deployment ID: ${d._id}\nClick to copy`}
                         style={{ cursor: 'copy' }}
                         onClick={() => { try { navigator.clipboard.writeText(d._id); } catch (err) { console.warn('Clipboard write failed (needs a secure context / permission):', err); } }}
                     >
                         {String(d._id).slice(-6).toUpperCase()}
-                    </span>
+                    </button>
                 </div>
 
                 {/* Action buttons — identical affordances to the legacy card */}
@@ -723,14 +729,14 @@ function DeploymentCard({
                         <>
                             <button
                                 onClick={() => onManualTrade('CE', d.symbol)}
-                                className="px-2 py-1 bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/40 rounded text-xs font-bold transition-colors"
+                                className="px-2 py-1 bg-green-500/20 hover:bg-green-500/30 text-success border border-green-500/40 rounded text-xs font-bold transition-colors"
                                 title={`Simulate BUY CE Signal for ${d.symbol}`}
                             >
                                 + CE
                             </button>
                             <button
                                 onClick={() => onManualTrade('PE', d.symbol)}
-                                className="px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/40 rounded text-xs font-bold transition-colors"
+                                className="px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-danger border border-red-500/40 rounded text-xs font-bold transition-colors"
                                 title={`Simulate BUY PE Signal for ${d.symbol}`}
                             >
                                 + PE
@@ -749,7 +755,7 @@ function DeploymentCard({
                     {onSim && (
                         <button
                             onClick={() => onSim(d.symbol)}
-                            className="px-3 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded text-xs transition-colors"
+                            className="px-3 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-warning border border-amber-500/30 rounded text-xs transition-colors"
                             title="Simulate a signal through the live engine (AI + SL/TP), no order placed"
                         >
                             🧪 Sim
@@ -766,7 +772,7 @@ function DeploymentCard({
                     <button
                         onClick={onDelete}
                         disabled={isBusy}
-                        className="text-xs px-2 py-1 rounded bg-rose-900/40 hover:bg-rose-800 text-rose-300 disabled:opacity-50"
+                        className="text-xs px-2 py-1 rounded bg-rose-900/40 hover:bg-rose-800 text-danger disabled:opacity-50"
                         title="Delete this deployment"
                     >
                         ⌫
@@ -778,11 +784,11 @@ function DeploymentCard({
             {aiEnabled && (
                 <div className="px-4 py-2 border-t border-violet-500/20 bg-violet-500/5 flex flex-wrap gap-2 text-2xs">
                     <span className="text-violet-400 font-semibold">✨ AI Risk Filter:</span>
-                    <span className={`px-1.5 py-0.5 rounded ${params.ai_follow_sl_tp ? 'bg-green-500/20 text-green-300' : 'bg-slate-700 text-fg-4'}`}>
+                    <span className={`px-1.5 py-0.5 rounded ${params.ai_follow_sl_tp ? 'bg-green-500/20 text-success' : 'bg-slate-700 text-fg-4'}`}>
                         {params.ai_follow_sl_tp ? '✓ AI SL/TP' : 'Strategy SL/TP'}
                     </span>
                     {params.ai_follow_strategy_exits && (
-                        <span className="px-1.5 py-0.5 rounded bg-green-500/20 text-green-300">✓ Strategy Exits</span>
+                        <span className="px-1.5 py-0.5 rounded bg-green-500/20 text-success">✓ Strategy Exits</span>
                     )}
                     <span className="px-1.5 py-0.5 rounded bg-slate-700 text-fg-3">
                         Thresh: {Math.round((params.ai_confidence_threshold || 0.6) * 100)}%
@@ -798,7 +804,7 @@ function DeploymentCard({
                         const isBad = h && h.valid === false;
                         return (
                             <span
-                                className={`px-1.5 py-0.5 rounded ${isBad ? 'bg-red-800/60 text-red-100 ring-1 ring-red-400 animate-pulse' : 'bg-amber-800/40 text-amber-200'}`}
+                                className={`px-1.5 py-0.5 rounded ${isBad ? 'bg-red-800/60 text-danger ring-1 ring-red-400 animate-pulse' : 'bg-amber-800/40 text-warning'}`}
                                 title={
                                     `Model: ${params.claude_web_model || 'claude-web/claude-sonnet-4-6'}` +
                                     `\nBatch size: ${parseInt(params.claude_web_batch_size, 10) || 1}×` +
@@ -823,7 +829,7 @@ function DeploymentCard({
                         const isBad = h && h.valid === false;
                         return (
                             <span
-                                className={`px-1.5 py-0.5 rounded ${isBad ? 'bg-red-800/60 text-red-100 ring-1 ring-red-400 animate-pulse' : 'bg-cyan-800/40 text-cyan-200'}`}
+                                className={`px-1.5 py-0.5 rounded ${isBad ? 'bg-red-800/60 text-danger ring-1 ring-red-400 animate-pulse' : 'bg-cyan-800/40 text-cyan-200'}`}
                                 title={
                                     `Model: ${params.gemini_web_model || 'gemini-web/gemini-2.5-pro'}` +
                                     `\nBatch size: ${parseInt(params.gemini_web_batch_size, 10) || 1}×` +
@@ -845,7 +851,7 @@ function DeploymentCard({
                     })()}
                     {params.claude_thinking_enabled && (
                         <span
-                            className="px-1.5 py-0.5 rounded bg-orange-800/40 text-orange-200"
+                            className="px-1.5 py-0.5 rounded bg-orange-800/40 text-warning"
                             title={
                                 `Thinking budget: ${(parseInt(params.claude_thinking_budget, 10) || 32000).toLocaleString()} tokens` +
                                 `\nApplies to: Anthropic API + Claude.ai web (paprika_mode)` +
@@ -857,7 +863,7 @@ function DeploymentCard({
                     )}
                     {params.ai_fail_closed && (
                         <span
-                            className="px-1.5 py-0.5 rounded bg-red-800/40 text-red-200"
+                            className="px-1.5 py-0.5 rounded bg-red-800/40 text-danger"
                             title="On AI timeout/error: REJECT the trade instead of falling back to threshold gate"
                         >
                             🛑 Fail-closed
@@ -878,7 +884,7 @@ function DeploymentCard({
                     )}
                     {params.ai_follow_strategy_exits === false && (
                         <span
-                            className="px-1.5 py-0.5 rounded bg-amber-800/50 text-amber-200 ring-1 ring-amber-500/40"
+                            className="px-1.5 py-0.5 rounded bg-amber-800/50 text-warning ring-1 ring-amber-500/40"
                             title={
                                 `ai_follow_strategy_exits = FALSE → live rides positions to the AI SL/TP instead ` +
                                 `of following the strategy's exits (the same switch the backtest AI column uses).\n\n` +
@@ -982,7 +988,7 @@ function DeploymentCard({
                         if (isGlobalOverride && globalConfig && globalConfig[key] != null && globalConfig[key] !== val) {
                             displayVal = globalConfig[key];
                             overrideTag = (
-                                <span className="text-4xs text-amber-400 font-normal ml-1" title={`Stored on deployment: ₹${val}. Engine uses global setting (₹${globalConfig[key]}).`}>
+                                <span className="text-4xs text-warning font-normal ml-1" title={`Stored on deployment: ₹${val}. Engine uses global setting (₹${globalConfig[key]}).`}>
                                     (global ↑ from ₹{val})
                                 </span>
                             );
@@ -992,7 +998,7 @@ function DeploymentCard({
                                 <p className="text-fg-5 text-3xs uppercase font-bold tracking-wider mb-0.5">
                                     {key.replace(/_/g, ' ')}{overrideTag}
                                 </p>
-                                <p className={`font-mono text-sm truncate ${isKey ? 'text-fg font-bold' : 'text-fg-3'} ${typeof val === 'boolean' ? (val ? 'text-green-400' : 'text-red-400') : ''}`} title={String(displayVal)}>
+                                <p className={`font-mono text-sm truncate ${isKey ? 'text-fg font-bold' : 'text-fg-3'} ${typeof val === 'boolean' ? (val ? 'text-success' : 'text-danger') : ''}`} title={String(displayVal)}>
                                     {String(displayVal)}
                                 </p>
                             </div>
@@ -1068,7 +1074,9 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
 
     return (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
-            <div
+            {/* Presentational: exists only to stop the click bubbling to the
+                backdrop — it is not itself an control. */}
+            <div role="presentation"
                 className="bg-surface rounded-xl border border-line p-5 w-full max-w-md max-h-[90vh] overflow-y-auto"
                 onClick={(e) => e.stopPropagation()}
             >
@@ -1076,7 +1084,7 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
                     <h4 className="font-bold text-lg">New Deployment</h4>
                     <button onClick={onClose} className="text-fg-4 hover:text-fg">×</button>
                 </div>
-                {err && <div className="mb-2 px-2 py-1 rounded bg-rose-950/40 border border-rose-700 text-rose-200 text-xs">{err}</div>}
+                {err && <div className="mb-2 px-2 py-1 rounded bg-rose-950/40 border border-rose-700 text-danger text-xs">{err}</div>}
                 <div className="space-y-2 text-sm">
                     {(savedConfigs && savedConfigs.length > 0) && (
                         <label className="block bg-blue-950/30 border border-blue-800/50 rounded p-2">
@@ -1178,7 +1186,7 @@ function EditDeployment({ deployment, onClose, onSaved }) {
     };
     return (
         <div className="m-3 mt-0 p-2 rounded border border-line bg-slate-950/50 text-xs space-y-2">
-            {err && <div className="px-2 py-1 rounded bg-rose-950/40 border border-rose-700 text-rose-200">{err}</div>}
+            {err && <div className="px-2 py-1 rounded bg-rose-950/40 border border-rose-700 text-danger">{err}</div>}
             <label className="block">
                 <span className="text-3xs text-fg-5">Name</span>
                 <input className="mt-0.5 w-full bg-slate-900 border border-line rounded px-2 py-1 text-fg" value={name} onChange={(e) => setName(e.target.value)} />

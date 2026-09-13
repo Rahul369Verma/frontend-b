@@ -69,7 +69,9 @@ export function ConfirmProvider({ children }) {
                     aria-labelledby="confirm-title"
                     onClick={() => settle(false)}
                 >
-                    <div
+                    {/* Presentational: exists only to stop the click bubbling to the
+                        backdrop — it is not itself an control. */}
+                    <div role="presentation"
                         className={`w-full max-w-md rounded-xl border p-4 bg-card ${danger ? 'border-danger' : 'border-line-2'}`}
                         onClick={(e) => e.stopPropagation()}
                     >

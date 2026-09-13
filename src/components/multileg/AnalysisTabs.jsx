@@ -51,7 +51,7 @@ export default function AnalysisTabs({
                     </button>
                 ))}
                 <span className="ml-auto text-3xs text-fg-6 pb-1">
-                    {fmt(lots)} lot(s) × {fmt(lotSize)} · <span className="text-amber-400/80">GROSS</span>
+                    {fmt(lots)} lot(s) × {fmt(lotSize)} · <span className="text-warning/80">GROSS</span>
                 </span>
             </div>
 
@@ -125,13 +125,13 @@ function PayoffPanel({
         <>
             <div className="flex items-center justify-between mb-1 flex-wrap gap-x-3 gap-y-1">
                 <span className="flex items-center gap-2 text-3xs flex-wrap">
-                    <span className="text-emerald-300">━ expiry</span>
+                    <span className="text-success">━ expiry</span>
                     {hasNow && <span className="text-sky-300">┅ now (T+0)</span>}
                     {hasWif && <span className="text-fuchsia-300">┅ what-if</span>}
                     {sd.levels.length > 0 && (
                         <span className="text-violet-300/70">▨ ±1σ/±2σ ({sd.horizon === 'calendar' ? 'calendar' : 'trading-time'})</span>
                     )}
-                    {oiOn && <span><span className="text-rose-400">▮</span> call OI <span className="text-emerald-400">▮</span> put OI</span>}
+                    {oiOn && <span><span className="text-danger">▮</span> call OI <span className="text-success">▮</span> put OI</span>}
                     <span className="text-sky-300 font-semibold">spot {fmt(spot)}</span>
                     {num(an?.ivUsed) != null && <span className="text-fg-5">IV {fmt(an.ivUsed, 2)}%</span>}
                 </span>
@@ -244,7 +244,7 @@ function PayoffPanel({
                 {sd.levels.length > 0 && (
                     <div>
                         σ bands are on the <span className="text-violet-300">{sd.horizon === 'calendar' ? 'CALENDAR' : 'TRADING-TIME'}</span> horizon — {SD_HORIZON_NOTE[sd.horizon]}.
-                        {sd.horizon !== sdMode && <span className="text-amber-400/80"> ({sdMode} was unavailable, so the other horizon is shown)</span>}
+                        {sd.horizon !== sdMode && <span className="text-warning/80"> ({sdMode} was unavailable, so the other horizon is shown)</span>}
                         {' '}±1σ {fmt(sd.levels.find(b => num(b.sd) === 1)?.points)} pts. Charges are excluded — this whole panel is gross, {fmt(lots)} lot(s).
                     </div>
                 )}
@@ -292,7 +292,7 @@ function PnlTablePanel({ pnlTable, an, loading }) {
         if (n == null || maxAbs <= 0) return undefined;
         const a = Math.min(0.55, 0.05 + (Math.abs(n) / maxAbs) * 0.5);
         // status.good / status.critical rather than the diverging pair: these
-        // cells sit under `text-emerald-100` / `text-red-100` ink, so the fill
+        // cells sit under `text-success` / `text-danger` ink, so the fill
         // and the number have to agree on which side of zero they are.
         return { backgroundColor: ct.alpha(n >= 0 ? ct.status.good : ct.status.critical, a) };
     };
@@ -339,7 +339,7 @@ function PnlTablePanel({ pnlTable, an, loading }) {
                                         const n = num(v);
                                         return (
                                             <td key={ci} style={heat(v)}
-                                                className={`px-1.5 py-0.5 text-right whitespace-nowrap ${edge} ${n == null ? 'text-fg-6' : n >= 0 ? 'text-emerald-100' : 'text-red-100'}`}
+                                                className={`px-1.5 py-0.5 text-right whitespace-nowrap ${edge} ${n == null ? 'text-fg-6' : n >= 0 ? 'text-success' : 'text-danger'}`}
                                                 title={`spot ${fmt(c.spot)} on ${dates[ci] || '—'} — ${rup(v)} gross`}>
                                                 {rup(v)}
                                             </td>
@@ -410,7 +410,7 @@ function GreeksPanel({ an, lotSize, lots, loading }) {
                     × lots ({fmt(lots)})
                 </label>
                 <span className="text-fg-6">showing <span className="text-fg-4">{scaleNote}</span></span>
-                {missing > 0 && <span className="text-amber-400/80">{missing} leg(s) could not be priced for greeks</span>}
+                {missing > 0 && <span className="text-warning/80">{missing} leg(s) could not be priced for greeks</span>}
             </div>
 
             <div className="overflow-x-auto rounded border border-line-0">
@@ -435,21 +435,21 @@ function GreeksPanel({ an, lotSize, lots, loading }) {
                             return (
                                 <tr key={`${l.type}${l.strike}${i}`} className="border-t border-line-0/60">
                                     <td className="px-2 py-0.5 whitespace-nowrap">
-                                        <span className={l.action === 'BUY' ? 'text-emerald-300' : 'text-red-300'}>{l.action}</span>
+                                        <span className={l.action === 'BUY' ? 'text-success' : 'text-danger'}>{l.action}</span>
                                         {num(l.ratio) > 1 ? <span className="text-fg-4"> {fmt(l.ratio)}×</span> : null}
                                         <span className={l.type === 'CE' ? ' text-sky-300' : ' text-violet-300'}> {l.type}</span>
                                     </td>
                                     <td className="px-1 text-center text-fg-3">{fmt(l.strike)}</td>
                                     <td className="px-1 text-center text-fg-5">{num(l.iv) != null ? fmt(l.iv, 2) : '—'}</td>
                                     <td className="px-1 text-center text-fg-5">{num(l.dte) != null ? fmt(l.dte, 2) : '—'}</td>
-                                    <td className={`px-1 text-right ${num(g?.delta) > 0 ? 'text-emerald-300' : num(g?.delta) < 0 ? 'text-red-300' : 'text-fg-5'}`}>
+                                    <td className={`px-1 text-right ${num(g?.delta) > 0 ? 'text-success' : num(g?.delta) < 0 ? 'text-danger' : 'text-fg-5'}`}>
                                         {g ? sgnNum(num(g.delta) * f, dDelta) : '—'}
                                     </td>
                                     <td className="px-1 text-right text-fg-4">{g && num(g.gamma) != null ? sgnNum(num(g.gamma) * f, dGamma) : '—'}</td>
-                                    <td className={`px-1 text-right ${num(g?.vega) > 0 ? 'text-emerald-300' : num(g?.vega) < 0 ? 'text-red-300' : 'text-fg-5'}`}>
+                                    <td className={`px-1 text-right ${num(g?.vega) > 0 ? 'text-success' : num(g?.vega) < 0 ? 'text-danger' : 'text-fg-5'}`}>
                                         {g ? sgnNum(num(g.vega) * f, 2) : '—'}
                                     </td>
-                                    <td className={`px-1 text-right ${num(g?.theta) > 0 ? 'text-emerald-300' : num(g?.theta) < 0 ? 'text-red-300' : 'text-fg-5'}`}>
+                                    <td className={`px-1 text-right ${num(g?.theta) > 0 ? 'text-success' : num(g?.theta) < 0 ? 'text-danger' : 'text-fg-5'}`}>
                                         {g ? sgnNum(num(g.theta) * f, 2) : '—'}
                                     </td>
                                     <td className="px-1 text-right text-fg-4">{num(l.intrinsicUnit) != null ? fmt(l.intrinsicUnit, 2) : '—'}</td>
@@ -462,14 +462,14 @@ function GreeksPanel({ an, lotSize, lots, loading }) {
                             <td className="px-1" />
                             <td className="px-1" />
                             <td className="px-1" />
-                            <td className={`px-1 text-right ${totals.delta > 0 ? 'text-emerald-300' : totals.delta < 0 ? 'text-red-300' : 'text-fg-3'}`}>
+                            <td className={`px-1 text-right ${totals.delta > 0 ? 'text-success' : totals.delta < 0 ? 'text-danger' : 'text-fg-3'}`}>
                                 {totals.any ? sgnNum(totals.delta * f, dDelta) : '—'}
                             </td>
                             <td className="px-1 text-right text-fg-3">{totals.any ? sgnNum(totals.gamma * f, dGamma) : '—'}</td>
-                            <td className={`px-1 text-right ${totals.vega > 0 ? 'text-emerald-300' : totals.vega < 0 ? 'text-red-300' : 'text-fg-3'}`}>
+                            <td className={`px-1 text-right ${totals.vega > 0 ? 'text-success' : totals.vega < 0 ? 'text-danger' : 'text-fg-3'}`}>
                                 {totals.any ? sgnNum(totals.vega * f, 2) : '—'}
                             </td>
-                            <td className={`px-1 text-right ${totals.theta > 0 ? 'text-emerald-300' : totals.theta < 0 ? 'text-red-300' : 'text-fg-3'}`}>
+                            <td className={`px-1 text-right ${totals.theta > 0 ? 'text-success' : totals.theta < 0 ? 'text-danger' : 'text-fg-3'}`}>
                                 {totals.any ? sgnNum(totals.theta * f, 2) : '—'}
                             </td>
                             <td className="px-1 text-right text-fg-3">{num(an?.intrinsicUnit) != null ? sgnNum(an.intrinsicUnit, 2) : '—'}</td>
@@ -525,14 +525,14 @@ function LegsPanel({ an, resp, loading }) {
                             <tr key={`${l.symbol || l.strike}-${i}`} className="border-t border-line-0/60">
                                 <td className="px-2 py-0.5 text-fg-4 whitespace-nowrap">{l.symbol || '—'}</td>
                                 <td className="px-1 text-center whitespace-nowrap">
-                                    <span className={l.action === 'BUY' ? 'text-emerald-300' : 'text-red-300'}>{l.action}</span>
+                                    <span className={l.action === 'BUY' ? 'text-success' : 'text-danger'}>{l.action}</span>
                                     {num(l.ratio) > 1 ? <span className="text-fg-4"> {fmt(l.ratio)}×</span> : null}
                                     <span className={l.type === 'CE' ? ' text-sky-300' : ' text-violet-300'}> {l.type}</span>
                                     <span className="text-fg-3"> {fmt(l.strike)}</span>
                                 </td>
                                 <td className="px-1 text-center text-fg-5">{l.expiry || '—'}</td>
                                 <td className="px-1 text-right text-fg-2">{num(l.premium) != null ? `₹${fmt(l.premium, 2)}` : '—'}</td>
-                                <td className={`px-1 text-center ${l.premiumSource === 'user' ? 'text-amber-400' : l.premiumSource === 'mid' ? 'text-emerald-400' : 'text-sky-400'}`}
+                                <td className={`px-1 text-center ${l.premiumSource === 'user' ? 'text-warning' : l.premiumSource === 'mid' ? 'text-success' : 'text-sky-400'}`}
                                     title={l.premiumSource === 'user' ? 'you pinned this price' : l.premiumSource === 'mid' ? 'mid of the live bid/ask' : 'last traded price — no two-sided quote'}>
                                     {l.premiumSource || '—'}
                                 </td>
@@ -548,8 +548,8 @@ function LegsPanel({ an, resp, loading }) {
                 </table>
             </div>
             <div className="text-4xs text-fg-6 mt-1.5">
-                A <span className="text-emerald-400">mid</span> premium is the midpoint of a live two-sided quote; <span className="text-sky-400">ltp</span> means no two-sided quote existed and the last trade was used, which can be stale;
-                <span className="text-amber-400"> user</span> means you pinned it and the market is being ignored for that leg.
+                A <span className="text-success">mid</span> premium is the midpoint of a live two-sided quote; <span className="text-sky-400">ltp</span> means no two-sided quote existed and the last trade was used, which can be stale;
+                <span className="text-warning"> user</span> means you pinned it and the market is being ignored for that leg.
                 {num(an?.timeValueUnit) != null && (
                     <> Book split: intrinsic {sgnNum(an.intrinsicUnit, 2)}/u · time value {sgnNum(an.timeValueUnit, 2)}/u — both signed by position, so a net seller shows a positive time value (the decay works for you).</>
                 )}

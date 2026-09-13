@@ -643,7 +643,7 @@ export default function LivePortfolio() {
             {/* ══════════════════ SINGLE-LEG BOOK ══════════════════ */}
             {view === 'single' && (err ? (
                 <Card title="Portfolio unavailable">
-                    <p className="text-xs text-red-400">{String(err)}</p>
+                    <p className="text-xs text-danger">{String(err)}</p>
                 </Card>
             ) : !summary ? (
                 loading ? (
@@ -810,7 +810,7 @@ export default function LivePortfolio() {
                                     value={tabIdx} onChange={setTab} />
                                 {(isStrategyTab || isDeploymentTab) && (
                                     <p className="text-2xs text-fg-5 mb-2">
-                                        A row marked <span className="text-red-300 font-semibold">Bleeding</span> has lost money over this window.
+                                        A row marked <span className="text-danger font-semibold">Bleeding</span> has lost money over this window.
                                         Sort by <span className="text-fg-3">Net</span> ascending to put the worst first.
                                     </p>
                                 )}

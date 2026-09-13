@@ -205,7 +205,7 @@ export default function AiScore() {
                             columns={[
                                 { key: 'label', header: 'Model' },
                                 { key: 'n', header: 'Trades', align: 'right' },
-                                { key: 'expectancy', header: 'Expectancy', align: 'right', render: (r) => <span className={toneOf(r.expectancy) === 'negative' ? 'text-negative' : toneOf(r.expectancy) === 'positive' ? 'text-positive' : ''}>{inr(r.expectancy)}</span> },
+                                { key: 'expectancy', header: 'Expectancy', align: 'right', render: (r) => <span className={toneOf(r.expectancy) === 'negative' ? 'text-danger' : toneOf(r.expectancy) === 'positive' ? 'text-success' : ''}>{inr(r.expectancy)}</span> },
                                 { key: 'total', header: 'Total', align: 'right', render: (r) => inr(r.total) },
                                 { key: 'winRate', header: 'Won', align: 'right', render: (r) => (r.winRate == null ? '—' : `${r.winRate}%`) },
                                 { key: 'worst', header: 'Worst', align: 'right', render: (r) => inr(r.worst) },

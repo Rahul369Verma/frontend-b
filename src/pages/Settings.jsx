@@ -168,9 +168,9 @@ export default function Settings() {
 
       {message && (
         <div className={`p-4 rounded-lg flex items-center gap-2 ${
-          message.type === 'success' ? 'bg-green-500/10 text-green-400 border border-green-500/20' :
+          message.type === 'success' ? 'bg-green-500/10 text-success border border-green-500/20' :
           message.type === 'info'    ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
-                                       'bg-red-500/10 text-red-400 border border-red-500/20'
+                                       'bg-red-500/10 text-danger border border-red-500/20'
         }`}>
           {message.type === 'success' ? <CheckCircle className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
           {message.text}
@@ -260,7 +260,7 @@ export default function Settings() {
                     <div className="font-mono text-fg bg-slate-800 p-2 rounded border border-line truncate">
                       {config?.fyers_redirect_url || 'https://wilburn-cuplike-bleatingly.ngrok-free.dev/'}
                     </div>
-                    <p className="text-xs text-yellow-400 mt-1">Ensure this matches exactly in Fyers Dashboard.</p>
+                    <p className="text-xs text-warning mt-1">Ensure this matches exactly in Fyers Dashboard.</p>
                   </div>
                   
                   <div className="flex items-center gap-2 mt-2">
@@ -298,7 +298,7 @@ export default function Settings() {
                   <button
                     onClick={handleDeleteToken}
                     disabled={loading}
-                    className="flex-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 py-2 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                    className="flex-1 bg-red-500/10 hover:bg-red-500/20 text-danger border border-red-500/20 py-2 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
                   >
                     <Trash2 className="w-4 h-4" />
                     Delete Token
@@ -406,7 +406,7 @@ export default function Settings() {
                     <div key={key} className={`p-3 rounded-lg border ${isSet ? 'border-line bg-slate-900/40' : optional ? 'border-line-0 bg-slate-900/20' : 'border-amber-500/30 bg-amber-500/5'}`}>
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-fg-4 font-medium">{label}</span>
-                        <span className={`text-3xs px-2 py-0.5 rounded-full ${isSet ? 'bg-green-500/20 text-green-400' : optional ? 'bg-slate-700 text-fg-4' : 'bg-amber-500/20 text-amber-400'}`}>
+                        <span className={`text-3xs px-2 py-0.5 rounded-full ${isSet ? 'bg-green-500/20 text-success' : optional ? 'bg-slate-700 text-fg-4' : 'bg-amber-500/20 text-warning'}`}>
                           {isSet ? 'set' : optional ? 'optional' : '⚠ missing'}
                         </span>
                       </div>
@@ -436,7 +436,7 @@ export default function Settings() {
 
                 {/* Claude */}
                 <div className="p-4 bg-slate-900/50 rounded-lg border border-line space-y-3">
-                  <div className="text-orange-400 font-medium text-sm">🟠 Claude.ai</div>
+                  <div className="text-warning font-medium text-sm">🟠 Claude.ai</div>
                   <div>
                     <label htmlFor="settings-sessionkey-1" className="block text-xs text-fg-4 mb-1">sessionKey</label>
                     <input id="settings-sessionkey-1"

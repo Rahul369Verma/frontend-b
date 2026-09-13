@@ -74,7 +74,7 @@ function OiCell({ value, side, max }) {
 function ChgCell({ value }) {
     const n = num(value);
     return (
-        <td className={`text-center text-4xs ${n == null || n === 0 ? 'text-fg-6' : n > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+        <td className={`text-center text-4xs ${n == null || n === 0 ? 'text-fg-6' : n > 0 ? 'text-success' : 'text-danger'}`}>
             {n == null ? '—' : `${n > 0 ? '+' : n < 0 ? '−' : ''}${fmt(Math.abs(n))}`}
         </td>
     );
@@ -111,7 +111,7 @@ export default function ChainLadder({
                 );
             case 'sp':
                 return (
-                    <td key={key} className={`text-center ${num(d.halfSpreadPct) > 2 ? 'text-red-400' : 'text-fg-6'}`}>
+                    <td key={key} className={`text-center ${num(d.halfSpreadPct) > 2 ? 'text-danger' : 'text-fg-6'}`}>
                         {num(d.halfSpreadPct) != null ? `${fmt(d.halfSpreadPct, 1)}%` : '—'}
                     </td>
                 );
@@ -162,7 +162,7 @@ export default function ChainLadder({
                             {['BUY', 'SELL'].map(a => (
                                 <button key={a} onClick={() => onPickAction(a)}
                                     className={`px-1.5 py-0.5 rounded border ${pickAction === a
-                                        ? (a === 'BUY' ? 'border-emerald-600 bg-emerald-950/40 text-emerald-300' : 'border-red-600 bg-red-950/40 text-red-300')
+                                        ? (a === 'BUY' ? 'border-emerald-600 bg-emerald-950/40 text-success' : 'border-red-600 bg-red-950/40 text-danger')
                                         : 'border-line bg-slate-800 text-fg-5'}`}>{a}</button>
                             ))}
                         </>
@@ -266,8 +266,8 @@ export default function ChainLadder({
                                                        12.1–16.1:1 across every theme. The 500 ring keeps the
                                                        badge crisp against the cell's own tint. */
                                                     className={`inline-flex items-center rounded-xs px-1 text-5xs font-black leading-none ring-1 ${
-                                                        buy ? 'bg-emerald-900 text-emerald-100 ring-emerald-500'
-                                                            : 'bg-rose-900 text-rose-100 ring-rose-500'}`}
+                                                        buy ? 'bg-emerald-900 text-success ring-emerald-500'
+                                                            : 'bg-rose-900 text-danger ring-rose-500'}`}
                                                     title={`${lg.action} ${lg.type} ${fmt(k)}${ratio > 1 ? ` ×${ratio}` : ''}${active ? ' — active leg' : ''}`}
                                                 >
                                                     {buy ? 'B' : 'S'}{ratio > 1 ? `×${ratio}` : ''}
@@ -316,7 +316,7 @@ export default function ChainLadder({
                                                         ? <span>{row.distancePct > 0 ? '+' : '−'}{fmt(Math.abs(row.distancePct), 1)}%</span>
                                                         : null}
                                                     {isAtm ? <span className="text-primary">ATM</span> : null}
-                                                    {isPain ? <span className="text-amber-400"> ⊙MP</span> : null}
+                                                    {isPain ? <span className="text-warning"> ⊙MP</span> : null}
                                                     {ceWall ? <span className="text-sky-400"> ▲CE</span> : null}
                                                     {peWall ? <span className="text-violet-400"> ▼PE</span> : null}
                                                 </div>
@@ -333,13 +333,13 @@ export default function ChainLadder({
                     </div>
                     <div className="text-4xs text-fg-6 mt-1.5 flex flex-wrap gap-x-3">
                         <span><span className="text-primary">ATM</span> at-the-money</span>
-                        {num(chain.maxPain) != null && <span><span className="text-amber-400">⊙MP</span> max pain {fmt(chain.maxPain)}</span>}
+                        {num(chain.maxPain) != null && <span><span className="text-warning">⊙MP</span> max pain {fmt(chain.maxPain)}</span>}
                         {chain.ceWall && <span><span className="text-sky-400">▲CE</span> call wall {fmt(chain.ceWall.strike)} ({fmt(chain.ceWall.oi)} OI)</span>}
                         {chain.peWall && <span><span className="text-violet-400">▼PE</span> put wall {fmt(chain.peWall.strike)} ({fmt(chain.peWall.oi)} OI)</span>}
                         {/* the bars are in every view now; `chg` is only in the OI view */}
-                        <span><span className="text-rose-400">▬</span> call OI · <span className="text-emerald-400">▬</span> put OI — both scaled to the biggest OI on screen ({fmt(maxOi)})</span>
+                        <span><span className="text-danger">▬</span> call OI · <span className="text-success">▬</span> put OI — both scaled to the biggest OI on screen ({fmt(maxOi)})</span>
                         {view === 'oi' && <span>chg = contracts added (+) or unwound (−) since the session opened</span>}
-                        <span><span className="inline-flex items-center rounded-xs px-1 text-5xs font-black leading-none ring-1 bg-emerald-900 text-emerald-100 ring-emerald-500">B</span> bought leg · <span className="inline-flex items-center rounded-xs px-1 text-5xs font-black leading-none ring-1 bg-rose-900 text-rose-100 ring-rose-500">S</span> sold leg — ×n is the ratio; the row is tinted and the active leg is outlined</span>
+                        <span><span className="inline-flex items-center rounded-xs px-1 text-5xs font-black leading-none ring-1 bg-emerald-900 text-success ring-emerald-500">B</span> bought leg · <span className="inline-flex items-center rounded-xs px-1 text-5xs font-black leading-none ring-1 bg-rose-900 text-danger ring-rose-500">S</span> sold leg — ×n is the ratio; the row is tinted and the active leg is outlined</span>
                         <span>Δ ≈ the market&apos;s odds the strike expires in the money</span>
                         <span>ring = a leg sits here (green buy / red sell)</span>
                         <span className="text-fg-6">

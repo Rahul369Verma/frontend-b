@@ -127,8 +127,8 @@ export default function RiskLimitsPanel() {
                 </div>
             )}
             {msg && (
-                <div className={`mb-3 text-2xs rounded border p-2 ${msg.tone === 'critical' ? 'border-negative/40 bg-negative/10 text-negative'
-                    : msg.tone === 'positive' ? 'border-positive/40 bg-positive/10 text-positive' : 'border-warning/40 bg-warning/10 text-fg-3'}`}>
+                <div className={`mb-3 text-2xs rounded border p-2 ${msg.tone === 'critical' ? 'border-danger/40 bg-danger/10 text-danger'
+                    : msg.tone === 'positive' ? 'border-success/40 bg-success/10 text-success' : 'border-warning/40 bg-warning/10 text-fg-3'}`}>
                     {msg.text}
                 </div>
             )}
