@@ -1,11 +1,12 @@
 import React, { useState, useMemo } from 'react';
+import { rupeeTick, pnlTone } from '../viz/tokens';
 import {
     ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ReferenceArea, Legend,
 } from 'recharts';
 import ZoomableChart from '../charts/ZoomableChart';
 import { Help } from './builderUi';
 import {
-    num, fmt, rup, sgnNum, compact, shortDate, sdFor, SD_HORIZON_NOTE, tabCls,
+    num, fmt, rup, sgnNum, compact, shortDate, sdFor, SD_HORIZON_NOTE, tabCls, spotMove,
 } from './builderFormat';
 import { useChartTheme } from '../../theme/chartTheme.js';
 
@@ -50,7 +51,7 @@ export default function AnalysisTabs({
                         {t.label}
                     </button>
                 ))}
-                <span className="ml-auto text-3xs text-fg-6 pb-1">
+                <span className="ml-auto text-3xs text-fg-5 pb-1">
                     {fmt(lots)} lot(s) × {fmt(lotSize)} · <span className="text-warning/80">GROSS</span>
                 </span>
             </div>
@@ -136,7 +137,7 @@ function PayoffPanel({
                     {num(an?.ivUsed) != null && <span className="text-fg-5">IV {fmt(an.ivUsed, 2)}%</span>}
                 </span>
                 <span className="flex items-center gap-2 text-3xs flex-wrap">
-                    <span className="text-fg-6">σ bands</span>
+                    <span className="text-fg-5">σ bands</span>
                     {['calendar', 'trading'].map(m => (
                         <button key={m} onClick={() => onSdMode(m)}
                             title={SD_HORIZON_NOTE[m]}
@@ -181,7 +182,7 @@ function PayoffPanel({
                     {/* Explicit domain + allowDataOverflow: an unbounded tail is CLIPPED,
                         not framed. See the yDomain comment in StrategyBuilder. */}
                     <YAxis tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} width={58} domain={yDomain} allowDataOverflow
-                        tickFormatter={(v) => (Math.abs(v) >= 1000 ? `₹${Math.round(v / 1000)}k` : `₹${Math.round(v)}`)} />
+                        tickFormatter={rupeeTick} />
                     {/* Secondary OI axis. Its top is 3× the biggest OI on screen so
                         the bars occupy the bottom third and stay CONTEXT — they are
                         not on the same scale as anything else on this chart. */}
@@ -195,19 +196,12 @@ function PayoffPanel({
                             ? [fmt(v), n]
                             : [rup(v), n === 'now' ? 'P&L now' : n === 'whatif' ? 'P&L what-if' : 'P&L @ expiry'])}
                         labelFormatter={(l) => {
-                            // Distance from the LIVE spot, in both points and
-                            // percent. A payoff curve is read as "how far would
-                            // the index have to move" — an absolute level alone
-                            // makes you do that subtraction in your head at every
-                            // hover, and the percentage is the half that tells you
-                            // whether the move is plausible at all.
-                            const at = num(l);
-                            if (at == null || !(spot > 0)) return `spot ${fmt(l)}`;
-                            const pts = at - spot;
-                            const pct = (pts / spot) * 100;
-                            if (Math.abs(pts) < 0.5) return `spot ${fmt(at)} · at the money`;
-                            const dir = pts > 0 ? '+' : '−';
-                            return `spot ${fmt(at)}  ·  ${dir}${fmt(Math.abs(pts), 0)} pts (${dir}${fmt(Math.abs(pct), 2)}%) from ${fmt(spot)}`;
+                            // Distance from the LIVE spot — shared with the
+                            // deployment card's chart, which measures from entry.
+                            const m = spotMove(l, spot);
+                            if (!m) return `spot ${fmt(l)}`;
+                            if (m.at) return `spot ${fmt(l)} · at the money`;
+                            return `spot ${fmt(l)}  ·  ${m.label} from ${fmt(spot)}`;
                         }} />
                     <Legend wrapperStyle={{ fontSize: ct.type['4xs'] }} />
                     <ReferenceLine y={0} stroke={ct.axis} ifOverflow="extendDomain" />
@@ -236,7 +230,7 @@ function PayoffPanel({
                 </ComposedChart>
             </ZoomableChart>
 
-            <div className="text-4xs text-fg-6 mt-1 space-y-0.5">
+            <div className="text-4xs text-fg-5 mt-1 space-y-0.5">
                 <div>
                     The vertical scale is framed on the decision region (breakevens, ±1σ, finite extremes). A structure with an uncovered short keeps falling past the bottom of this frame — that tail is real, it is simply not drawn, which is why max loss reads UNBOUNDED rather than the deepest number on screen.
                     {!hasNow && <span className="text-fg-5"> No T+0 curve — IV could not be established for these legs.</span>}
@@ -307,7 +301,7 @@ function PnlTablePanel({ pnlTable, an, loading }) {
                             {dates.map((d, i) => (
                                 <th key={d + i} className="font-normal px-1.5 py-1 whitespace-nowrap">
                                     <div className="text-fg-3">{shortDate(d)}</div>
-                                    <div className="text-fg-6">
+                                    <div className="text-fg-5">
                                         T+{fmt(days[i], 1)}
                                         {i === dates.length - 1 ? ' · expiry' : ''}
                                     </div>
@@ -330,7 +324,7 @@ function PnlTablePanel({ pnlTable, an, loading }) {
                                             read as "what if the index moves X%", so the
                                             level alone makes you subtract at every row */}
                                         {!atRow && refSpot > 0 && num(c.spot) != null && (
-                                            <span className="text-fg-6 ml-1">
+                                            <span className="text-fg-5 ml-1">
                                                 {num(c.spot) > refSpot ? '+' : '−'}{fmt(Math.abs((num(c.spot) - refSpot) / refSpot) * 100, 1)}%
                                             </span>
                                         )}
@@ -339,7 +333,7 @@ function PnlTablePanel({ pnlTable, an, loading }) {
                                         const n = num(v);
                                         return (
                                             <td key={ci} style={heat(v)}
-                                                className={`px-1.5 py-0.5 text-right whitespace-nowrap ${edge} ${n == null ? 'text-fg-6' : n >= 0 ? 'text-success' : 'text-danger'}`}
+                                                className={`px-1.5 py-0.5 text-right whitespace-nowrap ${edge} ${n == null ? 'text-fg-5' :pnlTone(n)}`}
                                                 title={`spot ${fmt(c.spot)} on ${dates[ci] || '—'} — ${rup(v)} gross`}>
                                                 {rup(v)}
                                             </td>
@@ -351,7 +345,7 @@ function PnlTablePanel({ pnlTable, an, loading }) {
                     </tbody>
                 </table>
             </div>
-            <div className="text-4xs text-fg-6 mt-1.5 space-y-0.5">
+            <div className="text-4xs text-fg-5 mt-1.5 space-y-0.5">
                 <div>
                     Rupees, gross, for the whole structure. Rows span ±2σ of the move being priced; the highlighted row is today&apos;s spot ({fmt(t.atSpot)}).
                 </div>
@@ -409,7 +403,7 @@ function GreeksPanel({ an, lotSize, lots, loading }) {
                     <input type="checkbox" checked={byLots} onChange={e => setByLots(e.target.checked)} className="accent-sky-500" />
                     × lots ({fmt(lots)})
                 </label>
-                <span className="text-fg-6">showing <span className="text-fg-4">{scaleNote}</span></span>
+                <span className="text-fg-5">showing <span className="text-fg-4">{scaleNote}</span></span>
                 {missing > 0 && <span className="text-warning/80">{missing} leg(s) could not be priced for greeks</span>}
             </div>
 
@@ -478,7 +472,7 @@ function GreeksPanel({ an, lotSize, lots, loading }) {
                     </tbody>
                 </table>
             </div>
-            <div className="text-4xs text-fg-6 mt-1.5 space-y-0.5">
+            <div className="text-4xs text-fg-5 mt-1.5 space-y-0.5">
                 <div>
                     Each row is already signed by BUY/SELL and multiplied by that leg&apos;s ratio, so the TOTAL is the book — a sold call shows a NEGATIVE delta here even though a call&apos;s delta is positive.
                 </div>
@@ -547,7 +541,7 @@ function LegsPanel({ an, resp, loading }) {
                     </tbody>
                 </table>
             </div>
-            <div className="text-4xs text-fg-6 mt-1.5">
+            <div className="text-4xs text-fg-5 mt-1.5">
                 A <span className="text-success">mid</span> premium is the midpoint of a live two-sided quote; <span className="text-sky-400">ltp</span> means no two-sided quote existed and the last trade was used, which can be stale;
                 <span className="text-warning"> user</span> means you pinned it and the market is being ignored for that leg.
                 {num(an?.timeValueUnit) != null && (

@@ -109,7 +109,7 @@ export default function RiskLimitsPanel() {
                         <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
                     </button>
                     <button type="button" onClick={save} disabled={!dirty || saving}
-                        className="px-2.5 py-1.5 rounded bg-primary text-white text-2xs inline-flex items-center gap-1.5 disabled:opacity-40">
+                        className="px-2.5 py-1.5 rounded bg-primary text-on-primary text-2xs inline-flex items-center gap-1.5 disabled:opacity-40">
                         <Save className="w-3.5 h-3.5" aria-hidden="true" />
                         {saving ? 'Saving…' : 'Apply'}
                     </button>
@@ -146,12 +146,12 @@ export default function RiskLimitsPanel() {
                                     <div key={k} className="grid grid-cols-12 gap-2 items-center">
                                         <div className="col-span-5 min-w-0">
                                             <div className="text-2xs text-fg-3 truncate">{k}</div>
-                                            <div className="text-3xs text-fg-6 truncate" title={data.controls?.[k]}>{data.controls?.[k]}</div>
+                                            <div className="text-3xs text-fg-5 truncate" title={data.controls?.[k]}>{data.controls?.[k]}</div>
                                         </div>
                                         <div className="col-span-3 text-3xs text-fg-5">
                                             {obs != null && obs > 0
                                                 ? <>book now <b className="text-fg-3">{fmt(obs)}</b></>
-                                                : <span className="text-fg-6">no live reading</span>}
+                                                : <span className="text-fg-5">no live reading</span>}
                                         </div>
                                         <div className="col-span-2">
                                             <input
@@ -170,7 +170,7 @@ export default function RiskLimitsPanel() {
                                                 <button type="button"
                                                     onClick={() => setDraft(d => ({ ...d, [k]: Math.ceil((obs * 2) / 100) * 100 }))}
                                                     title="Suggest 2× the current book reading"
-                                                    className="text-3xs text-primary hover:underline">2× book</button>
+                                                    className="text-3xs text-primary-ink hover:underline">2× book</button>
                                             )}
                                             {isOff && <Chip tone="neutral">off</Chip>}
                                         </div>
@@ -182,7 +182,7 @@ export default function RiskLimitsPanel() {
                 ))}
             </div>
 
-            <div className="mt-3 text-3xs text-fg-6">
+            <div className="mt-3 text-3xs text-fg-5">
                 Blank = OFF. {data.appliesTo} Changes apply immediately, without a restart.
             </div>
         </Card>

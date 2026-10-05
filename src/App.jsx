@@ -1,5 +1,5 @@
-import React, { useState, useEffect, Suspense } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
+import React, { useState, useEffect, useLayoutEffect, useRef, Suspense } from 'react';
+import { BrowserRouter as Router, Routes, Route, Link, useLocation, useNavigationType, matchPath } from 'react-router-dom';
 import { LogOut, Palette, PanelLeftClose, PanelLeftOpen, Shield, Terminal } from 'lucide-react';
 import LoginPage from './pages/LoginPage';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -45,9 +45,65 @@ import { API_URL } from './config/api.js';
 /** Keyboard-only ring, matching ThemePanel's. Mouse clicks leave no halo. */
 const FOCUS = 'focus:outline-none focus-visible:ring-2 focus-visible:ring-primary';
 
+/**
+ * The rail's status light, driven by GET /api/health.
+ *
+ * It used to be a literal `bg-success animate-pulse` dot with a fixed "System
+ * Online" label — green on every route, in every state, including with the
+ * backend down. A health indicator that cannot report ill-health is worse than
+ * none, because it actively asserts something false.
+ *
+ * /api/health already grades itself: `healthy` / `degraded` (an optional check
+ * such as the broker is down) / `unhealthy` (a REQUIRED check such as Mongo is
+ * down — it answers 503). A failed fetch is its own, worst state: the backend
+ * is unreachable, which the old dot rendered as green.
+ *
+ * Polled, not socket-driven, because this is a 30s-granularity signal and a
+ * dead socket is one of the things it has to be able to report.
+ */
+function useHealth(pollMs = 30000) {
+    const [health, setHealth] = useState({
+        dot: 'bg-fg-5', pulse: false, label: 'checking', detail: 'Checking backend health…',
+    });
+    const t = useT();
+
+    useEffect(() => {
+        let dead = false;
+        const read = async () => {
+            try {
+                const res = await fetch(`${API_URL}/health`, { credentials: 'include' });
+                const j = await res.json().catch(() => null);
+                if (dead) return;
+                const status = j && j.status;
+                if (status === 'healthy') {
+                    setHealth({ dot: 'bg-success', pulse: true, label: t('sidebar.systemOnline'),
+                        detail: 'All required checks passing' });
+                } else if (status === 'degraded') {
+                    const which = (j.degraded || []).join(', ') || 'an optional check';
+                    setHealth({ dot: 'bg-warning', pulse: true, label: t('sidebar.systemDegraded'),
+                        detail: `Degraded — ${which} down (trading may still run)` });
+                } else {
+                    const which = (j && j.failed || []).join(', ') || 'a required check';
+                    setHealth({ dot: 'bg-danger', pulse: true, label: t('sidebar.systemDown'),
+                        detail: `Unhealthy — ${which} down` });
+                }
+            } catch {
+                if (!dead) setHealth({ dot: 'bg-danger', pulse: true, label: t('sidebar.systemDown'),
+                    detail: 'Could not reach the backend' });
+            }
+        };
+        read();
+        const id = setInterval(read, pollMs);
+        return () => { dead = true; clearInterval(id); };
+    }, [pollMs, t]);
+
+    return health;
+}
+
 function Sidebar() {
   const t = useT();
   const location = useLocation();
+  const health = useHealth();
   const isActive = (path) => location.pathname === path;
 
   // Collapsed state persisted to localStorage so it survives reload.
@@ -96,7 +152,7 @@ function Sidebar() {
     <div className={`${collapsed ? 'w-16' : 'w-64'} bg-card border-r border-line h-screen flex flex-col overflow-x-hidden overflow-y-auto transition-[width] duration-200`}>
       <div className="p-4 border-b border-line flex items-center justify-between gap-2">
         {!collapsed && (
-          <h1 className="text-xl font-bold text-primary flex items-center gap-2">
+          <h1 className="text-xl font-bold text-primary-ink flex items-center gap-2">
             <Terminal className="w-6 h-6" />
             {t('app.name')}
           </h1>
@@ -145,7 +201,7 @@ function Sidebar() {
               title={collapsed ? label : undefined}
               aria-label={collapsed ? label : undefined}
               aria-current={isActive(item.path) ? 'page' : undefined}
-              // `text-primary-ink`, not `text-primary`: the active pill paints the
+              // `text-primary-ink`, not `text-primary-ink`: the active pill paints the
               // brand hue at 10% over the card and then asks for the SAME hue as
               // ink, which is a fill being read as text. Measured on the shipped
               // palette that is 2.47:1 on nord, 2.61 nightshift, 2.73 abyss, 2.80
@@ -189,10 +245,10 @@ function Sidebar() {
 
         <div className={`flex items-center ${collapsed ? 'justify-center' : 'gap-3 px-4'} py-2 text-sm text-fg-4`}>
           <div
-            className="w-2 h-2 rounded-full bg-success animate-pulse flex-shrink-0"
-            title={collapsed ? t('sidebar.systemOnline') : undefined}
+              className={`w-2 h-2 rounded-full flex-shrink-0 ${health.dot} ${health.pulse ? 'animate-pulse' : ''}`}
+              title={health.detail}
           />
-          {!collapsed && <span>{t('sidebar.systemOnline')}</span>}
+          {!collapsed && <span title={health.detail}>{health.label}</span>}
         </div>
         {!collapsed && <SessionFooter />}
       </div>
@@ -293,6 +349,88 @@ function RouteFallback() {
     );
 }
 
+/**
+ * Sets the browser-tab title from the route's own label.
+ *
+ * All fifteen routes reported the same title — the literal <title>AlgoBot</title>
+ * in index.html — which made a pinned tab, a bookmark and a back-button history
+ * entry indistinguishable from each other. Measured by
+ * scripts/ui-consistency-audit.mjs (DOC_TITLE).
+ *
+ * Driven by nav.js like everything else about a page, so a new page gets a tab
+ * title from the same one-object edit and cannot be forgotten. Renders nothing.
+ */
+/**
+ * Scroll behaviour for the <main> scroll container.
+ *
+ * THE BUG. The shell is `h-screen overflow-hidden` with `<main>` owning the
+ * scroll, and <main> is never unmounted across routes — so its scrollTop
+ * SURVIVED every navigation. Clicking a rail link while scrolled down dropped
+ * you into the middle, or the bottom, of the page you arrived at. It hid from
+ * the obvious check because `window.scrollY` is always 0 in this layout; the
+ * document itself never scrolls.
+ *
+ * THE BEHAVIOUR. A new navigation starts at the top, which is what a link is
+ * expected to do. Browser Back restores where you actually were, keyed on
+ * `location.key` so two visits to the same path keep separate positions. The
+ * restore is re-applied on the next frame because a lazy page is still
+ * suspended on the first one, and a container with no content yet cannot be
+ * scrolled to where it will eventually reach.
+ *
+ * Cleanup is what saves the position: it runs against the location being LEFT,
+ * before the next effect body moves the scroller.
+ */
+function MainScrollManager({ scrollerRef }) {
+    const location = useLocation();
+    const navType = useNavigationType();
+    const positions = useRef(new Map());
+
+    useLayoutEffect(() => {
+        const el = scrollerRef.current;
+        if (!el) return undefined;
+        const key = location.key;
+        const target = navType === 'POP' ? (positions.current.get(key) ?? 0) : 0;
+        el.scrollTop = target;
+
+        // A restore cannot land in one frame: the route is lazy, so it is still
+        // suspended, and a container with no content yet CLAMPS scrollTop to
+        // whatever little height it has (a 1200px restore landed at 226). Keep
+        // re-applying while the page grows, and stop as soon as it lands — or
+        // after ~half a second, so a page that never gets that tall cannot spin.
+        let raf = 0;
+        if (target > 0) {
+            let tries = 0;
+            const apply = () => {
+                const node = scrollerRef.current;
+                if (!node) return;
+                node.scrollTop = target;
+                if (node.scrollTop < target - 1 && tries++ < 30) {
+                    raf = window.requestAnimationFrame(apply);
+                }
+            };
+            raf = window.requestAnimationFrame(apply);
+        }
+
+        return () => {
+            if (raf) window.cancelAnimationFrame(raf);
+            if (scrollerRef.current) positions.current.set(key, scrollerRef.current.scrollTop);
+        };
+    }, [location.key, navType, scrollerRef]);
+
+    return null;
+}
+
+function DocumentTitle() {
+    const location = useLocation();
+    const t = useT();
+    useEffect(() => {
+        const hit = ALL_ROUTES.find((r) => matchPath({ path: r.path, end: true }, location.pathname));
+        const label = hit && hit.labelKey ? t(hit.labelKey) : null;
+        document.title = label ? `${label} · ${t('app.name')}` : t('app.name');
+    }, [location.pathname, t]);
+    return null;
+}
+
 /** Per-route error boundary. Separated out so it can call useLocation() — the
  *  pathname is the reset key that lets navigation clear a caught error. */
 function RouteBoundary({ route, children }) {
@@ -306,6 +444,10 @@ function RouteBoundary({ route, children }) {
 }
 
 function App() {
+  // The <main> scroll container, handed to MainScrollManager — see there for why
+  // the app needs one at all (window.scrollY is always 0 in this layout).
+  const mainRef = useRef(null);
+
   // Handle malformed Fyers redirect (e.g. http://localhost:5173/s=ok&code=...)
   useEffect(() => {
     if (window.location.pathname.startsWith('/s=ok')) {
@@ -353,7 +495,9 @@ function App() {
               */}
               <div className="flex h-screen overflow-hidden bg-bg text-fg font-sans">
                 <Sidebar />
-                <main className="flex-1 min-w-0 overflow-auto">
+                <DocumentTitle />
+                <MainScrollManager scrollerRef={mainRef} />
+                <main ref={mainRef} className="flex-1 min-w-0 overflow-auto">
                   {/*
                     One <Route> per entry in ALL_ROUTES (= the rail, then the
                     pages reached from inside another page or from the broker

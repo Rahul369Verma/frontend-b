@@ -110,6 +110,17 @@ const INKS = [
     { token: '--color-fg-4', label: 'fg-4', gate: GATE.ink },
     { token: '--color-fg-5', label: 'fg-5', gate: GATE.ink },
     { token: '--color-fg-6', label: 'fg-6', gate: GATE.inkFaint },
+    /* The four semantic status tokens were NEVER gated here, and in a trading UI
+       they carry the P&L numbers — the most load-bearing text in the app. A
+       rendered-DOM audit found `text-danger` at 3.98:1 on a card (needs 4.5),
+       one pair accounting for 121 of 197 contrast findings. They are ink (745
+       `text-*` call sites vs 34 fills), so they answer to the ink floor like any
+       other body copy. The solid-fill role lives on `--color-<status>-fill` and
+       is gated with the other fills, not here. */
+    { token: '--color-success', label: 'success', gate: GATE.ink },
+    { token: '--color-danger', label: 'danger', gate: GATE.ink },
+    { token: '--color-warning', label: 'warning', gate: GATE.ink },
+    { token: '--color-info', label: 'info', gate: GATE.ink },
 ];
 
 const BORDERS = [

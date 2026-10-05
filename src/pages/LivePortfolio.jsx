@@ -52,7 +52,7 @@ import {
     Card, StatTile, StatRow, DataTable, Placeholder, StatusBadge, DivergingBars, PageHeader, Tabs, Segmented, Chip,
     Skeleton, SkeletonTiles, EmptyState,
 } from '../components/viz/primitives';
-import { inr, useChartTheme } from '../components/viz/tokens';
+import { inr, useChartTheme, rupeeTick } from '../components/viz/tokens';
 import ZoomableChart from '../components/charts/ZoomableChart';
 import PnlCalendar from '../components/charts/PnlCalendar.jsx';
 import ResultsAnalytics from '../components/multileg/ResultsAnalytics.jsx';
@@ -159,7 +159,7 @@ function Money({ v, bold = false, className = '' }) {
 function FormChip({ label, v, title }) {
     return (
         <span className="inline-flex items-baseline gap-1 text-2xs" title={title}>
-            <span className="text-fg-6 uppercase tracking-wide">{label}</span>
+            <span className="text-fg-5 uppercase tracking-wide">{label}</span>
             <Money v={v} />
         </span>
     );
@@ -170,7 +170,7 @@ function Sparkline({ daily, color, height = 44 }) {
     const ct = useChartTheme();
     const rows = useMemo(() => (Array.isArray(daily) ? daily : []).map((d) => ({ x: d?.date, y: n(d?.equity) ?? 0 })), [daily]);
     if (rows.length < 2) {
-        return <div className="flex items-center text-2xs text-fg-6" style={{ height }}>Fewer than two trading days — no curve yet.</div>;
+        return <div className="flex items-center text-2xs text-fg-5" style={{ height }}>Fewer than two trading days — no curve yet.</div>;
     }
     return (
         <div style={{ height }} aria-hidden="true">
@@ -230,7 +230,7 @@ function StrategyCard({ g, color, selected, expanded, onToggleSelect, onToggleEx
                     {bleeding && <StatusBadge level="critical" title="Net negative over this window">Bleeding</StatusBadge>}
                     {fading && <StatusBadge level="warning" title="Positive overall, negative over the last 30 days">Fading</StatusBadge>}
                     {!bleeding && !fading && activeCount > 0 && <StatusBadge level="good" title={`${activeCount} active deployment(s)`}>Running</StatusBadge>}
-                    {activeCount === 0 && deps.length > 0 && <span className="text-3xs text-fg-6">stopped</span>}
+                    {activeCount === 0 && deps.length > 0 && <span className="text-3xs text-fg-5">stopped</span>}
                 </div>
             </header>
 
@@ -238,20 +238,20 @@ function StrategyCard({ g, color, selected, expanded, onToggleSelect, onToggleEx
 
             <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
                 <div className="min-w-0">
-                    <div className="text-3xs uppercase tracking-wide text-fg-6">Net</div>
+                    <div className="text-3xs uppercase tracking-wide text-fg-5">Net</div>
                     <Money v={s.netPnl} bold className="text-lg" />
                 </div>
                 <div className="min-w-0">
-                    <div className="text-3xs uppercase tracking-wide text-fg-6">Per trade</div>
+                    <div className="text-3xs uppercase tracking-wide text-fg-5">Per trade</div>
                     <Money v={s.perTrade} className="text-sm" />
                 </div>
                 <div className="min-w-0">
-                    <div className="text-3xs uppercase tracking-wide text-fg-6">Win rate</div>
+                    <div className="text-3xs uppercase tracking-wide text-fg-5">Win rate</div>
                     <span className="text-sm text-fg-3 tabular-nums">{pct(s.winRate)}</span>
-                    <span className="text-3xs text-fg-6 ml-1">of {int(s.trades)}</span>
+                    <span className="text-3xs text-fg-5 ml-1">of {int(s.trades)}</span>
                 </div>
                 <div className="min-w-0">
-                    <div className="text-3xs uppercase tracking-wide text-fg-6">Profit factor</div>
+                    <div className="text-3xs uppercase tracking-wide text-fg-5">Profit factor</div>
                     <span className="text-sm tabular-nums text-fg-3" title={pf == null ? 'No losing trades in this window' : 'Gross wins ÷ gross losses'}>
                         {pf == null ? '—' : dec(pf, 2)}
                     </span>
@@ -263,7 +263,7 @@ function StrategyCard({ g, color, selected, expanded, onToggleSelect, onToggleEx
                     <FormChip label="7d" v={s.net7d} title="Net over the last 7 calendar days" />
                     <FormChip label="30d" v={s.net30d} title="Net over the last 30 calendar days" />
                 </div>
-                <span className="text-3xs text-fg-6" title="Most recent closed trade">last {istStamp(s.lastTradeAt)}</span>
+                <span className="text-3xs text-fg-5" title="Most recent closed trade">last {istStamp(s.lastTradeAt)}</span>
             </div>
 
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -280,12 +280,12 @@ function StrategyCard({ g, color, selected, expanded, onToggleSelect, onToggleEx
                     Details
                 </button>
                 {href ? (
-                    <Link to={href} className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-line-2 text-2xs text-primary hover:underline"
+                    <Link to={href} className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-line-2 text-2xs text-primary-ink hover:underline"
                         title="Open this strategy's detail page (trades, charts, AI review)">
                         Open page <ExternalLink className="w-3 h-3" aria-hidden="true" />
                     </Link>
                 ) : (
-                    <span className="ml-auto text-3xs text-fg-6" title="No deployment with a symbol runs this strategy, so there is no detail route to open">no detail page</span>
+                    <span className="ml-auto text-3xs text-fg-5" title="No deployment with a symbol runs this strategy, so there is no detail route to open">no detail page</span>
                 )}
             </div>
         </article>
@@ -312,12 +312,11 @@ function StrategyPanel({ g, color, depById, linkForDeployment, onClose }) {
     }).sort((a, b) => (n(b.summary?.netPnl) ?? 0) - (n(a.summary?.netPnl) ?? 0)), [g, depById, linkForDeployment]);
 
     const chartTip = ct.tooltipStyle({ fontSize: ct.type['3xs'] });
-    const rupTick = (v) => (Math.abs(v) >= 1000 ? `₹${Math.round(v / 1000)}k` : `₹${Math.round(v)}`);
     const axisTick = { fontSize: ct.type['5xs'], fill: ct.text.secondary };
 
     const depCols = [
         { key: 'name', header: 'Deployment', render: (r) => (r.href
-            ? <Link to={r.href} className="text-primary hover:underline inline-flex items-center gap-1">{r.meta?.name || r.id}<ExternalLink className="w-3 h-3" aria-hidden="true" /></Link>
+            ? <Link to={r.href} className="text-primary-ink hover:underline inline-flex items-center gap-1">{r.meta?.name || r.id}<ExternalLink className="w-3 h-3" aria-hidden="true" /></Link>
             : <span className="text-fg-3">{r.meta?.name || r.id}</span>) },
         { key: 'symbol', header: 'Symbol', render: (r) => <span className="text-fg-4">{String(r.meta?.symbol || '—').replace(/^(NSE|BSE):/, '').replace(/-INDEX$/, '')}</span> },
         { key: 'mode', header: 'Mode', render: (r) => (r.meta?.mode ? <Chip tone={String(r.meta.mode).toUpperCase() === 'LIVE' ? 'live' : 'paper'}>{String(r.meta.mode).toUpperCase()}</Chip> : '—') },
@@ -354,7 +353,7 @@ function StrategyPanel({ g, color, depById, linkForDeployment, onClose }) {
                             <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                 <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                 <XAxis dataKey="label" tick={axisTick} minTickGap={26} />
-                                <YAxis width={54} tick={axisTick} tickFormatter={rupTick} />
+                                <YAxis width={54} tick={axisTick} tickFormatter={rupeeTick} />
                                 <Tooltip contentStyle={chartTip}
                                     formatter={(v, name) => (n(v) == null ? null : [inr(v), name === 'up' || name === 'down' ? 'net' : name])}
                                     labelFormatter={(l, p) => { const d = p?.[0]?.payload; return d ? `${d.date} · ${int(d.trades)} trade(s) · ${pct(d.winRate)} win` : String(l); }} />
@@ -369,7 +368,7 @@ function StrategyPanel({ g, color, depById, linkForDeployment, onClose }) {
                             <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                 <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                 <XAxis dataKey="label" tick={axisTick} minTickGap={26} />
-                                <YAxis width={54} tick={axisTick} tickFormatter={rupTick} />
+                                <YAxis width={54} tick={axisTick} tickFormatter={rupeeTick} />
                                 <Tooltip contentStyle={chartTip} formatter={(v, name) => (n(v) == null ? null : [inr(v), name])}
                                     labelFormatter={(l, p) => p?.[0]?.payload?.date || String(l)} />
                                 <ReferenceLine y={0} stroke={ct.axis} ifOverflow="extendDomain" />
@@ -571,7 +570,7 @@ export default function LivePortfolio() {
                 const losing = (isStrategyTab || isDeploymentTab) && (n(r.net) ?? 0) < 0;
                 const label = rowLabel(r);
                 const body = href ? (
-                    <Link to={href} className="text-primary hover:underline inline-flex items-center gap-1" title={`Open ${label} detail`}>
+                    <Link to={href} className="text-primary-ink hover:underline inline-flex items-center gap-1" title={`Open ${label} detail`}>
                         <span className="truncate max-w-[16rem] align-middle">{label}</span>
                         <ExternalLink className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
                     </Link>
@@ -595,7 +594,7 @@ export default function LivePortfolio() {
     const tableRows = useMemo(() => rows.map((r, i) => ({ ...r, _key: `${r?.key ?? i}-${i}` })), [rows]);
 
     const chartTip = ct.tooltipStyle({ fontSize: ct.type['3xs'] });
-    const rupTick = (v) => (Math.abs(v) >= 1000 ? `₹${Math.round(v / 1000)}k` : `₹${Math.round(v)}`);
+    
     const axisTick = { fontSize: ct.type['5xs'], fill: ct.text.secondary };
     const calendarDays = days === 'all' ? null : (Number(days) || null);
     const pf = n(summary?.profitFactor);
@@ -632,7 +631,7 @@ export default function LivePortfolio() {
                         <p className="text-xs text-fg-5">
                             Every multileg deployment as one book, from the structure engine. The same view lives on the Multi-Leg page's Results tab — this is it, without leaving the hub.
                         </p>
-                        <Link to={ROUTES.multiLegResults} className="text-2xs text-primary hover:underline inline-flex items-center gap-1" title="Filters by deployment, symbol and structure, plus every round-trip">
+                        <Link to={ROUTES.multiLegResults} className="text-2xs text-primary-ink hover:underline inline-flex items-center gap-1" title="Filters by deployment, symbol and structure, plus every round-trip">
                             Open Multi-Leg → Results <ExternalLink className="w-3 h-3" aria-hidden="true" />
                         </Link>
                     </div>
@@ -660,7 +659,7 @@ export default function LivePortfolio() {
             ) : n(summary.trades) === 0 ? (
                 <Card>
                     <EmptyState icon={Wallet} title={`No closed trades${days !== 'all' ? ` in the last ${days} days` : ''}.`}
-                        action={days !== 'all' ? <button type="button" onClick={() => setDays('all')} className="text-2xs text-primary hover:underline">Show all history</button> : null}>
+                        action={days !== 'all' ? <button type="button" onClick={() => setDays('all')} className="text-2xs text-primary-ink hover:underline">Show all history</button> : null}>
                         Only closed round-trips carry a realised P&L; open positions appear here once they exit.
                     </EmptyState>
                 </Card>
@@ -723,7 +722,7 @@ export default function LivePortfolio() {
                                 <div className="flex items-center gap-2">
                                     <span>{int(selectedKeys.length)} of {int(strategies.length)} shown</span>
                                     {selected !== null && (
-                                        <button type="button" onClick={() => setSelected(null)} className="text-2xs text-primary hover:underline" title={`Back to the ${DEFAULT_COMPARE} most-traded`}>reset</button>
+                                        <button type="button" onClick={() => setSelected(null)} className="text-2xs text-primary-ink hover:underline" title={`Back to the ${DEFAULT_COMPARE} most-traded`}>reset</button>
                                     )}
                                 </div>
                             )}
@@ -735,7 +734,7 @@ export default function LivePortfolio() {
                                     <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                         <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                         <XAxis dataKey="label" tick={axisTick} minTickGap={26} />
-                                        <YAxis width={54} tick={axisTick} tickFormatter={rupTick} />
+                                        <YAxis width={54} tick={axisTick} tickFormatter={rupeeTick} />
                                         <Tooltip contentStyle={chartTip} formatter={(v, name) => (n(v) == null ? null : [inr(v), name])}
                                             labelFormatter={(l, p) => p?.[0]?.payload?.date || String(l)} />
                                         <RcLegend wrapperStyle={{ fontSize: ct.type['5xs'] }} />
@@ -757,7 +756,7 @@ export default function LivePortfolio() {
                                 <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                     <XAxis dataKey="label" tick={axisTick} minTickGap={26} />
-                                    <YAxis width={54} tick={axisTick} tickFormatter={rupTick} />
+                                    <YAxis width={54} tick={axisTick} tickFormatter={rupeeTick} />
                                     {/* Returning null from a recharts formatter DROPS that item, which
                                         is how the empty half of the up/down pair stays out of the
                                         tooltip instead of printing "down —". */}
@@ -775,7 +774,7 @@ export default function LivePortfolio() {
                                 <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                     <XAxis dataKey="label" tick={axisTick} minTickGap={26} />
-                                    <YAxis width={54} tick={axisTick} tickFormatter={rupTick} />
+                                    <YAxis width={54} tick={axisTick} tickFormatter={rupeeTick} />
                                     <Tooltip contentStyle={chartTip} formatter={(v, name) => (n(v) == null ? null : [inr(v), name])}
                                         labelFormatter={(l, p) => p?.[0]?.payload?.date || String(l)} />
                                     <RcLegend wrapperStyle={{ fontSize: ct.type['5xs'] }} />

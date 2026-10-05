@@ -21,13 +21,14 @@ import {
     PageHeader, Card, StatRow, StatTile, DataTable, Segmented, Chip,
     Spinner, EmptyState, Placeholder,
 } from '../components/viz/primitives';
-import { useChartTheme } from '../components/viz/tokens';
+import { useChartTheme, inr as inrShared } from '../components/viz/tokens';
 import {
     ResponsiveContainer, ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Cell,
 } from 'recharts';
 
 const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
-const inr = (v) => (n(v) == null ? '—' : `${v < 0 ? '−' : ''}₹${Math.abs(Math.round(v)).toLocaleString('en-IN')}`);
+/** Whole rupees, via the app's single rupee formatter (was a private copy using U+2212). */
+const inr = (v) => (n(v) == null ? '—' : inrShared(v, { dp: 0 }));
 const toneOf = (v) => ((n(v) ?? 0) > 0 ? 'positive' : (n(v) ?? 0) < 0 ? 'negative' : 'neutral');
 
 const RANGES = [{ label: '30d', value: 30 }, { label: '90d', value: 90 }, { label: '180d', value: 180 }, { label: '1y', value: 365 }];
@@ -89,7 +90,7 @@ export default function AiScore() {
     );
 
     return (
-        <div className="space-y-4">
+        <div className="p-6 space-y-4">
             <PageHeader
                 icon={Brain}
                 title="AI Score"

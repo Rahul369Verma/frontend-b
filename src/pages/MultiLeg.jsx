@@ -8,7 +8,11 @@ import { Layers, Play, Pause, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskCon
 import StructureAttributionPanel from '../components/viz/StructureAttributionPanel';
 import StrategyBuilder from '../components/multileg/StrategyBuilder';
 import ResultsAnalytics from '../components/multileg/ResultsAnalytics';
-import TradePathChart from '../components/multileg/TradePathChart';
+import TradePathChart from '../components/viz/TradePathChart';
+import DayEquityCurves from '../components/viz/DayEquityCurves';
+import { normalizeMultilegTrade, buildDayCurves } from '../utils/dayCurves';
+import AutoRunProgress from '../components/multileg/AutoRunProgress';
+import { estimateStageSizes, sizesForRequest, runSummary, useRunTracker } from '../components/multileg/runProgress';
 import ZoomableChart from '../components/charts/ZoomableChart';
 import { PageHeader, Tabs } from '../components/viz/primitives';
 import { ROUTES } from '../config/routes.js';
@@ -17,6 +21,9 @@ import { HELP } from '../data/multilegHelp';
 import { useChartTheme } from '../theme/chartTheme.js';
 import { pollInterval } from '../hooks/usePolling.js';
 import { API_URL } from '../config/api.js';
+import { pnlTone } from '../components/viz/tokens';
+import { spotMove, pfText, pfValue } from '../components/multileg/builderFormat';
+import SavedStrategiesPanel from '../components/multileg/SavedStrategiesPanel';
 
 
 // Static fallback — replaced by /api/config/instruments (same source as Backtest).
@@ -39,7 +46,7 @@ const OUTLOOK_COLORS = {
 };
 const METRICS = [
     { v: 'sharpe', label: 'Sharpe (smooth curve)' }, { v: 'sortino', label: 'Sortino (downside-safe)' },
-    { v: 'netPnl', label: 'Net PnL' }, { v: 'profitFactor', label: 'Profit factor' },
+    { v: 'netPnl', label: 'Net P&L' }, { v: 'profitFactor', label: 'Profit factor' },
     { v: 'roiOnMarginPct', label: 'ROI on margin' }, { v: 'winRate', label: 'Win rate' },
 ];
 const RESOLUTIONS = [
@@ -86,10 +93,38 @@ const BUDGET_HELP = {
     minTrades: 'min trades per window to be rankable',
 };
 
+/**
+ * Scroll the page back to the top.
+ *
+ * NOT window.scrollTo — the shell is `h-screen overflow-hidden` with <main>
+ * owning the scroll, so the document never scrolls and all five calls here were
+ * silent no-ops: the buttons that promised to take you back to the builder did
+ * nothing at all.
+ */
+const scrollPageToTop = () => {
+    const main = typeof document !== 'undefined' && document.querySelector('main');
+    if (main) main.scrollTo({ top: 0, behavior: 'smooth' });
+};
+
 const fmt = (n, d = 0) => (n == null || !Number.isFinite(Number(n))) ? (n === Infinity ? '∞' : n === -Infinity ? '−∞' : '—')
     : Number(n).toLocaleString('en-IN', { maximumFractionDigits: d });
 const isoDaysAgo = (d) => new Date(Date.now() - d * 864e5).toISOString().slice(0, 10);
 const shortSym = (s) => String(s).replace('NSE:', '').replace('BSE:', '').replace('-INDEX', '');
+const resTradeId = (t) => t._id || `${t.deploymentId}-${t.entryAt}`;
+// The resource guard's reason codes in plain words, for the Auto tab.
+const GUARD_WORDS = {
+    MARKET_OPEN: 'market is open', PRE_OPEN_GUARD: 'too close to the open/close', LOW_MEMORY: 'low memory',
+    HIGH_LOAD: 'machine busy', EVENT_LOOP_LAG: 'engine busy', DISABLED: 'research switched off',
+};
+const guardWords = (why) => {
+    const codes = String(why || '').match(/\b[A-Z][A-Z_]{3,}\b/g) || [];
+    const words = [...new Set(codes.map(c => GUARD_WORDS[c] || c.toLowerCase().replace(/_/g, ' ')))];
+    return words.length ? words.join(', ') : 'no headroom';
+};
+// Return on the margin a structure blocked. marginEst is null on some older
+// trades — reject it before dividing (Number(null) is 0).
+const tradeRom = (t) => (t.marginEst != null && Number(t.marginEst) > 0 && Number.isFinite(Number(t.netPnl))
+    ? (Number(t.netPnl) / Number(t.marginEst)) * 100 : null);
 
 export default function MultiLeg() {
     // Five recharts charts live on this page and every one of them needs
@@ -141,8 +176,10 @@ export default function MultiLeg() {
     const mode = TAB_IDS.includes(urlTab) ? urlTab : (TAB_IDS.includes(storedTab) ? storedTab : 'builder');
     const setMode = useCallback((t) => {
         setStoredTab(t);
-        if (searchParams.has('tab')) {
-            setSearchParams((p) => { const q = new URLSearchParams(p); q.delete('tab'); return q; }, { replace: true });
+        // `deployment` belongs to the Results link (?tab=results&deployment=…);
+        // leaving it behind would re-scope Results on the next refresh
+        if (searchParams.has('tab') || searchParams.has('deployment')) {
+            setSearchParams((p) => { const q = new URLSearchParams(p); q.delete('tab'); q.delete('deployment'); return q; }, { replace: true });
         }
     }, [setStoredTab, searchParams, setSearchParams]);
     const [gridText, setGridText] = useState('');
@@ -170,6 +207,7 @@ export default function MultiLeg() {
     const [aiThreshold, setAiThreshold] = useState(0.60);
     const [autoJob, setAutoJob] = useState(null);              // { jobId }
     const [autoState, setAutoState] = useState(null);          // polled job doc
+    const [autoTrack, recordAutoProgress] = useRunTracker();
     const [autoStrategies, setAutoStrategies] = useState([]);  // [] = all optimizable
     const [autoEntryStyle, setAutoEntryStyle] = useState('both'); // both | signal-only
     // Saved strategies + live deployments (Deploy tab)
@@ -178,7 +216,7 @@ export default function MultiLeg() {
     const [depDetail, setDepDetail] = useState(null);     // _id of the expanded deployment (full order detail)
     const [depChart, setDepChart] = useState(null);       // _id of the deployment showing its live payoff chart
     const [depPayoff, setDepPayoff] = useState(null);     // { id, data } — backend risk-graph (expiry + T+0 curves)
-    const [depRecon, setDepRecon] = useState(null);       // { id, data } — broker fill/PnL reconciliation (LIVE only)
+    const [depRecon, setDepRecon] = useState(null);       // { id, data } — broker fill/P&L reconciliation (LIVE only)
     const [depActivity, setDepActivity] = useState(null); // _id of the deployment showing its P&L activity (equity) chart
     const [activityData, setActivityData] = useState(null); // { id, data } — cumulative realized P&L + live open MTM
     const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
@@ -198,7 +236,7 @@ export default function MultiLeg() {
     const [resTrades, setResTrades] = useState([]);
     const [resLoading, setResLoading] = useState(false);
     const [resFilter, setResFilter] = useState({ mode: 'all', deploymentId: 'all', template: 'all', symbol: 'all' });
-    const [resTradeOpen, setResTradeOpen] = useState(null); // expanded trade (drill-down to legs)
+    const [resTradeOpen, setResTradeOpen] = useState(() => new Set()); // expanded trades (drill-down to legs) — a Set so "Expand all" can open every row
     const [ivCalib, setIvCalib] = useState(null);      // chain-IV calibration result
     const [ivCalibBusy, setIvCalibBusy] = useState(false);
 
@@ -213,10 +251,8 @@ export default function MultiLeg() {
         const dir = tpls.filter(t => /^bull|^bear/.test(String(t.outlook))).length;
         const neu = tpls.length - dir;
         const nStrat = Math.min(B.maxStrategies || 12, autoStrategies.length || strategies.filter(s => s.optimizable !== false).length || 12);
-        const nSym = Math.max(1, scanSymbols.length);
-        const pairings = autoEntryStyle === 'signal-only' ? nSym * tpls.length * nStrat : nSym * (dir * nStrat + neu);
-        const gridAvg = B.gridDensity >= 3 ? 3500 : B.gridDensity === 2 ? 700 : 130;
-        const total = pairings * (1 + (B.explore || 0)) + B.survivors1 * B.signalSamples + B.survivors2 * Math.min(B.sweepCap, gridAvg) + (B.champions || 3);
+        const sizes = estimateStageSizes({ budget: B, symbols: scanSymbols.length, strategies: nStrat, directional: dir, neutral: neu, entryStyle: autoEntryStyle });
+        const total = sizes[1] + sizes[2] + sizes[3] + sizes[4];
         const secs = total / 30;
         const dur = secs < 5400 ? `~${Math.max(1, Math.round(secs / 60))} min`
             : secs < 129600 ? `~${(secs / 3600).toFixed(1)} h`
@@ -337,7 +373,7 @@ export default function MultiLeg() {
                 template: templateKey, symbol: sym, from, to, resolution, params: { ...(t?.defaults || {}) }, chain_source: chainSource,
             });
             setResult(r.data);
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+            scrollPageToTop();
         } catch (e) { setError(e.response?.data?.error || e.message); }
         setRunning(false);
     };
@@ -347,7 +383,7 @@ export default function MultiLeg() {
         const merged = { ...params, ...entryParams, ...(row.params || {}) };
         setParams(p => ({ ...p, ...(row.params || {}) }));
         setMode('backtest');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        scrollPageToTop();
         await runBacktest(merged);
     };
 
@@ -381,6 +417,10 @@ export default function MultiLeg() {
                 entry_style: autoEntryStyle,
             });
             setAutoJob(r.data);
+            if (r.data?.deferred) {
+                setRunning(false);
+                pushToast(`Saved but not started — the resource guard is holding research (${guardWords(r.data.reason)}). It starts by itself when that clears.`, 'warning', 10000);
+            }
         } catch (e) { setError(e.response?.data?.error || e.message); setRunning(false); }
     };
     const cancelAuto = async () => {
@@ -419,11 +459,20 @@ export default function MultiLeg() {
     // server re-fetches candles, rebuilds the pool, and skips finished stages.
     const resumeJob = async (j) => {
         try {
-            await axios.post(`${API_URL}/multileg/optimize/${j.jobId}/resume`);
+            const r = await axios.post(`${API_URL}/multileg/optimize/${j.jobId}/resume`);
             attachJob(j);        // restore its config + start polling
+            refreshAutoJobs();
+            // The server took the request but the resource guard would not let
+            // the run start — it stays parked and restarts by itself. Without
+            // this the button answered OK and the row read 'paused' again, which
+            // looked like a Resume that does nothing.
+            if (r.data?.deferred) {
+                setRunning(false);
+                pushToast(`Not resumed yet — the resource guard is holding research (${guardWords(r.data.reason)}). It restarts by itself when that clears.`, 'warning', 10000);
+                return;
+            }
             setRunning(true);
             setAutoJob({ jobId: j.jobId });
-            refreshAutoJobs();
         } catch (e) {
             pushToast(`Resume failed: ${e.response?.data?.error || e.message}`, 'error', 8000);
         }
@@ -482,17 +531,22 @@ export default function MultiLeg() {
             axios.get(`${API_URL}/multileg/optimize/${autoJob.jobId}`).then(r => {
                 const st = r.data.status;
                 setAutoState(r.data);
+                recordAutoProgress(r.data, sizesForRequest(r.data.request, templates, budgetForLevel(3)));
                 setRunning(st === 'running');
-                // paused/cancelled/done are final decisions. 'error' and
-                // 'interrupted' can come BACK by themselves (the server
-                // auto-resumes a run that died), so keep watching a while.
-                if (['done', 'cancelled', 'paused'].includes(st)) t?.();
-                else if (st === 'running') idleTicks = 0;
+                // cancelled/done/the operator's pause are final decisions.
+                // 'error', 'interrupted' and a resource-guard park come BACK by
+                // themselves (the server restarts what the machine stopped), so
+                // keep watching. A park can outlast a whole market session, so
+                // it gets no idle cap — pollInterval already sleeps while the
+                // tab is hidden.
+                const parked = st === 'paused' && r.data.pausedByGovernor && !r.data.pausedManually;
+                if (st === 'running' || parked) idleTicks = 0;
+                else if (['done', 'cancelled', 'paused'].includes(st)) t?.();
                 else if (++idleTicks > 72) t?.(); // ~3 min
             }).catch(() => { /* transient poll failure — keep polling */ });
         }, 2500);
         return () => t?.();
-    }, [autoJob]);
+    }, [autoJob, recordAutoProgress, templates]);
 
     // Load a champion's FULL config into Setup + Backtest for hand inspection:
     // template + structure params + strategy + its TUNED params + the exact
@@ -517,7 +571,7 @@ export default function MultiLeg() {
         if (req?.to) setTo(req.to);
         if (req?.resolution) setResolution(String(req.resolution));
         setMode('backtest');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        scrollPageToTop();
     };
 
     // ── Saved strategies + deployments (Deploy tab) ─────────────────────────
@@ -550,7 +604,7 @@ export default function MultiLeg() {
 
     // Broker reconciliation for the LIVE deployment whose details are open:
     // our recorded fills ⟷ broker trade-book VWAP ⟷ broker net position, plus
-    // PnL restated gross vs net-of-charges. Read-only, fetched on demand.
+    // P&L restated gross vs net-of-charges. Read-only, fetched on demand.
     useEffect(() => {
         if (!reconEligible) { setDepRecon(null); return; }
         let alive = true;
@@ -618,6 +672,48 @@ export default function MultiLeg() {
             .finally(() => setIvCalibBusy(false));
     }, [symbol]);
 
+    // ── Results scoped to ONE deployment, from a Deploy-card link ───────────
+    // `?tab=results&deployment=<id>` preselects that deployment and resets the
+    // other filters, so a Structure/Symbol filter left over from earlier can't
+    // hide its trades. Only when the URL names a DIFFERENT deployment than the
+    // one selected — picking one in the dropdown (which writes the URL too)
+    // must not wipe the filters the user just set alongside it.
+    const urlDeployment = searchParams.get('deployment');
+    useEffect(() => {
+        if (!urlDeployment) return;
+        setResFilter(f => (f.deploymentId === urlDeployment ? f
+            : { mode: 'all', template: 'all', symbol: 'all', deploymentId: urlDeployment }));
+    }, [urlDeployment]);
+    const selectResDeployment = useCallback((id) => {
+        setResFilter(f => ({ ...f, deploymentId: id }));
+        setSearchParams((p) => {
+            const q = new URLSearchParams(p);
+            if (id === 'all') q.delete('deployment'); else q.set('deployment', id);
+            return q;
+        }, { replace: true });
+    }, [setSearchParams]);
+    // Every deployment the dropdown can show: the live list PLUS any that only
+    // exist in the trade history (deleted since). A deployment with no booked
+    // trade yet must still be listed — preselected from its card, it would
+    // otherwise render as "All deployments" while the table shows nothing.
+    const resDeploymentOptions = useMemo(() => {
+        const m = new Map();
+        for (const d of (mlDeps.deployments || [])) if (d && d._id) m.set(String(d._id), { name: d.name || null, n: 0 });
+        for (const t of resTrades) {
+            const id = String(t.deploymentId);
+            if (!t.deploymentId || id === 'undefined') continue;
+            const e = m.get(id) || { name: null, n: 0 };
+            e.n++; if (!e.name) e.name = t.name || null;
+            m.set(id, e);
+        }
+        if (resFilter.deploymentId !== 'all' && !m.has(resFilter.deploymentId)) m.set(resFilter.deploymentId, { name: null, n: 0 });
+        return [...m.entries()]
+            .map(([id, e]) => ({ id, name: e.name || `deployment …${id.slice(-6)}`, n: e.n }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+    }, [mlDeps, resTrades, resFilter.deploymentId]);
+    const resDeploymentName = resFilter.deploymentId === 'all' ? null
+        : (resDeploymentOptions.find(o => o.id === resFilter.deploymentId)?.name || resFilter.deploymentId);
+
     // filtered trades + computed KPIs / equity / breakdowns (live-engine parity)
     const resFiltered = useMemo(() => {
         return resTrades.filter(t =>
@@ -627,6 +723,21 @@ export default function MultiLeg() {
             (resFilter.symbol === 'all' || t.symbol === resFilter.symbol)
         );
     }, [resTrades, resFilter]);
+    // Day-by-day P&L curves over EXACTLY the round-trips listed below. A
+    // quarantined trade is excluded here as it is from every other total (it was
+    // booked on a price that never existed) — and COUNTED, so the curves never
+    // silently disagree with the table's row count.
+    const resDayCurves = useMemo(() => {
+        const norm = [];
+        let quarantined = 0, unreadable = 0;
+        for (const t of resFiltered) {
+            if (t.quarantined) { quarantined++; continue; }
+            const n = normalizeMultilegTrade(t);
+            if (n) norm.push(n); else unreadable++;
+        }
+        const res = buildDayCurves(norm);
+        return { days: res?.days || [], excluded: { ...(res?.excluded || {}), quarantined, unreadable } };
+    }, [resFiltered]);
     // NOTE: the Results KPIs / equity / breakdowns are NOT computed here any
     // more — they come from GET /multileg/analytics via <ResultsAnalytics>.
     // The client aggregate summed EVERY row in `resFiltered`, quarantined
@@ -667,7 +778,7 @@ export default function MultiLeg() {
         if (s.backtest?.resolution) setResolution(String(s.backtest.resolution));
         setSaveName(s.name);
         setMode('backtest');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        scrollPageToTop();
     };
 
     const withPending = async (key, fn, okMsg) => {
@@ -695,6 +806,66 @@ export default function MultiLeg() {
         }
     };
     const deploySaved = (s, tradeMode) => (tradeMode === 'PAPER' ? doDeploy(s, 'PAPER') : openPreview(s, 'LIVE'));
+
+    // Expanded Details of one saved strategy. Rendered inside an `@container`
+    // (table row or card), so its grids reflow on the space they actually get.
+    const renderSavedDetails = (s) => {
+        const m = s.backtest?.metrics;
+        const opt = s.optimizer || null;
+        if (!m) return <div className="text-2xs text-fg-5">No backtest snapshot saved with this strategy. Load it → run a backtest → re-save to attach results.</div>;
+        const pf = pfValue(m);
+        return (
+            <div className="space-y-3">
+                {opt && (
+                    <div className="space-y-1.5">
+                        <div className="text-2xs text-fg-4 leading-relaxed">
+                            From Auto-optimize <span className="font-mono text-fg-3 break-all">{opt.jobId}</span> · champion #{opt.rank}
+                            {opt.split != null && <> · last {Math.round(opt.split * 100)}% of the window held out for validation</>}
+                            {opt.robustness && (
+                                <span className={opt.robustness.robust === false ? 'text-danger' : opt.robustness.robust === true ? 'text-success' : ''}>
+                                    {' · '}{opt.robustness.robust === true ? '✓ Holds OOS' : opt.robustness.robust === false ? '⚠ Overfit risk' : 'OOS unknown'}
+                                    {opt.robustness.ratio != null ? ` · val/train ${opt.robustness.ratio}` : ''} — {opt.robustness.note}
+                                </span>
+                            )}
+                        </div>
+                        <div className="grid grid-cols-2 @md:grid-cols-3 @3xl:grid-cols-6 gap-2">
+                            <Tile label="Val net" help="oos-validation" value={`₹${fmt(opt.val?.netPnl)}`} good={opt.val?.netPnl > 0} bad={opt.val?.netPnl < 0} />
+                            <Tile label="Val PF" help="oos-validation" value={pfText(opt.val)} />
+                            <Tile label="Val win% · n" value={opt.val ? `${opt.val.winRate ?? '—'}% · ${opt.val.n ?? '—'}` : '—'} />
+                            <Tile label="Train net" value={`₹${fmt(opt.train?.netPnl)}`} good={opt.train?.netPnl > 0} bad={opt.train?.netPnl < 0} />
+                            <Tile label="Train PF" value={pfText(opt.train)} />
+                            <Tile label="Train win% · n" value={opt.train ? `${opt.train.winRate ?? '—'}% · ${opt.train.n ?? '—'}` : '—'} />
+                        </div>
+                    </div>
+                )}
+                <div className="space-y-1.5">
+                    <div className="text-2xs text-fg-4 leading-relaxed">
+                        {opt ? 'Full window' : 'Backtest window'} <span className="text-fg-3">{s.backtest.from} → {s.backtest.to}</span> · {s.backtest.resolution || '5'}m
+                        {m.exitReasons && <span> · exits: {Object.entries(m.exitReasons).map(([k, v]) => `${k}×${v}`).join(', ')}</span>}
+                    </div>
+                    <div className="grid grid-cols-2 @md:grid-cols-3 @3xl:grid-cols-6 gap-2">
+                        <Tile label="Net P&L" value={`₹${fmt(m.netPnl)}`} good={m.netPnl > 0} bad={m.netPnl < 0} />
+                        <Tile label="Trades" value={m.n ?? '—'} />
+                        <Tile label="Win Rate" value={m.winRate != null ? `${m.winRate}%` : '—'} good={m.winRate >= 50} />
+                        <Tile label="Profit Factor" value={pfText(m)} good={pf != null && pf >= 1.3} bad={pf != null && pf < 1} />
+                        <Tile label="Max Drawdown" value={`₹${fmt(m.maxDrawdown)}`} bad={m.maxDrawdown < 0} />
+                        <Tile label="ROI on margin" help="roi-on-margin" value={m.roiOnMarginPct != null ? `${fmt(m.roiOnMarginPct, 1)}%` : '—'} good={m.roiOnMarginPct > 0} />
+                        <Tile label="Avg Win" value={`₹${fmt(m.avgWin)}`} good />
+                        <Tile label="Avg Loss" value={`₹${fmt(m.avgLoss)}`} bad />
+                        <Tile label="Avg margin (capital)" value={`₹${fmt(m.avgMargin)}`} />
+                        <Tile label="Gross win" value={`₹${fmt(m.grossWin)}`} good />
+                        <Tile label="Gross loss" value={`₹${fmt(m.grossLoss)}`} bad />
+                        <Tile label="Wins" value={`${m.wins ?? '—'}`} />
+                    </div>
+                </div>
+                <div>
+                    <div className="text-3xs text-fg-5 mb-0.5">Structure params</div>
+                    <div className="text-3xs font-mono text-fg-4 break-all">{JSON.stringify(s.params || {})}</div>
+                    {s.signal_params && <><div className="text-3xs text-violet-400 mt-1.5 mb-0.5">Tuned signal params</div><div className="text-3xs font-mono text-fg-4 break-all">{JSON.stringify(s.signal_params)}</div></>}
+                </div>
+            </div>
+        );
+    };
 
     const deleteSaved = (s) => setConfirmState({
         title: `Delete saved strategy “${s.name}”?`, danger: true, confirmLabel: 'Delete',
@@ -816,7 +987,7 @@ export default function MultiLeg() {
                     <option value={0.3}>Hold out last 30%</option>
                     <option value={0.4}>Hold out last 40%</option>
                 </select>
-                {mode === 'auto' && <span className="block text-4xs text-fg-6 mt-0.5">Always on in Auto — you only choose how much to hold out.</span>}
+                {mode === 'auto' && <span className="block text-4xs text-fg-5 mt-0.5">Always on in Auto — you only choose how much to hold out.</span>}
             </label>
         </>
     );
@@ -838,7 +1009,7 @@ export default function MultiLeg() {
                         {presetKey && <button onClick={() => setPresetKey('')} className="text-3xs text-fg-5 hover:text-fg-3">clear</button>}
                     </label>
                     {activePreset && <div className="text-2xs text-fg-4 mt-1.5 leading-snug">{activePreset.note}</div>}
-                    <div className="text-3xs text-fg-6 mt-1">Loads the template + a full, self-consistent param set. Edit anything before deploying — the pre-deploy review will flag risks.</div>
+                    <div className="text-3xs text-fg-5 mt-1">Loads the template + a full, self-consistent param set. Edit anything before deploying — the pre-deploy review will flag risks.</div>
                 </div>
             )}
             <div className="flex flex-wrap gap-2 mb-4">
@@ -855,7 +1026,7 @@ export default function MultiLeg() {
 
     const SetupCard = (
         <div className="bg-surface rounded-xl border border-line p-4">
-            <div className="text-sm font-semibold text-fg mb-3 flex items-center gap-2"><SlidersHorizontal className="w-4 h-4 text-primary" /> Setup — {tpl?.name || tplKey}</div>
+            <div className="text-sm font-semibold text-fg mb-3 flex items-center gap-2"><SlidersHorizontal className="w-4 h-4 text-primary-ink" /> Setup — {tpl?.name || tplKey}</div>
             <MarketRead symbol={symbol} presets={presets} onApplyPreset={applyPreset} />
             <BookCost symbol={symbol} />
             <div className="grid grid-cols-2 gap-2 text-xs">
@@ -910,7 +1081,7 @@ export default function MultiLeg() {
                         <input type="checkbox" checked={useSignalExit} onChange={e => setUseSignalExit(e.target.checked)} className="accent-amber-500" />
                         Strategy early exit <span className="text-fg-5">— close on reverse / thesis-break before SL</span>
                     </label>
-                    <div className="text-3xs text-fg-6 mt-1">
+                    <div className="text-3xs text-fg-5 mt-1">
                         Entries fire only when {signalStrategy} signals — {String(tpl?.outlook || '').startsWith('bullish') ? 'CE signals only (bullish structure)' : String(tpl?.outlook || '').startsWith('bearish') ? 'PE signals only (bearish structure)' : 'any direction (neutral structure = volatility trigger)'} — still one entry/day.
                         {useSignalExit ? ' Early exit ON: TP still wins first, then a reverse/thesis-break closes before the structure SL.' : ''}
                     </div>
@@ -1042,7 +1213,7 @@ export default function MultiLeg() {
                     : <div className="text-3xs text-fg-4 mt-1 font-mono">
                         chain ATM IV <span className="text-cyan-300">{ivCalib.observedIvPct}%</span> vs realized {ivCalib.realizedVolPct}% → iv_mult <span className="text-cyan-300">{ivCalib.iv_mult}</span> (was 1.15) · ATM {ivCalib.atmStrike} {ivCalib.expiry} · CE ₹{ivCalib.atmCe} PE ₹{ivCalib.atmPe}
                     </div>)}
-                <div className="text-3xs text-fg-6 mt-1">Aligns backtest premium LEVEL to the market. Skew / term-structure / microstructure still differ — paper-validate before LIVE.</div>
+                <div className="text-3xs text-fg-5 mt-1">Aligns backtest premium LEVEL to the market. Skew / term-structure / microstructure still differ — paper-validate before LIVE.</div>
             </div>
 
             <div className="text-xs text-fg-4 mt-4 mb-1 font-semibold">Parameters (every one editable + sweepable)</div>
@@ -1076,11 +1247,11 @@ export default function MultiLeg() {
                         <div className="flex flex-wrap gap-2 mt-2 text-2xs">
                             <span className="px-2 py-0.5 rounded bg-slate-800 border border-line">net {a.netPremium >= 0 ? 'credit' : 'debit'} ₹{fmt(Math.abs(a.netPremium), 2)}</span>
                             <span className="px-2 py-0.5 rounded bg-emerald-900/30 border border-emerald-700/50 text-success">max +₹{fmt(a.maxProfit, 0)}</span>
-                            <span className="px-2 py-0.5 rounded bg-red-900/30 border border-red-700/50 text-danger">max −₹{fmt(Math.abs(a.maxLoss === -Infinity ? Infinity : a.maxLoss), 0)}{a.maxLoss === -Infinity ? ' (unbounded)' : ''}</span>
+                            <span className="px-2 py-0.5 rounded bg-red-900/30 border border-red-700/50 text-danger">max -₹{fmt(Math.abs(a.maxLoss === -Infinity ? Infinity : a.maxLoss), 0)}{a.maxLoss === -Infinity ? ' (unbounded)' : ''}</span>
                             <span className="px-2 py-0.5 rounded bg-slate-800 border border-line">BE: {(a.breakevens || []).map(b => fmt(b)).join(' / ') || '—'}</span>
                         </div>
                     )}
-                    <div className="text-3xs text-fg-6 mt-2">{tpl?.notes}</div>
+                    <div className="text-3xs text-fg-5 mt-2">{tpl?.notes}</div>
                 </div>
             )}
         </div>
@@ -1205,7 +1376,7 @@ export default function MultiLeg() {
             <Tabs className="mb-1" ariaLabel="Multi-leg sections"
                 tabs={TABS.map((t) => ({ id: t.id, label: t.label, icon: t.icon, hint: t.desc }))}
                 value={mode} onChange={setMode} />
-            <div className="text-2xs text-fg-6 mb-4 pl-1">{TABS.find(t => t.id === mode)?.desc}</div>
+            <div className="text-2xs text-fg-5 mb-4 pl-1">{TABS.find(t => t.id === mode)?.desc}</div>
 
             {error && <div className="mb-4 p-2 bg-red-900/20 border border-red-700/50 rounded text-danger text-xs">{error}</div>}
 
@@ -1222,14 +1393,14 @@ export default function MultiLeg() {
                             <div className="text-sm font-semibold text-fg mb-3">Run</div>
                             <div className="grid grid-cols-3 gap-2 text-xs mb-3">{DateRangeInputs}</div>
                             {ChainSourceInputs}
-                            {/* text-primary-ink, not text-primary, on a `bg-primary/<alpha>`
+                            {/* text-primary-ink, not text-primary-ink, on a `bg-primary/<alpha>`
                                 wash. `--color-primary` is the brand FILL — one colour, tuned
                                 to carry white — so painting it as ink on a 10-30% wash of
                                 itself is asking one hex to be both figure and ground: it
                                 measured 2.04-4.01:1 across the 12 themes (3.55 on midnight,
                                 i.e. the shipping UI failed this too). `--color-primary-ink`
                                 is the same hue solved AGAINST that wash; worst case 4.97,
-                                counting the heavier hover/30 state. Plain `text-primary` on
+                                counting the heavier hover/30 state. Plain `text-primary-ink` on
                                 a card is fine and is deliberately left alone. */}
                             <button onClick={() => runBacktest()} disabled={running}
                                 className="w-full py-2 bg-primary/20 hover:bg-primary/30 border border-primary/50 text-primary-ink rounded font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-50">
@@ -1246,7 +1417,7 @@ export default function MultiLeg() {
                                         Save
                                     </button>
                                 </div>
-                                <div className="text-3xs text-fg-6 mt-1">{saveMsg || 'Saves template + all params + entry trigger to the DB — load or deploy it from the Deploy tab.'}</div>
+                                <div className="text-3xs text-fg-5 mt-1">{saveMsg || 'Saves template + all params + entry trigger to the DB — load or deploy it from the Deploy tab.'}</div>
                             </div>
                             {result?.chainSource && (
                                 <div className={`mt-3 rounded border p-2 text-2xs ${result.chainSource === 'archive' ? 'border-sky-700/50 bg-sky-950/20 text-sky-200' : 'border-amber-700/50 bg-amber-950/20 text-warning'}`}>
@@ -1265,7 +1436,7 @@ export default function MultiLeg() {
                                 <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
                                     <Tile label="Trades" value={result.metrics.n} />
                                     <Tile label="Win rate" help="win-rate" value={`${result.metrics.winRate}%`} />
-                                    <Tile label="Net PnL" value={`₹${fmt(result.metrics.netPnl)}`} good={result.metrics.netPnl > 0} bad={result.metrics.netPnl < 0} />
+                                    <Tile label="Net P&L" value={`₹${fmt(result.metrics.netPnl)}`} good={result.metrics.netPnl > 0} bad={result.metrics.netPnl < 0} />
                                     <Tile label="Profit factor" help="profit-factor" value={result.metrics.profitFactor === Infinity ? '∞' : result.metrics.profitFactor} />
                                     <Tile label="Sharpe" help="sharpe" value={result.metrics.sharpe != null ? result.metrics.sharpe : '—'} good={result.metrics.sharpe >= 1} bad={result.metrics.sharpe < 0} />
                                     <Tile label="Sortino" help="sortino" value={result.metrics.sortino != null ? result.metrics.sortino : '—'} good={result.metrics.sortino >= 1.5} bad={result.metrics.sortino < 0} />
@@ -1485,7 +1656,7 @@ export default function MultiLeg() {
                                                         title="Full backtest (whole period) — equity curve + every trade">
                                                         ▶ Test
                                                     </button>
-                                                    <button onClick={() => { selectTemplate(r.template); setSymbol(r.symbol); const inst = instruments.find(x => x.v === r.symbol); if (inst?.spot) setSpot(inst.spot); setMode('sweep'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                                                    <button onClick={() => { selectTemplate(r.template); setSymbol(r.symbol); const inst = instruments.find(x => x.v === r.symbol); if (inst?.spot) setSpot(inst.spot); setMode('sweep'); scrollPageToTop(); }}
                                                         className="px-2 py-0.5 rounded border border-sky-700/50 bg-sky-900/20 text-sky-300 hover:bg-sky-900/40"
                                                         title="Open in Optimizer with this template + symbol preloaded">
                                                         ⚙ Tune
@@ -1549,10 +1720,12 @@ export default function MultiLeg() {
                                         </select>
                                     </label>
                                 </div>
-                                <div className="mt-2 text-2xs text-fg-5">
-                                    ≈ {fmt(autoEstimate.total)} backtests · est. {autoEstimate.dur}
-                                    {budgetLevel >= 15 && <span className="text-warning"> · survives refresh (re-attach below); a server redeploy interrupts it</span>}
-                                </div>
+                                {autoState?.status !== 'running' && (
+                                    <div className="mt-2 text-2xs text-fg-5">
+                                        ≈ {fmt(autoEstimate.total)} backtests · est. {autoEstimate.dur}
+                                        {budgetLevel >= 15 && <span className="text-warning"> · survives refresh (re-attach below); a server redeploy interrupts it</span>}
+                                    </div>
+                                )}
                                 <button onClick={() => setBudgetAdv(v => !v)} className="mt-1 text-2xs text-sky-400 hover:text-sky-300">
                                     {budgetAdv ? '▾ Hide advanced budget' : '▸ Advanced budget (edit every number)'}
                                 </button>
@@ -1596,20 +1769,8 @@ export default function MultiLeg() {
                                 )}
                                 {autoState && (
                                     <div className="mt-3 text-xs">
-                                        <div className="flex justify-between text-fg-4 mb-1">
-                                            <span>Stage {autoState.progress?.stage || 0}/4 — {autoState.progress?.note || autoState.status}</span>
-                                            <span>{autoState.workers ? `${autoState.workers} cores · ` : ''}{autoState.progress?.pct ?? 0}%</span>
-                                        </div>
-                                        <div className="h-2 bg-slate-800 rounded overflow-hidden">
-                                            {/* stage 0 (data fetch) = first 10%, stages 1-4 share the rest */}
-                                            <div className="h-full bg-amber-500/70 transition-all" style={{
-                                                width: `${Math.min(100, Math.max(1,
-                                                    (autoState.progress?.stage || 0) === 0
-                                                        ? (autoState.progress?.pct || 0) * 0.10
-                                                        : 10 + ((autoState.progress.stage - 1) * 22.5) + (autoState.progress.pct || 0) * 0.225
-                                                ))}%`,
-                                            }} />
-                                        </div>
+                                        <AutoRunProgress job={autoState} track={autoTrack}
+                                            sizes={sizesForRequest(autoState.request, templates, budgetForLevel(3))} />
                                         {['error', 'interrupted'].includes(autoState.status) && (
                                             <div className="mt-2 text-danger">
                                                 {autoState.error}
@@ -1618,14 +1779,24 @@ export default function MultiLeg() {
                                                     : <span className="block text-fg-5">No checkpoint yet — this run can only be started fresh.</span>}
                                             </div>
                                         )}
-                                        {autoState.status === 'paused' && (
-                                            <div className="mt-2 text-fg-3">
-                                                Paused by you — it will NOT auto-resume.
-                                                {autoState.checkpoint?.stage
-                                                    ? <span className="text-success/90"> Resume continues from stage {autoState.checkpoint.stage}.</span>
-                                                    : <span className="text-fg-5"> No checkpoint was written — only a fresh start is possible.</span>}
-                                            </div>
-                                        )}
+                                        {/* Three different facts share status 'paused'. Saying "by you"
+                                            for all of them told the operator a run the resource guard
+                                            parked would never come back. */}
+                                        {autoState.status === 'paused' && (() => {
+                                            const parked = autoState.pausedByGovernor && !autoState.pausedManually;
+                                            return (
+                                                <div className="mt-2 text-fg-3">
+                                                    {parked
+                                                        ? <>Parked by the resource guard — {autoState.governorReason || 'not enough headroom'}. It restarts by itself as soon as the guard sees room (checked every 30 s); Resume tries now.</>
+                                                        : autoState.pausedManually ? 'Paused by you — it will NOT auto-resume.' : 'Paused — it will not restart by itself.'}
+                                                    {autoState.checkpoint?.stage
+                                                        ? <span className="text-success/90"> Resume continues from stage {autoState.checkpoint.stage}.</span>
+                                                        : parked
+                                                            ? <span className="text-fg-5"> It was parked before its first checkpoint, so it starts from the beginning.</span>
+                                                            : <span className="text-fg-5"> No checkpoint was written — only a fresh start is possible.</span>}
+                                                </div>
+                                            );
+                                        })()}
                                         {autoState.status === 'done' && autoState.result?.stages && (
                                             <div className="mt-2 text-fg-5">
                                                 {autoState.result.stages.map(s => s.stage === 4
@@ -1645,8 +1816,8 @@ export default function MultiLeg() {
                             <div className="flex items-center justify-between mb-2">
                                 <div className="text-xs font-semibold text-fg">Recent runs (persisted — re-attach after a refresh)</div>
                                 <div className="flex items-center gap-2">
-                                    <span className="text-3xs text-fg-6 hidden sm:inline" title="A run that dies on its own (server restart or an error) is restarted from its last checkpoint. A run YOU pause is never restarted automatically.">
-                                        crash → auto-resume · paused → stays paused
+                                    <span className="text-3xs text-fg-5 hidden sm:inline" title="A run that dies on its own (server restart or an error) is restarted from its last checkpoint, up to 3 times in a row. A run the resource guard parks (low memory, market hours) restarts by itself as soon as there is room again — those parks don't use up the 3 tries, because the guard parks a multi-day run every trading morning. A run YOU pause is never restarted automatically.">
+                                        crash or resource guard → auto-resume · paused by you → stays paused
                                     </span>
                                     {autoJobs.some(j => j.status !== 'running') && (
                                         <button onClick={clearFinishedJobs} disabled={!!pending.deljobs}
@@ -1659,19 +1830,23 @@ export default function MultiLeg() {
                             <div className="space-y-1 text-2xs">
                                 {autoJobs.map(j => {
                                     const cp = j.checkpoint || {};
-                                    const canResume = !!cp.stage && j.status !== 'running' && j.status !== 'done';
+                                    const parked = j.status === 'paused' && j.pausedByGovernor && !j.pausedManually;
+                                    // a run parked before its first checkpoint can still be started (from scratch)
+                                    const canResume = (!!cp.stage && j.status !== 'running' && j.status !== 'done') || parked;
                                     return (
                                     <div key={j.jobId} className="flex items-center gap-2 border-b border-line-0/60 pb-1">
                                         <span className={`px-1.5 py-0.5 rounded border text-3xs ${j.status === 'running' ? 'border-amber-600 text-warning' : j.status === 'done' ? 'border-emerald-700 text-success' : j.status === 'paused' ? 'border-line-3 text-fg-3' : 'border-red-800 text-danger'}`}>{j.status}</span>
                                         <span className="text-fg-5" title="IST">{istDateTime(j.startedAt)}</span>
                                         <span className="text-fg-4 flex-1 truncate">
                                             {(j.request?.symbols || []).map(shortSym).join('+')} · {j.request?.strategies ?? '?'} strategies · {j.request?.entry_style || 'both'}
-                                            {j.status === 'running' && j.progress?.note ? ` — ${j.progress.note}` : ''}
+                                            {j.status === 'running' ? ` — ${runSummary(j, sizesForRequest(j.request, templates, budgetForLevel(3)), autoTrack)}` : ''}
                                             {j.status !== 'running' && j.status !== 'done' && cp.stage ? (
                                                 cp.phase === 'partial'
                                                     ? ` — checkpoint mid-stage ${cp.stage}${cp.cursor ? ` (${cp.cursor} done)` : ''}`
                                                     : ` — checkpoint after stage ${cp.stage}`) : ''}
-                                            {j.status === 'paused' && <span className="text-fg-5"> · paused by you (no auto-resume)</span>}
+                                            {j.status === 'paused' && (parked
+                                                ? <span className="text-sky-300/80" title={j.governorReason || undefined}> · parked by the resource guard ({guardWords(j.governorReason)}) — restarts by itself when that clears</span>
+                                                : <span className="text-fg-5"> · {j.pausedManually ? 'paused by you' : 'paused'} (no auto-resume)</span>)}
                                             {j.autoResumeCount > 0 && <span className="text-sky-400/80" title="Times the server restarted this run by itself"> · auto-resumed ×{j.autoResumeCount}</span>}
                                         </span>
                                         {autoJob?.jobId !== j.jobId && ['running', 'done'].includes(j.status) && (
@@ -1687,9 +1862,10 @@ export default function MultiLeg() {
                                             </button>
                                         )}
                                         {canResume && (
-                                            <button onClick={() => resumeJob(j)} title="Continue from the last checkpoint"
+                                            <button onClick={() => resumeJob(j)}
+                                                title={cp.stage ? 'Continue from the last checkpoint' : 'Parked before its first checkpoint — starts from the beginning'}
                                                 className="px-2 py-0.5 rounded border border-emerald-700/50 bg-emerald-900/20 text-success hover:bg-emerald-900/40">
-                                                {cp.phase === 'partial' ? `Resume ↻ S${cp.stage}` : `Resume ▸ S${cp.stage + 1}`}
+                                                {!cp.stage ? 'Start now ▸' : cp.phase === 'partial' ? `Resume ↻ S${cp.stage}` : `Resume ▸ S${cp.stage + 1}`}
                                             </button>
                                         )}
                                         <button onClick={() => deleteJob(j)} disabled={!!pending[`deljob:${j.jobId}`]}
@@ -1763,7 +1939,7 @@ export default function MultiLeg() {
                                                     <td className="text-right">{r.val?.profitFactor === Infinity ? '∞' : r.val?.profitFactor ?? '—'}</td>
                                                     <td className="text-right">{r.val?.winRate ?? '—'}</td>
                                                     <td className="text-right text-fg-4">₹{fmt(r.train?.netPnl)}</td>
-                                                    <td className="text-right" title={r.robustness?.note || ''}>{r.robustness?.robust === true ? <span className="text-success">✓</span> : r.robustness?.robust === false ? <span className="text-danger">⚠</span> : <span className="text-fg-6">—</span>}</td>
+                                                    <td className="text-right" title={r.robustness?.note || ''}>{r.robustness?.robust === true ? <span className="text-success">✓</span> : r.robustness?.robust === false ? <span className="text-danger">⚠</span> : <span className="text-fg-5">—</span>}</td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -1778,105 +1954,12 @@ export default function MultiLeg() {
             {/* ═══════════════ DEPLOY TAB ═══════════════ */}
             {mode === 'deploy' && (
                 <>
-                    <div className="bg-surface rounded-xl border border-line p-4 mb-4">
-                        <div className="flex items-center justify-between mb-2">
-                            <div className="text-sm font-semibold text-fg flex items-center gap-2"><Save className="w-4 h-4 text-sky-400" /> Saved strategies ({savedList.length})</div>
-                            <label className="text-xs text-fg-4 flex items-center gap-2">Deploy lots
-                                <input type="number" min={1} value={deployLots} onChange={e => setDeployLots(Math.max(1, Number(e.target.value) || 1))}
-                                    className="w-16 bg-slate-800 border border-line rounded p-1 text-fg-2" />
-                            </label>
-                        </div>
-                        {savedList.length === 0 ? (
-                            <div className="text-xs text-fg-5 py-4 text-center">Nothing saved yet — run a backtest on the Backtest tab and hit Save.</div>
-                        ) : (
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-2xs text-fg-3">
-                                    <thead><tr className="text-fg-5 text-left">
-                                        <th>Name</th><th>Structure</th><th>Symbol</th><th>Entry</th>
-                                        <th className="text-right">BT net ₹</th><th className="text-right">BT win%</th><th className="text-right">BT PF</th><th className="text-right">BT n</th>
-                                        <th className="text-right">Actions</th>
-                                    </tr></thead>
-                                    <tbody>
-                                        {savedList.map(s => {
-                                            const m = s.backtest?.metrics || {};
-                                            const isOpen = savedDetail === s._id;
-                                            return (
-                                            <React.Fragment key={s._id}>
-                                            <tr className="border-t border-line-0 hover:bg-slate-800/40">
-                                                <td className="font-semibold text-fg-2">{s.name}</td>
-                                                <td>{templates.find(t => t.key === s.template)?.name || s.template}</td>
-                                                <td>{shortSym(s.symbol)}</td>
-                                                <td className="text-fg-4">{s.entry_mode === 'signal' ? `signal: ${s.signal_strategy}${(s.params||{}).use_signal_exit ? ' +exit' : ''}` : 'time'}</td>
-                                                <td className={`text-right font-semibold ${(m.netPnl ?? 0) > 0 ? 'text-success' : 'text-danger'}`}>₹{fmt(m.netPnl)}</td>
-                                                <td className="text-right">{m.winRate != null ? `${m.winRate}%` : '—'}</td>
-                                                <td className="text-right">{m.profitFactor != null ? (m.profitFactor === null ? '∞' : fmt(m.profitFactor, 2)) : '—'}</td>
-                                                <td className="text-right">{m.n ?? '—'}</td>
-                                                <td className="text-right whitespace-nowrap">
-                                                    <button onClick={() => setSavedDetail(isOpen ? null : s._id)}
-                                                        className={`px-2 py-0.5 mr-1 rounded border ${isOpen ? 'border-amber-600 bg-amber-900/25 text-warning' : 'border-line-2 bg-slate-800 text-fg-3'} hover:bg-slate-700`} title="Show backtest results + params saved with this strategy">
-                                                        {isOpen ? '▲ Hide' : '▾ Details'}
-                                                    </button>
-                                                    <button onClick={() => loadSaved(s)}
-                                                        className="px-2 py-0.5 mr-1 rounded border border-sky-700/50 bg-sky-900/20 text-sky-300 hover:bg-sky-900/40" title="Load into Backtest for inspection">
-                                                        Load
-                                                    </button>
-                                                    <button onClick={() => deploySaved(s, 'PAPER')} disabled={pending[`deploy:${s._id}`]}
-                                                        className="px-2 py-0.5 mr-1 rounded border border-emerald-700/50 bg-emerald-900/20 text-success hover:bg-emerald-900/40 disabled:opacity-40" title="Deploy as PAPER (simulated fills at quotes)">
-                                                        ▶ Paper
-                                                    </button>
-                                                    <button onClick={() => deploySaved(s, 'LIVE')} disabled={pending[`deploy:${s._id}`]}
-                                                        className="px-2 py-0.5 mr-1 rounded border border-red-700/60 bg-red-900/25 text-danger hover:bg-red-900/45 font-semibold disabled:opacity-40" title="Deploy LIVE — shows a risk preview + type-to-confirm before any real order">
-                                                        🔴 LIVE
-                                                    </button>
-                                                    <button onClick={() => deleteSaved(s)}
-                                                        className="px-2 py-0.5 rounded border border-line bg-slate-800 text-fg-4 hover:text-danger" title="Delete saved strategy">
-                                                        <Trash2 className="w-3 h-3 inline" />
-                                                    </button>
-                                                </td>
-                                            </tr>
-                                            {isOpen && (
-                                                <tr className="bg-slate-900/60">
-                                                    <td colSpan={9} className="p-3">
-                                                        {s.backtest?.metrics ? (
-                                                            <div className="space-y-2">
-                                                                <div className="text-2xs text-fg-4">
-                                                                    Backtest window <span className="text-fg-3">{s.backtest.from} → {s.backtest.to}</span> · {s.backtest.resolution || '5'}m
-                                                                    {m.exitReasons && <span> · exits: {Object.entries(m.exitReasons).map(([k, v]) => `${k}×${v}`).join(', ')}</span>}
-                                                                </div>
-                                                                <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
-                                                                    <Tile label="Net PnL" value={`₹${fmt(m.netPnl)}`} good={m.netPnl > 0} bad={m.netPnl < 0} />
-                                                                    <Tile label="Trades" value={m.n ?? '—'} />
-                                                                    <Tile label="Win Rate" value={m.winRate != null ? `${m.winRate}%` : '—'} good={m.winRate >= 50} />
-                                                                    <Tile label="Profit Factor" value={m.profitFactor == null ? '∞' : fmt(m.profitFactor, 2)} good={m.profitFactor == null || m.profitFactor >= 1.3} bad={m.profitFactor != null && m.profitFactor < 1} />
-                                                                    <Tile label="Max Drawdown" value={`₹${fmt(m.maxDrawdown)}`} bad={m.maxDrawdown < 0} />
-                                                                    <Tile label="ROI on margin" help="roi-on-margin" value={m.roiOnMarginPct != null ? `${fmt(m.roiOnMarginPct, 1)}%` : '—'} good={m.roiOnMarginPct > 0} />
-                                                                    <Tile label="Avg Win" value={`₹${fmt(m.avgWin)}`} good />
-                                                                    <Tile label="Avg Loss" value={`₹${fmt(m.avgLoss)}`} bad />
-                                                                    <Tile label="Avg margin (capital)" value={`₹${fmt(m.avgMargin)}`} />
-                                                                    <Tile label="Gross win" value={`₹${fmt(m.grossWin)}`} good />
-                                                                    <Tile label="Gross loss" value={`₹${fmt(m.grossLoss)}`} bad />
-                                                                    <Tile label="Wins" value={`${m.wins ?? '—'}`} />
-                                                                </div>
-                                                                <div>
-                                                                    <div className="text-3xs text-fg-5 mb-0.5">Structure params</div>
-                                                                    <div className="text-3xs font-mono text-fg-4 break-all">{JSON.stringify(s.params || {})}</div>
-                                                                    {s.signal_params && <><div className="text-3xs text-violet-400 mt-1 mb-0.5">Tuned signal params</div><div className="text-3xs font-mono text-fg-4 break-all">{JSON.stringify(s.signal_params)}</div></>}
-                                                                </div>
-                                                            </div>
-                                                        ) : (
-                                                            <div className="text-2xs text-fg-5">No backtest snapshot saved with this strategy. Load it → run a backtest → re-save to attach results.</div>
-                                                        )}
-                                                    </td>
-                                                </tr>
-                                            )}
-                                            </React.Fragment>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-                    </div>
+                    <SavedStrategiesPanel
+                        list={savedList} templates={templates}
+                        deployLots={deployLots} onDeployLots={setDeployLots} pending={pending}
+                        openId={savedDetail} onToggle={setSavedDetail}
+                        onLoad={loadSaved} onDeploy={deploySaved} onDelete={deleteSaved}
+                        renderDetails={renderSavedDetails} />
 
                     {/* ── Summary cards (live-engine dashboard parity) ───────────── */}
                     {mlStatus && (() => {
@@ -1898,7 +1981,7 @@ export default function MultiLeg() {
                         );
                         return (
                             <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
-                                <Card label="Combined PnL (all books)" tone={combined < 0 ? 'border-rose-800/50 bg-rose-950/10' : 'border-emerald-800/50 bg-emerald-950/10'}>
+                                <Card label="Combined P&L (all books)" tone={combined < 0 ? 'border-rose-800/50 bg-rose-950/10' : 'border-emerald-800/50 bg-emerald-950/10'}>
                                     <div className={`text-xl font-mono font-bold ${combined < 0 ? 'text-danger' : 'text-success'}`}>₹{fmt(combined)}</div>
                                     <div className="text-3xs text-fg-5">Realized ₹{fmt(realized)} · Open {open >= 0 ? '+' : ''}₹{fmt(open)}</div>
                                 </Card>
@@ -1913,7 +1996,7 @@ export default function MultiLeg() {
                                             <div className="text-3xs text-fg-5">of ₹{fmt(cap)} cap (per book)</div>
                                         </>
                                     ) : (
-                                        <><div className="text-sm font-mono text-fg-4">no cap set</div><div className="text-3xs text-fg-6">MULTILEG_DAILY_LOSS_LIMIT</div></>
+                                        <><div className="text-sm font-mono text-fg-4">no cap set</div><div className="text-3xs text-fg-5">MULTILEG_DAILY_LOSS_LIMIT</div></>
                                     )}
                                 </Card>
                                 <Card label="Engine Status" tone={engState === 'HALTED' ? 'border-rose-800/50 bg-rose-950/10' : undefined}>
@@ -1999,7 +2082,7 @@ export default function MultiLeg() {
                     <div className="bg-surface rounded-xl border border-line p-4 mb-4">
                         <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                             <div className="text-sm font-semibold text-fg flex items-center gap-2"><Rocket className="w-4 h-4 text-warning" /> Deployments ({visibleDeps.length}{visibleDeps.length !== (mlDeps.deployments || []).length ? `/${(mlDeps.deployments || []).length}` : ''})</div>
-                            <div className="flex items-center gap-2 text-2xs">
+                            <div className="flex flex-wrap items-center gap-2 text-2xs">
                                 {/* freshness / connection */}
                                 <span className={`flex items-center gap-1 ${!lastPoll.ok ? 'text-danger' : 'text-fg-5'}`} title="Auto-refreshes every 5s">
                                     <span className={`w-1.5 h-1.5 rounded-full ${!lastPoll.ok ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`} />
@@ -2009,7 +2092,7 @@ export default function MultiLeg() {
                                     <option value="all">All books</option><option value="LIVE">LIVE</option><option value="PAPER">PAPER</option><option value="open">Open only</option>
                                 </select>
                                 <select value={depSort} onChange={e => setDepSort(e.target.value)} className="bg-slate-800 border border-line rounded p-1 text-fg-3" aria-label="Sort deployments">
-                                    <option value="state">Sort: state</option><option value="mtm">Sort: MTM</option><option value="pnl">Sort: total PnL</option><option value="name">Sort: name</option>
+                                    <option value="state">Sort: state</option><option value="mtm">Sort: MTM</option><option value="pnl">Sort: total P&L</option><option value="name">Sort: name</option>
                                 </select>
                                 <button onClick={() => bulkAction('stop-all')} disabled={pending.bulk} className="px-2 py-1 rounded border border-amber-700/50 bg-amber-900/20 text-warning hover:bg-amber-900/40 disabled:opacity-40">Stop all</button>
                                 <button onClick={() => bulkAction('close-all')} disabled={pending.bulk} className="px-2 py-1 rounded border border-red-700/50 bg-red-900/25 text-danger hover:bg-red-900/45 disabled:opacity-40">Close all</button>
@@ -2185,9 +2268,9 @@ export default function MultiLeg() {
                                     return (
                                         <div key={d._id} className={`rounded-lg border p-3 relative ${isLive ? 'border-red-600 bg-red-950/20 ring-1 ring-red-800/40' : 'border-line bg-slate-900/40'} ${busy ? 'opacity-70' : ''}`}>
                                             {isLive && <div className="absolute -top-2 left-3 text-5xs font-bold px-1.5 py-0.5 rounded bg-red-700 text-white tracking-wider">● REAL MONEY</div>}
-                                            <div className="flex items-center justify-between mb-1">
-                                                <div className="text-xs font-semibold text-fg-2 flex items-center gap-1.5">{d.name}{busy && <RefreshCw className="w-3 h-3 animate-spin text-fg-4" />}</div>
-                                                <div className="flex gap-1">
+                                            <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 mb-1">
+                                                <div className="min-w-0 break-words text-xs font-semibold text-fg-2 flex items-center gap-1.5">{d.name}{busy && <RefreshCw className="w-3 h-3 animate-spin text-fg-4" />}</div>
+                                                <div className="flex flex-wrap gap-1">
                                                     <span className={`text-3xs px-1.5 py-0.5 rounded border ${d.trade_mode === 'LIVE' ? 'border-red-700 text-danger' : 'border-sky-700 text-sky-300'}`}>{d.trade_mode}</span>
                                                     <span className={`text-3xs px-1.5 py-0.5 rounded border ${d.status === 'ACTIVE' ? 'border-emerald-700 text-success' : 'border-line-2 text-fg-4'}`}>{d.status}</span>
                                                     <span className={`text-3xs px-1.5 py-0.5 rounded border ${open ? 'border-amber-600 text-warning' : 'border-line text-fg-5'}`}>{st}</span>
@@ -2197,6 +2280,13 @@ export default function MultiLeg() {
                                                     {(d.totals?.trades > 0 || open) && <button onClick={() => setDepActivity(depActivity === d._id ? null : d._id)}
                                                         className={`text-3xs px-1.5 py-0.5 rounded border ${depActivity === d._id ? 'border-violet-600 text-violet-300' : 'border-line-2 text-fg-4'} hover:text-fg`}
                                                         title="P&L activity — the cumulative equity curve of every booked trade, plus the live unrealized MTM of the current open structure">📊 activity</button>}
+                                                    {/* A LINK, not a button: it is navigation — middle-click opens it
+                                                        in a new tab, Back returns here, a refresh keeps the scope. */}
+                                                    <Link to={{ search: `?tab=results&deployment=${encodeURIComponent(String(d._id))}` }} onClick={scrollPageToTop}
+                                                        className="text-3xs px-1.5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-fg"
+                                                        title={d.totals?.trades > 0
+                                                            ? `Open Results for ${d.name} only — every booked trade with its P&L, margin and legs, plus the breakdowns and curves`
+                                                            : `Open Results for ${d.name} only — nothing booked yet, so it fills in after the first exit`}>🧾 results</Link>
                                                     <button onClick={() => setDepDetail(detailOpen ? null : d._id)}
                                                         className={`text-3xs px-1.5 py-0.5 rounded border ${detailOpen ? 'border-amber-600 text-warning' : 'border-line-2 text-fg-4'} hover:text-fg`}
                                                         title="Full order detail — legs, prices, SL/TP levels, exit deadlines">{detailOpen ? '▲' : '▾'} details</button>
@@ -2217,7 +2307,7 @@ export default function MultiLeg() {
                                                     index fly), which is often larger than the MTM itself. */}
                                                 <div title={mtmStale
                                                     ? `Mark is STALE — last updated ${istTime(pos.lastMtmAt)} IST (market likely closed). Not a live P&L; option quotes are frozen at their last trade.`
-                                                    : `NET = what actually lands in the account if you close now: gross premium difference MINUS estimated round-trip charges (brokerage + STT + exchange + GST + stamp).\n\ngross ₹${fmt(pos.lastMtmRupees ?? 0)}  −  charges ₹${fmt(pos.lastMtmChargesEst ?? 0)}  =  net ₹${fmt(pos.lastMtmNetRupees ?? 0)}\n\nYour broker's unrealised PnL usually excludes charges — compare it to GROSS, and your ledger to NET.`}>
+                                                    : `NET = what actually lands in the account if you close now: gross premium difference MINUS estimated round-trip charges (brokerage + STT + exchange + GST + stamp).\n\ngross ₹${fmt(pos.lastMtmRupees ?? 0)}  −  charges ₹${fmt(pos.lastMtmChargesEst ?? 0)}  =  net ₹${fmt(pos.lastMtmNetRupees ?? 0)}\n\nYour broker's unrealised P&L usually excludes charges — compare it to GROSS, and your ledger to NET.`}>
                                                     {/* A STALE tile is not just old, it can be WRONG. The engine's
                                                         final mark of the session is taken a second after the bell
                                                         and can still carry pre-settlement prices (measured on prod:
@@ -2255,14 +2345,14 @@ export default function MultiLeg() {
                                             {open && mtmHist && mtmHist.length > 1 && (
                                                 <div className="flex items-center gap-2 mb-2 text-4xs text-fg-5" title="Intraday MTM path (₹) since the engine started tracking">
                                                     <span>MTM today</span><Sparkline data={mtmHist} />
-                                                    <span className={mtmHist[mtmHist.length - 1].pnl >= 0 ? 'text-success' : 'text-danger'}>₹{fmt(mtmHist[mtmHist.length - 1].pnl)}</span>
+                                                    <span className={pnlTone(mtmHist[mtmHist.length - 1].pnl)}>₹{fmt(mtmHist[mtmHist.length - 1].pnl)}</span>
                                                 </div>
                                             )}
                                             {open && d.position?.greeks && (
-                                                <div className="text-3xs font-mono mb-2 flex gap-3"
+                                                <div className="text-3xs font-mono mb-2 flex flex-wrap gap-x-3 gap-y-0.5"
                                                     title="Live book greeks — Δ: ₹ per 1pt spot move · V: ₹ per 1 IV point · Θ: ₹ per day. IVP = vol percentile at entry.">
                                                     <span className={d.position.greeks.delta < 0 ? 'text-danger' : 'text-success'}>Δ ₹{fmt(d.position.greeks.delta, 1)}/pt</span>
-                                                    <span className={d.position.greeks.vega < 0 ? 'text-warning' : 'text-sky-300'} title="Live vega of the legs still OPEN, per 1 IV point. A leg closed by its leg-SL drops out of this, so it can differ from vega@in — which is a frozen snapshot over ALL legs at entry.">V ₹{fmt(d.position.greeks.vega, 1)}/IVpt<span className="text-fg-6"> open</span></span>
+                                                    <span className={d.position.greeks.vega < 0 ? 'text-warning' : 'text-sky-300'} title="Live vega of the legs still OPEN, per 1 IV point. A leg closed by its leg-SL drops out of this, so it can differ from vega@in — which is a frozen snapshot over ALL legs at entry.">V ₹{fmt(d.position.greeks.vega, 1)}/IVpt<span className="text-fg-5"> open</span></span>
                                                     <span className={d.position.greeks.theta > 0 ? 'text-success' : 'text-danger'}>Θ ₹{fmt(d.position.greeks.theta, 1)}/day</span>
                                                     {d.position.ivpAtEntry != null && <span className="text-fg-5">IVP@in {fmt(d.position.ivpAtEntry, 0)}</span>}
                                                 </div>
@@ -2289,8 +2379,25 @@ export default function MultiLeg() {
                                                             <XAxis dataKey="spot" type="number" domain={['dataMin', 'dataMax']} tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }}
                                                                 ticks={[...new Set([...chartStrikes, ...(pos.entrySpot ? [Math.round(pos.entrySpot)] : []), ...(chartSpot ? [Math.round(chartSpot)] : [])])].sort((a, b) => a - b)} />
                                                             <YAxis tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} width={54} domain={chartYDomain} allowDataOverflow tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} />
+                                                            {/* Name every series explicitly: an `else 'P&L @ expiry'` fallback
+                                                                printed the next-open curve as a second "P&L @ expiry" row. */}
                                                             <Tooltip contentStyle={ct.tooltipStyle({ fontSize: ct.type['2xs'] })} cursor={{ stroke: ct.mark.live, strokeDasharray: '3 3' }}
-                                                                formatter={(v, n) => [`₹${fmt(v)}`, n === 'now' ? 'P&L now' : 'P&L @ expiry']} labelFormatter={(l) => `spot ${fmt(l)}`} />
+                                                                formatter={(v, n) => [`₹${fmt(v)}`, n === 'now' ? 'P&L now' : n === 'next open' ? 'P&L @ next open' : n === 'expiry' ? 'P&L @ expiry' : n]}
+                                                                labelFormatter={(l) => {
+                                                                    // Distance from BOTH marked lines: from entry is how far the
+                                                                    // index has run since you got in, from now is how far it
+                                                                    // still has to run to reach the hovered level.
+                                                                    const fromEntry = spotMove(l, pos.entrySpot);
+                                                                    const fromNow = spotMove(l, chartSpot);
+                                                                    // "now" sitting on entry (fresh fill, or no live spot yet)
+                                                                    // would only repeat the entry line
+                                                                    const nowOnEntry = spotMove(chartSpot, pos.entrySpot)?.at;
+                                                                    return (<>
+                                                                        <span className="block">spot {fmt(l)}</span>
+                                                                        {fromEntry && <span className="block">{fromEntry.at ? 'at the entry spot' : `${fromEntry.label} from entry ${fmt(pos.entrySpot)}`}</span>}
+                                                                        {fromNow && !nowOnEntry && <span className="block">{fromNow.at ? 'at the current spot' : `${fromNow.label} from now ${fmt(chartSpot)}`}</span>}
+                                                                    </>);
+                                                                }} />
                                                             <Legend wrapperStyle={{ fontSize: ct.type['4xs'] }} />
                                                             <ReferenceLine y={0} stroke={ct.axis} />
                                                             {tpRupee != null && <ReferenceLine y={tpRupee} stroke={ct.status.good} strokeDasharray="5 4" ifOverflow="extendDomain" label={{ value: `TP ₹${fmt(tpRupee)}`, fontSize: ct.type['5xs'], fill: ct.status.good, position: 'right' }} />}
@@ -2309,17 +2416,17 @@ export default function MultiLeg() {
                                                         {/* Every number on this chart is GROSS — say so, and put the net
                                                             beside it. The headline tile above shows NET, so an unlabelled
                                                             gross figure here reads as a contradiction. */}
-                                                        <span className="text-fg-6"> gross</span>
-                                                        {chartNetPnl != null && <> · net <span className={chartNetPnl > 0 ? 'text-success' : chartNetPnl < 0 ? 'text-danger' : ''}>₹{fmt(chartNetPnl)}</span>{chartCharges != null ? <span className="text-fg-6"> (chg ₹{fmt(chartCharges)})</span> : null}</>}
+                                                        <span className="text-fg-5"> gross</span>
+                                                        {chartNetPnl != null && <> · net <span className={chartNetPnl > 0 ? 'text-success' : chartNetPnl < 0 ? 'text-danger' : ''}>₹{fmt(chartNetPnl)}</span>{chartCharges != null ? <span className="text-fg-5"> (chg ₹{fmt(chartCharges)})</span> : null}</>}
                                                         {offScale.length > 0 && (
                                                             <span className="text-warning/80" title="Outside the plotted range, so not drawn — showing it to scale would flatten the curve you came to read.">
                                                                 {' · '}off-scale: {offScale.join(', ')}
                                                             </span>
                                                         )}
-                                                        {' · '}max profit ₹{fmt(chartMaxP)}<span className="text-fg-6"> gross</span> · max loss {chartUnbounded || chartMaxL == null
+                                                        {' · '}max profit ₹{fmt(chartMaxP)}<span className="text-fg-5"> gross</span> · max loss {chartUnbounded || chartMaxL == null
                                                             ? <span className="text-danger font-bold">UNBOUNDED</span>
                                                             : <>₹{fmt(chartMaxL)}</>}
-                                                        {!pg && <span className="text-fg-6"> · loading live T+0 curve…</span>}
+                                                        {!pg && <span className="text-fg-5"> · loading live T+0 curve…</span>}
                                                         {pg && pg.stale && <span className="text-warning"> · ⚠ mark {pg.mtmAgeMin}m old (market closed — quotes frozen, not live)</span>}
                                                     </div>
                                                     {/* ── NEXT-OPEN DECAY PROJECTION ────────────────────────
@@ -2340,13 +2447,13 @@ export default function MultiLeg() {
                                                                 <span className="text-fg-5"> from time decay alone</span>
                                                             </div>
                                                             <div className="text-fg-4">
-                                                                But a <span className="text-warning" title="Vega of the still-open legs repriced AT THE NEXT TRADING OPEN, so it is smaller than the live vega shown on the card above — an option has less time value left after the gap. Same legs, same scale, different moment.">1-point IV move is worth ₹{fmt(Math.abs(pg.tPlus.bookVegaRupeesPerIvPt))} <span className="text-fg-6">at that open</span></span>
+                                                                But a <span className="text-warning" title="Vega of the still-open legs repriced AT THE NEXT TRADING OPEN, so it is smaller than the live vega shown on the card above — an option has less time value left after the gap. Same legs, same scale, different moment.">1-point IV move is worth ₹{fmt(Math.abs(pg.tPlus.bookVegaRupeesPerIvPt))} <span className="text-fg-5">at that open</span></span>
                                                                 {Math.abs(pg.tPlus.bookVegaRupeesPerIvPt) > Math.abs(pg.tPlus.decayRupees)
                                                                     ? <span className="text-warning"> — more than this whole projection.</span>
                                                                     : '.'}
                                                                 {' '}Overnight the index typically moves ±{fmt(pg.tPlus.sigmaOvernight)} pts, which this number ignores.
                                                             </div>
-                                                            <div className="text-fg-6">
+                                                            <div className="text-fg-5">
                                                                 Decay counted as {pg.tPlus.businessDaysEquivalent} trading-days-equivalent, not {pg.tPlus.calendarDaysAhead} calendar days
                                                                 (weekends decay slower than the clock). Gross, before charges. Only true at today&apos;s spot — the dotted purple line shows every other spot.
                                                                 {pg.tPlus.multiExpiry && <span className="text-warning"> ⚠ multi-expiry structure: legs decay at different rates.</span>}
@@ -2368,8 +2475,8 @@ export default function MultiLeg() {
                                                             <span className="flex items-center gap-2">
                                                                 <span className="text-violet-300">━ cumulative P&L</span>
                                                                 <span className="text-fg-5">{act.summary.trades} trades · {act.summary.winRate}% win</span>
-                                                                <span className={act.summary.realized >= 0 ? 'text-success' : 'text-danger'}>realized ₹{fmt(act.summary.realized)}</span>
-                                                                {act.summary.openMtm != null && <span className={act.summary.openMtm >= 0 ? 'text-success' : 'text-danger'}>+ open ₹{fmt(act.summary.openMtm)} → ₹{fmt(act.summary.withOpen)}</span>}
+                                                                <span className={pnlTone(act.summary.realized)}>realized ₹{fmt(act.summary.realized)}</span>
+                                                                {act.summary.openMtm != null && <span className={pnlTone(act.summary.openMtm)}>+ open ₹{fmt(act.summary.openMtm)} → ₹{fmt(act.summary.withOpen)}</span>}
                                                             </span>
                                                             <span className="text-fg-5">best ₹{fmt(act.summary.best)} · worst ₹{fmt(act.summary.worst)}</span>
                                                         </div>
@@ -2443,9 +2550,9 @@ export default function MultiLeg() {
                                                                             <td className="text-right">{l.qty}</td>
                                                                             <td className="text-right">{fmt(l.entryPrice, 2)}</td>
                                                                             <td className="text-right text-fg-5">{l.exitPrice ? fmt(l.exitPrice, 2) : '—'}</td>
-                                                                            <td className="text-fg-6 whitespace-nowrap" title={l.filledAt ? `${istDateTimeSec(l.filledAt)} IST` : ''}>{l.filledAt ? istSmartSec(l.filledAt, pos.entryAt) : '—'}</td>
+                                                                            <td className="text-fg-5 whitespace-nowrap" title={l.filledAt ? `${istDateTimeSec(l.filledAt)} IST` : ''}>{l.filledAt ? istSmartSec(l.filledAt, pos.entryAt) : '—'}</td>
                                                                             <td className="text-fg-5">{l.status}</td>
-                                                                            {d.trade_mode === 'LIVE' && <td className="text-fg-6 truncate max-w-[5.625rem]" title={l.orderId}>{l.orderId || '—'}</td>}
+                                                                            {d.trade_mode === 'LIVE' && <td className="text-fg-5 truncate max-w-[5.625rem]" title={l.orderId}>{l.orderId || '—'}</td>}
                                                                         </tr>
                                                                     ))}
                                                                     {pos.closedLegs?.map((l, i) => (
@@ -2454,9 +2561,9 @@ export default function MultiLeg() {
                                                                             <td>{l.strike}</td><td className="text-right">{l.qty}</td>
                                                                             <td className="text-right">{fmt(l.entryPrice, 2)}</td>
                                                                             <td className="text-right">{fmt(l.exitPrice, 2)}</td>
-                                                                            <td className="text-fg-6 whitespace-nowrap" title={l.filledAt ? `${istDateTimeSec(l.filledAt)} IST` : ''}>{l.filledAt ? istSmartSec(l.filledAt, pos.entryAt) : '—'}</td>
+                                                                            <td className="text-fg-5 whitespace-nowrap" title={l.filledAt ? `${istDateTimeSec(l.filledAt)} IST` : ''}>{l.filledAt ? istSmartSec(l.filledAt, pos.entryAt) : '—'}</td>
                                                                             <td className="text-fg-5">{l.closeReason || l.status}</td>
-                                                                            {d.trade_mode === 'LIVE' && <td className="text-fg-6">closed</td>}
+                                                                            {d.trade_mode === 'LIVE' && <td className="text-fg-5">closed</td>}
                                                                         </tr>
                                                                     ))}
                                                                 </tbody>
@@ -2484,7 +2591,7 @@ export default function MultiLeg() {
                                                                     {proj.overdue
                                                                         ? <span className="text-warning"> · already tripped — closes at the next tick</span>
                                                                         : <span className="text-fg-5"> · in {fmtDurTo(proj.fires)}</span>}
-                                                                    {proj.others.length > 0 && <span className="text-fg-6"> · then {proj.others[0].why}</span>}
+                                                                    {proj.others.length > 0 && <span className="text-fg-5"> · then {proj.others[0].why}</span>}
                                                                 </div>
                                                             ) : null}
                                                             {proj?.none && (
@@ -2502,11 +2609,11 @@ export default function MultiLeg() {
                                                             )}
                                                         </div>
                                                     )}
-                                                    {!open && <div className="font-mono text-fg-5">Flat. Last daily PnL ₹{fmt(d.daily?.pnlToday)} · lifetime {d.totals?.trades || 0} trades ₹{fmt(d.totals?.netPnl)}. Config → {exitBits.join(' · ') || 'defaults'}.</div>}
+                                                    {!open && <div className="font-mono text-fg-5">Flat. Last daily P&L ₹{fmt(d.daily?.pnlToday)} · lifetime {d.totals?.trades || 0} trades ₹{fmt(d.totals?.netPnl)}. Config → {exitBits.join(' · ') || 'defaults'}.</div>}
 
                                                     {/* ── BROKER RECONCILIATION (LIVE only) ───────────────────
                                                         Does our book match the broker's? Per-leg: our recorded fill
-                                                        vs trade-book VWAP vs net-position avg. Then PnL restated
+                                                        vs trade-book VWAP vs net-position avg. Then P&L restated
                                                         gross (what the broker's unrealised P&L shows) vs net after
                                                         charges (what the ledger shows). */}
                                                     {isLive && open && depRecon?.id === d._id && (() => {
@@ -2541,14 +2648,14 @@ export default function MultiLeg() {
                                                                 </div>
                                                                 <div className="font-mono text-fg-4">
                                                                     {R.netRupees == null ? (
-                                                                        <span className="text-warning">PnL restatement unavailable — no live marks for every leg (₹0 would read as “flat”, so nothing is shown).</span>
+                                                                        <span className="text-warning">P&L restatement unavailable — no live marks for every leg (₹0 would read as “flat”, so nothing is shown).</span>
                                                                     ) : (<>
-                                                                        PnL at our prices: gross <span className={R.grossRupees > 0 ? 'text-success' : R.grossRupees < 0 ? 'text-danger' : 'text-fg-3'}>₹{fmt(R.grossRupees)}</span>
+                                                                        P&L at our prices: gross <span className={R.grossRupees > 0 ? 'text-success' : R.grossRupees < 0 ? 'text-danger' : 'text-fg-3'}>₹{fmt(R.grossRupees)}</span>
                                                                         {' '}− charges ₹{fmt(R.chargesRupees)} = net <span className={R.netRupees > 0 ? 'text-success' : R.netRupees < 0 ? 'text-danger' : 'text-fg-3'}>₹{fmt(R.netRupees)}</span>
                                                                         {R.realizedLegRupees_informational ? <span className="text-fg-5" title="Realized P&L of legs already closed (e.g. a leg stop-loss). Shown for context — it is ALREADY inside the gross figure, not added to it.">{' '}(incl. ₹{fmt(R.realizedLegRupees_informational)} booked legs)</span> : null}
                                                                     </>)}
                                                                 </div>
-                                                                <div className="text-4xs text-fg-6">Broker unrealised P&L excludes charges → compare it to <span className="text-fg-4">gross</span>; compare your ledger to <span className="text-fg-4">net</span>.</div>
+                                                                <div className="text-4xs text-fg-5">Broker unrealised P&L excludes charges → compare it to <span className="text-fg-4">gross</span>; compare your ledger to <span className="text-fg-4">net</span>.</div>
                                                                 {(R.warnings || []).map((w, i) => <div key={i} className="text-4xs text-warning">⚠ {w}</div>)}
                                                             </div>
                                                         );
@@ -2593,12 +2700,12 @@ export default function MultiLeg() {
                             {mlDeps.events.length === 0 ? <div className="text-xs text-fg-5">No events yet.</div> : (
                                 <div className="flex-1 min-h-0 overflow-y-auto text-2xs space-y-1">
                                     {mlDeps.events.map((e, i) => (
-                                        <div key={i} className="flex gap-2 border-b border-line-0/60 pb-1">
-                                            <span className="text-fg-6 whitespace-nowrap" title={istDateTimeSec(e.at) + ' IST'}>
-                                                <span className="text-fg-6">{istDate(e.at)}</span> {istTimeSec(e.at)}
+                                        <div key={i} className="flex flex-wrap gap-x-2 border-b border-line-0/60 pb-1">
+                                            <span className="text-fg-5 whitespace-nowrap" title={istDateTimeSec(e.at) + ' IST'}>
+                                                <span className="text-fg-5">{istDate(e.at)}</span> {istTimeSec(e.at)}
                                             </span>
                                             <span className={`font-semibold whitespace-nowrap ${/FAIL|ERROR|SKIP/.test(e.type) ? 'text-danger' : /ENTRY|EXIT/.test(e.type) ? 'text-success' : 'text-sky-300'}`}>{e.type}</span>
-                                            <span className="text-fg-4">{e.name ? `[${e.name}] ` : ''}{e.message}</span>
+                                            <span className="text-fg-4 min-w-0 break-words">{e.name ? `[${e.name}] ` : ''}{e.message}</span>
                                         </div>
                                     ))}
                                 </div>
@@ -2618,7 +2725,7 @@ export default function MultiLeg() {
                                             /* A quarantined trade is shown, struck through, NOT hidden — it was
                                                booked on a price that never existed (an LTP carried over from
                                                another session on a contract with zero OI and zero volume), so
-                                               its PnL is excluded from every total. Hiding it would make the
+                                               its P&L is excluded from every total. Hiding it would make the
                                                correction invisible. */
                                             <tr key={i} className={`border-t border-line-0 ${t.quarantined ? 'opacity-45 line-through' : ''}`}
                                                 title={t.quarantined ? `EXCLUDED from all totals — ${t.quarantineReason || 'untrustworthy fill price'}` : undefined}>
@@ -2656,10 +2763,17 @@ export default function MultiLeg() {
                         </div>
                         <div>
                             <div className="text-3xs text-fg-5 mb-0.5">Deployment</div>
-                            <select value={resFilter.deploymentId} onChange={e => setResFilter(f => ({ ...f, deploymentId: e.target.value }))} className="bg-slate-800 border border-line rounded p-1 text-xs text-fg-2 max-w-[11.25rem]">
-                                <option value="all">All deployments</option>
-                                {[...new Map(resTrades.map(t => [String(t.deploymentId), t.name])).entries()].filter(([id]) => id && id !== 'undefined').map(([id, name]) => <option key={id} value={id}>{name || id.slice(-6)}</option>)}
-                            </select>
+                            <div className="flex items-center gap-1">
+                                <select value={resFilter.deploymentId} onChange={e => selectResDeployment(e.target.value)}
+                                    className={`bg-slate-800 border rounded p-1 text-xs text-fg-2 max-w-[11.25rem] ${resFilter.deploymentId !== 'all' ? 'border-primary' : 'border-line'}`}>
+                                    <option value="all">All deployments</option>
+                                    {resDeploymentOptions.map(o => <option key={o.id} value={o.id}>{o.name}{o.n ? '' : ' — no trades yet'}</option>)}
+                                </select>
+                                {resFilter.deploymentId !== 'all' && (
+                                    <button onClick={() => selectResDeployment('all')} title="Show every deployment again"
+                                        className="px-1.5 py-1 rounded border border-line bg-slate-800 text-3xs text-fg-4 hover:text-fg">✕ all</button>
+                                )}
+                            </div>
                         </div>
                         <div>
                             <div className="text-3xs text-fg-5 mb-0.5">Structure</div>
@@ -2682,7 +2796,14 @@ export default function MultiLeg() {
 
                     {resFiltered.length === 0 ? (
                         <div className="bg-surface rounded-xl border border-line p-8 text-center text-sm text-fg-5">
-                            {resLoading ? 'Loading…' : 'No completed structure round-trips yet for this filter. Deploy a strategy (PAPER first) — booked structures show here.'}
+                            {resLoading ? 'Loading…' : resDeploymentName ? (
+                                <>
+                                    No booked round-trips yet for <span className="text-fg-3">{resDeploymentName}</span>
+                                    {(resFilter.mode !== 'all' || resFilter.template !== 'all' || resFilter.symbol !== 'all') ? ' with the current Book / Structure / Symbol filters' : ''}
+                                    {' '}— its trades appear here after the first exit.{' '}
+                                    <button onClick={() => selectResDeployment('all')} className="underline text-fg-4 hover:text-fg">Show all deployments</button>
+                                </>
+                            ) : 'No completed structure round-trips yet for this filter. Deploy a strategy (PAPER first) — booked structures show here.'}
                         </div>
                     ) : (
                         <>
@@ -2697,19 +2818,48 @@ export default function MultiLeg() {
                                 templateFilter={resFilter.template}
                                 templates={templates} />
 
+                            {/* How each day went, minute by minute — built from the
+                                round-trips' own recorded paths, same filter as the table. */}
+                            <div className="bg-surface rounded-xl border border-line p-4">
+                                <DayEquityCurves days={resDayCurves.days} excluded={resDayCurves.excluded} markBasis="net-of-estimated-costs"
+                                    emptyText="No booked round-trip in this filter to draw." />
+                            </div>
+
                             {/* Trades table */}
                             <div className="bg-surface rounded-xl border border-line p-4 overflow-x-auto">
-                                <div className="text-sm font-semibold text-fg mb-2">Structure round-trips ({resFiltered.length})</div>
+                                <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+                                    <div className="text-sm font-semibold text-fg">Structure round-trips ({resFiltered.length})</div>
+                                    {(() => {
+                                        const allOpen = resFiltered.every(t => resTradeOpen.has(resTradeId(t)));
+                                        const anyOpen = resFiltered.some(t => resTradeOpen.has(resTradeId(t)));
+                                        const btn = 'px-2 py-0.5 rounded border border-line bg-slate-800 text-3xs text-fg-3 hover:text-fg disabled:opacity-40';
+                                        return (
+                                            <div className="flex items-center gap-1">
+                                                <button className={btn} disabled={allOpen} title="Open the legs, path chart and details of every round-trip below"
+                                                    onClick={() => setResTradeOpen(new Set(resFiltered.map(resTradeId)))}>Expand all</button>
+                                                <button className={btn} disabled={!anyOpen} onClick={() => setResTradeOpen(new Set())}>Collapse all</button>
+                                            </div>
+                                        );
+                                    })()}
+                                </div>
                                 <table className="w-full text-2xs text-fg-3">
                                     <thead><tr className="text-fg-5 text-left">
-                                        <th></th><th>Entry → Exit</th><th>Structure</th><th>Sym</th><th>Mode</th><th>Reason</th>
-                                        <th className="text-right">Credit/u</th><th className="text-right">IVP@in</th><th className="text-right">Gross ₹</th><th className="text-right">Chg</th><th className="text-right">Net ₹</th>
+                                        {/* Deployment is the SAME key the Deployment breakdown above
+                                            groups on — without it a row here could not be matched to
+                                            its line up there (Structure is only the template). */}
+                                        <th></th><th>Entry → Exit</th><th>Deployment</th><th>Structure</th><th>Sym</th><th>Mode</th><th>Reason</th>
+                                        <th className="text-right">Credit/u</th><th className="text-right">IVP@in</th>
+                                        <th className="text-right" title="₹ blocked when the structure was opened. ~ = estimated (heuristic), no ~ = the broker's SPAN figure">Margin ₹</th>
+                                        <th className="text-right">Gross ₹</th><th className="text-right">Chg</th><th className="text-right">Net ₹</th>
+                                        <th className="text-right" title="Net P&L ÷ margin at entry — the return on the capital this structure tied up">Net ÷ margin</th>
                                     </tr></thead>
                                     <tbody>
                                         {[...resFiltered].sort((a, b) => new Date(b.exitAt) - new Date(a.exitAt)).map((t, _i) => {
-                                            const tid = t._id || `${t.deploymentId}-${t.entryAt}`;
-                                            const openT = resTradeOpen === tid;
+                                            const tid = resTradeId(t);
+                                            const openT = resTradeOpen.has(tid);
                                             const allLegs = [...(t.legs || []), ...(t.closedLegs || [])];
+                                            const hasMargin = t.marginEst != null && Number(t.marginEst) > 0;
+                                            const rom = tradeRom(t);
                                             return (
                                             <React.Fragment key={tid}>
                                             {/* A quarantined round-trip is STRUCK THROUGH, not filtered
@@ -2718,24 +2868,38 @@ export default function MultiLeg() {
                                                 Every figure in the Analytics panel above already excludes it. */}
                                             <tr className={`border-t border-line-0 hover:bg-slate-800/40 cursor-pointer ${t.quarantined ? 'opacity-45 line-through' : ''}`}
                                                 title={t.quarantined ? `EXCLUDED from all totals — ${t.quarantineReason || 'untrustworthy fill price'}` : undefined}
-                                                onClick={() => setResTradeOpen(openT ? null : tid)}>
+                                                onClick={() => setResTradeOpen(s => { const n = new Set(s); if (n.has(tid)) n.delete(tid); else n.add(tid); return n; })}>
                                                 <td className="text-fg-5 w-4 no-underline">{openT ? '▲' : '▾'}</td>
                                                 <td className="whitespace-nowrap" title={`Entry ${istDateTimeSec(t.entryAt)} → Exit ${istDateTimeSec(t.exitAt)} IST`}>{istSpan(t.entryAt, t.exitAt)}<DayGap from={t.entryAt} to={t.exitAt} /></td>
+                                                <td className="truncate max-w-[12rem]" title={t.name || undefined}>{t.name || '—'}</td>
                                                 <td className="truncate max-w-[7.5rem]" title={t.template}>{templates.find(x => x.key === t.template)?.name || t.template}</td>
                                                 <td>{shortSym(t.symbol)}</td>
                                                 <td className={t.trade_mode === 'LIVE' ? 'text-danger' : 'text-sky-300'}>{t.trade_mode}</td>
                                                 <td className="text-fg-4">{t.exitReason}</td>
                                                 <td className="text-right">{t.origCredit != null ? `₹${fmt(t.origCredit, 1)}` : '—'}</td>
-                                                <td className="text-right text-fg-5">{t.ivpAtEntry != null ? fmt(t.ivpAtEntry, 0) : '—'}</td>
+                                                <td className="text-right text-fg-5"
+                                                    title={t.ivpAtEntry != null ? 'IV percentile at entry (0-100) — the realized-vol rank the IV gate uses'
+                                                        : 'Not recorded. Until 28-Sep the engine computed IV percentile only for deployments with an IV gate (min_ivp / max_ivp); every trade records it from then on.'}>
+                                                    {t.ivpAtEntry != null ? fmt(t.ivpAtEntry, 0) : '—'}
+                                                </td>
+                                                <td className="text-right text-fg-4"
+                                                    title={!hasMargin ? 'No margin was recorded for this trade'
+                                                        : t.marginBasis === 'span' ? "The broker's SPAN margin when the structure was opened"
+                                                            : "Estimated (heuristic) — the broker's SPAN figure was not available at entry"}>
+                                                    {hasMargin ? `${t.marginBasis === 'span' ? '' : '~'}₹${fmt(t.marginEst)}` : '—'}
+                                                </td>
                                                 <td className="text-right">₹{fmt(t.grossPnl)}</td>
                                                 <td className="text-right text-fg-5">₹{fmt(t.charges)}</td>
                                                 <td className={`text-right font-semibold ${t.quarantined ? 'text-fg-5' : t.netPnl > 0 ? 'text-success' : 'text-danger'}`}>
                                                     ₹{fmt(t.netPnl)}
                                                     {t.quarantined && <span className="ml-1 text-4xs text-warning no-underline" title="fake fill — not counted">⚠ void</span>}
                                                 </td>
+                                                <td className={`text-right ${t.quarantined || rom == null ? 'text-fg-5' : rom > 0 ? 'text-success' : rom < 0 ? 'text-danger' : 'text-fg-4'}`}>
+                                                    {rom == null ? '—' : `${fmt(rom, 2)}%`}
+                                                </td>
                                             </tr>
                                             {openT && (
-                                                <tr className="bg-slate-900/60"><td colSpan={11} className="p-2">
+                                                <tr className="bg-slate-900/60"><td colSpan={14} className="p-2">
                                                     <div className="text-3xs text-fg-4 mb-1">Held {t.holdDays != null ? `${t.holdDays}d` : fmtDur(t.entryAt)} · spot {fmt(t.entrySpot)} → {fmt(t.exitSpot)} · net credit at entry ₹{fmt(t.origCredit, 1)}/u{t.lots ? ` · ${t.lots} lot(s)` : ''}</div>
                                                     {/* What it DID while open — MAE/MFE and the gave-back number.
                                                         Renders its own explanation for pre-feature trades. */}
@@ -2787,7 +2951,7 @@ function Sparkline({ data, width = 68, height = 20 }) {
     // is no room for a label), which is exactly why it takes the CVD-safe
     // diverging pair rather than green/red.
     const ct = useChartTheme();
-    if (!data || data.length < 2) return <span className="text-fg-6 text-4xs">—</span>;
+    if (!data || data.length < 2) return <span className="text-fg-5 text-4xs">—</span>;
     const ys = data.map(d => d.pnl);
     const min = Math.min(...ys, 0), max = Math.max(...ys, 0), rng = (max - min) || 1;
     const step = width / (data.length - 1);
@@ -2973,7 +3137,7 @@ function DayGap({ from, to }) {
     return <span className="text-warning ml-1" title={`Held across ${n} calendar day${n > 1 ? 's' : ''} — exit is NOT the same day as entry`}>+{n}d</span>;
 }
 // Expiry-payoff curve of the CURRENTLY-OPEN legs (computed from actual fills,
-// so it's correct even for a partially-closed structure — closed-leg PnL folds
+// so it's correct even for a partially-closed structure — closed-leg P&L folds
 // in via realizedLegPnl). Returns { points:[{spot,pnl}], breakevens[], from, to }.
 function payoffCurve(pos, unitToRupee) {
     const legs = (pos?.legs || []).filter(l => l && l.strike && l.status !== 'CLOSED');
@@ -3162,7 +3326,7 @@ function Help({ k, className = '' }) {
                 onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); }}
                 aria-label={`What does "${h.label}" mean?`}
                 aria-expanded={open}
-                className="ml-1 w-3.5 h-3.5 rounded-full border border-line-2 text-fg-5 hover:text-sky-300 hover:border-sky-500 text-4xs leading-none align-middle">?</button>
+                className="hit-target ml-1 w-3.5 h-3.5 rounded-full border border-line-2 text-fg-5 hover:text-sky-300 hover:border-sky-500 text-4xs leading-none align-middle">?</button>
             {open && (
                 <>
                     <span className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setOpen(false); }} />
@@ -3247,9 +3411,9 @@ function BookCost({ symbol }) {
             </div>
             <div className={`text-3xs mt-1.5 ${bad ? 'text-danger' : 'text-fg-5'}`}>
                 {bad ? '⚠ ' : ''}{GRADE_NOTE[g]}
-                {d.live?.ageSec != null && <span className="text-fg-6"> · live quote {Math.round(d.live.ageSec / 60)}m old</span>}
+                {d.live?.ageSec != null && <span className="text-fg-5"> · live quote {Math.round(d.live.ageSec / 60)}m old</span>}
             </div>
-            {!d.measured && <div className="text-4xs text-fg-6 mt-1">No archived quotes for this symbol yet — backtests use the 0.50% fallback, which may be badly wrong in either direction.</div>}
+            {!d.measured && <div className="text-4xs text-fg-5 mt-1">No archived quotes for this symbol yet — backtests use the 0.50% fallback, which may be badly wrong in either direction.</div>}
         </div>
     );
 }
@@ -3295,7 +3459,7 @@ function MarketRead({ symbol, presets, onApplyPreset }) {
                             {preset && <button onClick={() => onApplyPreset(preset)} className="text-3xs px-2 py-0.5 rounded border border-primary/40 bg-primary/15 text-primary-ink hover:bg-primary/25">Load {preset.name}</button>}
                         </div>
                     )}
-                    <div className="text-4xs text-fg-6">A read, not a guarantee — momentum can flip and OI is a snapshot. Confirm with a backtest before deploying.</div>
+                    <div className="text-4xs text-fg-5">A read, not a guarantee — momentum can flip and OI is a snapshot. Confirm with a backtest before deploying.</div>
                 </div>
             )}
         </div>

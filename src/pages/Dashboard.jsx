@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import DeploymentsPanel from '../components/DeploymentsPanel';
+import DirectionConfidencePanel from '../components/risk/DirectionConfidencePanel';
 import CollapsibleCard from '../components/CollapsibleCard';
 import { StatRow, StatTile, PageHeader, Chip, ModeChip, Spinner } from '../components/viz/primitives';
 import { Play, Square, Activity, DollarSign, TrendingUp, AlertTriangle, Shield, ShoppingCart, List, Database, ChevronDown, ChevronRight, LayoutDashboard } from 'lucide-react';
@@ -11,6 +12,7 @@ import { API_ORIGIN, API_URL } from '../config/api.js';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { useConfirm } from '../components/confirmContext.js';
 import { toast } from '../components/toastStore.js';
+import { inr, premium, istDateTime, pnlTone } from '../components/viz/tokens.js';
 
 // API Base URL
 
@@ -238,7 +240,7 @@ export default function Dashboard() {
         }
     });
 
-    // ── position_tick: sub-second live PnL updates ──────────────────────────
+    // ── position_tick: sub-second live P&L updates ──────────────────────────
     // The backend's runBackgroundLoop runs every 2s, but option premium can move
     // ₹5–20 in a single second on liquid contracts. This listener consumes
     // tick-driven mini-updates emitted from the fyersData onTick callback —
@@ -479,7 +481,7 @@ export default function Dashboard() {
       // position the user clicked instead of the newest on that underlying.
       const key = pos.deploymentId || pos.symbol;
       const pnlStr = pos.pnl != null
-          ? ` (PnL ${pos.pnl >= 0 ? '+' : ''}₹${Math.round(pos.pnl).toLocaleString()})`
+          ? ` (P&L ${pos.pnl >= 0 ? '+' : ''}₹${Math.round(pos.pnl).toLocaleString()})`
           : '';
       if (!await confirm({ title: 'Close position', body: `Close ${pos.symbol}${pnlStr}?\n\nThis fires a market exit via the broker.`, danger: true, confirmLabel: 'Close position' })) return;
       setClosingSymbols(s => ({ ...s, [key]: true }));
@@ -510,7 +512,7 @@ export default function Dashboard() {
   const handleForceCloseOrphan = async (pos) => {
       if (!pos?.trade_id) { toast.error('No trade_id on this position — cannot force-close.'); return; }
       const pnlStr = pos.pnl != null
-          ? ` (PnL ${pos.pnl >= 0 ? '+' : ''}₹${Math.round(pos.pnl).toLocaleString()})`
+          ? ` (P&L ${pos.pnl >= 0 ? '+' : ''}₹${Math.round(pos.pnl).toLocaleString()})`
           : '';
       if (!await confirm(
           `Force-close orphan ${pos.symbol}${pnlStr}?\n\n` +
@@ -673,6 +675,9 @@ export default function Dashboard() {
               sessionHealth={sessionHealth}
               globalConfig={globalConfig}
           />
+
+          {/* Direction confidence (CE vs PE) — pure-maths side confidence + the gate's shadow scorecard. */}
+          <DirectionConfidencePanel />
       </div>
 
       {/* Live Market Data Section — collapsible */}
@@ -702,9 +707,16 @@ export default function Dashboard() {
                     <p className={`text-xl font-bold ${marketData?.trend === 'BULLISH' ? 'text-success' : 'text-danger'}`}>
                         {marketData?.trend || "NEUTRAL"}
                     </p>
-                    <span className={`text-xs ${marketData?.ema_short - marketData?.ema_long > 0 ? 'text-success' : 'text-danger'}`}>
-                        (₹{(marketData?.ema_short - marketData?.ema_long)?.toFixed(2) || "0.00"})
-                    </span>
+                    {(() => {
+                        const spread = Number.isFinite(marketData?.ema_short) && Number.isFinite(marketData?.ema_long)
+                            ? marketData.ema_short - marketData.ema_long
+                            : null;
+                        return (
+                            <span className={`text-xs ${spread == null ? 'text-fg-5' : spread > 0 ? 'text-success' : 'text-danger'}`}>
+                                {spread == null ? '—' : `(₹${spread.toFixed(2)})`}
+                            </span>
+                        );
+                    })()}
                 </div>
             </div>
             <div className="p-4 bg-slate-800 rounded-lg">
@@ -731,7 +743,7 @@ export default function Dashboard() {
       {/* ── Compact Stats Strip ─────────────────────────────────────────
           Replaces the three separate StatCards. One row, dense, scannable.
           Each cell is colour-coded so you can read state in a fraction of a
-          second during market hours. Combined PnL (realized + unrealized)
+          second during market hours. Combined P&L (realized + unrealized)
           dominates because that's the number you actually trade against. */}
       <div className="bg-surface rounded-xl border border-line p-3 flex flex-wrap items-stretch divide-x divide-line">
           {(() => {
@@ -749,14 +761,14 @@ export default function Dashboard() {
                   <>
                       <div className="flex-1 min-w-40 px-4 py-2 flex flex-col justify-center">
                           <div className="text-3xs uppercase tracking-wider text-fg-5 font-bold flex items-center gap-1.5">
-                              <DollarSign className="w-3 h-3" /> Combined PnL
+                              <DollarSign className="w-3 h-3" /> Combined P&L
                           </div>
                           <div className={`text-2xl font-bold font-mono ${colorFor(combined)}`}>
                               {fmt(combined)}
                           </div>
                           <div className="text-3xs text-fg-5 mt-0.5">
                               <span className={colorFor(realized)}>Realized {fmt(realized)}</span>
-                              <span className="mx-1.5 text-fg-6">·</span>
+                              <span className="mx-1.5 text-fg-5">·</span>
                               <span className={colorFor(unrealized)}>Open {fmt(unrealized)}</span>
                           </div>
                       </div>
@@ -818,7 +830,7 @@ export default function Dashboard() {
           <div className="bg-surface rounded-xl border border-line p-4">
               <div className="flex items-center justify-between mb-2">
                   <h3 className="text-sm font-bold flex items-center gap-2 text-fg-2">
-                      <Activity className="w-4 h-4 text-primary" /> Signal Status Timeline
+                      <Activity className="w-4 h-4 text-primary-ink" /> Signal Status Timeline
                   </h3>
                   <span className="text-3xs text-fg-5">
                       newest →  · last {Math.max(...Object.values(signalStatus).map(s => s?.history?.length || 0), 0)} checks per symbol
@@ -882,14 +894,14 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 gap-8">
         <div className="bg-surface rounded-xl border border-line p-6">
           <div className="flex justify-between items-center mb-4">
-              <h3 className="text-xl font-bold flex items-center gap-2">
-                  <ShoppingCart className="w-5 h-5 text-primary" /> Live Positions
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                  <ShoppingCart className="w-5 h-5 text-primary-ink" /> Live Positions
                   {positions.length > 0 && (
                       <span className="text-xs font-normal text-fg-5">
                           {positions.length} open
                       </span>
                   )}
-              </h3>
+              </h2>
               {positions.length > 0 && (() => {
                   const totalPnl = positions.reduce((s, p) => s + (p.pnl || 0), 0);
                   return (
@@ -912,6 +924,16 @@ export default function Dashboard() {
                       // BROKER-side levels (option premium prices, actually sitting at broker)
                       const brokerSl = pos.broker_sl_price || pos.sl_price || 0;
                       const brokerTp = pos.broker_tp_price || pos.tp_price || 0;
+                      // `|| 0` turns a MISSING level into a level AT ZERO, and every number
+                      // downstream then describes a stop that does not exist: totalRange
+                      // collapses to |0-0| || 1 = 1, so progressPct pins to 100 and the bar
+                      // renders a solid full-width emerald "fully protected" for a position
+                      // with NO broker SL and NO TP. Observed live on three open positions
+                      // reading `SL ₹0.00 / TP ₹0.00` and "100.0% / 100.0% from LTP".
+                      // Absence has to be its own state, not the number zero.
+                      const hasSl = brokerSl > 0;
+                      const hasTp = brokerTp > 0;
+                      const unprotected = !hasSl && !hasTp;
 
                       // SPOT-side levels (index prices, monitored by engine when ai_use_spot_exits is on)
                       const spotSl   = pos.spot_sl_level || pos.aiSpotSl || pos.aiSuggestedSl || null;
@@ -966,7 +988,7 @@ export default function Dashboard() {
                               // Key MUST be unique per contract. trade_id alone collided when a
                               // backend bug briefly linked two positions to one trade doc — dup
                               // React keys made both cards swap live fields on every poll (the
-                              // "flickering PnL"). symbol+deployment is unique even then.
+                              // "flickering P&L"). symbol+deployment is unique even then.
                               key={`${pos.deploymentId || pos.trade_id || i}|${pos.symbol}`}
                               className={`rounded-lg border p-3 transition-colors ${
                                   isOrphan
@@ -990,7 +1012,7 @@ export default function Dashboard() {
                                       </div>
                                   </div>
                               )}
-                              {/* ── Row 1: badges + symbol + live PnL ── */}
+                              {/* ── Row 1: badges + symbol + live P&L ── */}
                               <div className="flex items-center justify-between gap-2 mb-2">
                                   <div className="flex items-center gap-2 min-w-0 flex-wrap">
                                       <span className={`px-1.5 py-0.5 rounded text-3xs font-bold ${isLong ? 'bg-emerald-800/40 text-success' : 'bg-rose-800/40 text-danger'}`}>
@@ -1044,7 +1066,7 @@ export default function Dashboard() {
                                   <div>
                                       <div className="text-fg-5 text-4xs uppercase tracking-wider">Entry Spot</div>
                                       <div className="font-mono text-fg-3 font-bold">
-                                          {entrySpot != null ? entrySpot.toFixed(2) : <span className="text-fg-6">—</span>}
+                                          {entrySpot != null ? entrySpot.toFixed(2) : <span className="text-fg-5">—</span>}
                                       </div>
                                   </div>
                                   <div>
@@ -1059,7 +1081,7 @@ export default function Dashboard() {
                                                       </span>
                                                   )}
                                               </>
-                                          ) : <span className="text-fg-6">—</span>}
+                                          ) : <span className="text-fg-5">—</span>}
                                       </div>
                                   </div>
                               </div>
@@ -1077,18 +1099,27 @@ export default function Dashboard() {
                                           >
                                               ⚠ TP unreachable — no take-profit on this position
                                           </span>
+                                      ) : unprotected ? (
+                                          <span
+                                              className="text-4xs px-1.5 py-0.5 rounded bg-rose-900/50 text-danger ring-1 ring-rose-500/50 font-semibold"
+                                              title="No broker stop-loss and no take-profit are set on this position — nothing at the broker will close it."
+                                          >
+                                              ⚠ unprotected — no broker SL or TP
+                                          </span>
                                       ) : (
-                                          <span className="text-4xs text-fg-6">{slDistPct.toFixed(1)}% / {tpDistPct.toFixed(1)}% from LTP</span>
+                                          <span className="text-4xs text-fg-5">
+                                              {hasSl ? `${slDistPct.toFixed(1)}%` : 'no SL'} / {hasTp ? `${tpDistPct.toFixed(1)}%` : 'no TP'} from LTP
+                                          </span>
                                       )}
                                   </div>
                                   <div className="flex justify-between text-3xs font-mono mb-1">
-                                      <span className="text-danger">SL ₹{brokerSl.toFixed(2)}</span>
-                                      <span className={tpUnreachable ? 'text-danger line-through' : 'text-success'}>TP ₹{brokerTp.toFixed(2)}</span>
+                                      <span className={hasSl ? 'text-danger' : 'text-fg-5'}>SL {hasSl ? `₹${brokerSl.toFixed(2)}` : '—'}</span>
+                                      <span className={!hasTp ? 'text-fg-5' : tpUnreachable ? 'text-danger line-through' : 'text-success'}>TP {hasTp ? `₹${brokerTp.toFixed(2)}` : '—'}</span>
                                   </div>
                                   <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden relative">
                                       <div
-                                          className={`h-full ${progressPct > 50 ? 'bg-emerald-500' : 'bg-rose-500'}`}
-                                          style={{ width: `${progressPct}%` }}
+                                          className={`h-full ${unprotected ? 'bg-transparent' : progressPct > 50 ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                                          style={{ width: unprotected ? '0%' : `${progressPct}%` }}
                                       />
                                       {/* Entry tick. Ink, not a surface: it has to stay readable on top of
                                           BOTH the track and the emerald/rose fill, so it belongs on the fg
@@ -1140,7 +1171,7 @@ export default function Dashboard() {
                                       <span className="text-fg-5">⏱</span>
                                       <span className="font-mono">{heldStr}</span>
                                       {entryTimeStr && (
-                                          <span className="text-fg-6">since {entryTimeStr}</span>
+                                          <span className="text-fg-5">since {entryTimeStr}</span>
                                       )}
                                   </div>
                                   {pos.aiDecision && (
@@ -1186,7 +1217,7 @@ export default function Dashboard() {
                                           )}
                                           {bookedLots > 0 && (
                                               <span
-                                                  className={`font-mono ${bookedNet >= 0 ? 'text-success' : 'text-danger'}`}
+                                                  className={`font-mono ${pnlTone(bookedNet)}`}
                                                   title={partials.map(x => `${x.lots} lot(s) @ ₹${x.exitPrice} → net ₹${Math.round(x.net_pnl || 0)}`).join('\n')}
                                               >
                                                   ✂️ {bookedLots} lot{bookedLots === 1 ? '' : 's'} booked (₹{Math.round(bookedNet)})
@@ -1249,9 +1280,9 @@ export default function Dashboard() {
                                               <span className="flex items-center gap-2">
                                                   <span>{expanded ? '▼' : '▶'}</span>
                                                   <span className="font-semibold">🔄 AI In-flight Reviews</span>
-                                                  <span className="text-fg-6">·</span>
+                                                  <span className="text-fg-5">·</span>
                                                   <span className="font-mono text-fg-5">{reviews.length}</span>
-                                                  <span className="text-fg-6 text-3xs">(every {intervalMin}m)</span>
+                                                  <span className="text-fg-5 text-3xs">(every {intervalMin}m)</span>
                                               </span>
                                               {lastReview && (
                                                   <span className={`text-3xs px-1.5 py-0.5 rounded ${ACTION_STYLE[lastReview.action]?.cls || 'bg-slate-700/60 text-fg-3'}`}>
@@ -1323,7 +1354,7 @@ export default function Dashboard() {
                                                                   {heldMin != null && <span>held {heldMin}m</span>}
                                                                   {pnlVal != null && (
                                                                       <span className={pnlVal > 0 ? 'text-success' : pnlVal < 0 ? 'text-danger' : 'text-fg-5'}>
-                                                                          PnL ₹{Math.round(pnlVal)}
+                                                                          P&L ₹{Math.round(pnlVal)}
                                                                       </span>
                                                                   )}
                                                                   {r.current_spot != null && (
@@ -1345,7 +1376,7 @@ export default function Dashboard() {
                                                                       <span className="text-fuchsia-300">close {r.close_lots} lot(s)</span>
                                                                   )}
                                                                   {r.model && (
-                                                                      <span className="text-fg-6 truncate" title={r.model}>
+                                                                      <span className="text-fg-5 truncate" title={r.model}>
                                                                           {String(r.model).replace(/^claude-web\/|^gemini-web\//, '')}
                                                                       </span>
                                                                   )}
@@ -1425,7 +1456,7 @@ export default function Dashboard() {
               <div className="flex flex-col items-center justify-center h-32 text-fg-5 bg-slate-900/40 rounded-lg border border-dashed border-line">
                   <ShoppingCart className="w-6 h-6 mb-1 opacity-50" />
                   <div className="text-sm">No open positions</div>
-                  <div className="text-3xs text-fg-6 mt-1">Waiting for the next signal…</div>
+                  <div className="text-3xs text-fg-5 mt-1">Waiting for the next signal…</div>
               </div>
           )}
         </div>
@@ -1435,9 +1466,9 @@ export default function Dashboard() {
       {/* Option Chain */}
       <div className="bg-surface rounded-xl border border-line p-6 transition-all duration-300">
           <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-bold flex items-center gap-2 text-fg">
-                <List className="w-5 h-5 text-primary" /> Real Option Chain <span className="text-fg-5 text-sm font-normal">(BANKNIFTY)</span>
-              </h3>
+              <h2 className="text-xl font-bold flex items-center gap-2 text-fg">
+                <List className="w-5 h-5 text-primary-ink" /> Real Option Chain <span className="text-fg-5 text-sm font-normal">(BANKNIFTY)</span>
+              </h2>
               <button
                   onClick={toggleOptionChain}
                   className={`px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider transition-all flex items-center gap-2 shadow-lg ${
@@ -1485,7 +1516,7 @@ export default function Dashboard() {
                                     return (
                                         <tr key={strike} className={`border-b border-line-0 hover:bg-slate-700/30 transition-colors ${isAtm ? 'bg-blue-500/5' : ''}`}>
                                             {/* CE Data */}
-                                            <td className={`p-2 font-mono font-medium ${ce ? 'text-success' : 'text-fg-6'}`}>
+                                            <td className={`p-2 font-mono font-medium ${ce ? 'text-success' : 'text-fg-5'}`}>
                                                 {ce ? `₹${ce.ltp.toFixed(2)}` : '-'}
                                             </td>
                                             <td className="p-2 text-3xs text-fg-5 truncate max-w-[6.25rem]" title={ce?.tradingsymbol}>
@@ -1501,7 +1532,7 @@ export default function Dashboard() {
                                             <td className="p-2 text-3xs text-fg-5 truncate max-w-[6.25rem]" title={pe?.tradingsymbol}>
                                                 {pe?.tradingsymbol || '-'}
                                             </td>
-                                            <td className={`p-2 font-mono font-medium ${pe ? 'text-danger' : 'text-fg-6'}`}>
+                                            <td className={`p-2 font-mono font-medium ${pe ? 'text-danger' : 'text-fg-5'}`}>
                                                 {pe ? `₹${pe.ltp.toFixed(2)}` : '-'}
                                             </td>
                                         </tr>
@@ -1533,10 +1564,10 @@ export default function Dashboard() {
                   onClick={toggleTrades}
                   aria-expanded={tradesExpanded}
                   title={tradesExpanded ? 'Collapse trade history' : 'Expand trade history'}
-                  className="text-xl font-bold flex items-center gap-2 text-left hover:text-primary transition-colors"
+                  className="text-xl font-bold flex items-center gap-2 text-left hover:text-primary-ink transition-colors"
               >
                 {tradesExpanded ? <ChevronDown className="w-4 h-4 text-fg-4" /> : <ChevronRight className="w-4 h-4 text-fg-4" />}
-                <Database className="w-5 h-5 text-primary" /> Trade History
+                <Database className="w-5 h-5 text-primary-ink" /> Trade History
                 {tradesTotal > 0 && <span className="text-xs font-normal text-fg-5">({tradesTotal})</span>}
               </button>
               {tradesExpanded && (
@@ -1572,9 +1603,9 @@ export default function Dashboard() {
           </div>
           {tradesExpanded && (<>
           {mongoTrades.length > 0 ? (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
                 <table className="w-full text-left border-collapse text-sm">
-                    <thead>
+                    <thead className="sticky top-0 z-10 bg-surface">
                         <tr className="text-fg-4 border-b border-line">
                             <th className="p-3">Trade ID</th>
                             <th className="p-3">Entry Time</th>
@@ -1601,15 +1632,15 @@ export default function Dashboard() {
                                 {/* Entry Time (Fallback to timestamp for old logs if action is BUY/ENTRY) */}
                                 <td className="p-3 text-fg-3">
                                     {trade.entryTime
-                                        ? new Date(trade.entryTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
-                                        : (trade.action === 'ENTRY' || trade.action === 'BUY' ? new Date(trade.timestamp).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : '-')}
+                                        ? istDateTime(trade.entryTime)
+                                        : (trade.action === 'ENTRY' || trade.action === 'BUY' ? istDateTime(trade.timestamp) : '-')}
                                 </td>
                                 
                                 {/* Exit Time (Fallback to timestamp for old logs if action is EXIT/SELL) */}
                                 <td className="p-3 text-fg-4">
                                     {trade.exitTime 
-                                        ? new Date(trade.exitTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) 
-                                        : (trade.action === 'EXIT' || trade.action === 'SELL' ? new Date(trade.timestamp).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : '-')}
+                                        ? istDateTime(trade.exitTime) 
+                                        : (trade.action === 'EXIT' || trade.action === 'SELL' ? istDateTime(trade.timestamp) : '-')}
                                 </td>
                                 
                                 <td className="p-3">
@@ -1624,7 +1655,7 @@ export default function Dashboard() {
                                 
                                 <td className="p-3 font-medium text-fg">{trade.tradingsymbol || trade.symbol}</td>
                                 <td className="p-3 text-fg-3 text-xs truncate max-w-[8.75rem]" title={trade.strategyName || trade.strategy || ''}>
-                                    {trade.strategyName || trade.strategy || <span className="text-fg-6">—</span>}
+                                    {trade.strategyName || trade.strategy || <span className="text-fg-5">—</span>}
                                 </td>
                                 <td className={`p-3 font-bold ${trade.action === 'BUY' || trade.action === 'ENTRY' ? 'text-success' : 'text-danger'}`}>{trade.action}</td>
                                 <td className="p-3 text-fg-3">{trade.quantity}</td>
@@ -1633,15 +1664,18 @@ export default function Dashboard() {
                                 <td className="p-3 text-fg-3">
                                     {trade.status ? (
                                         <div className="flex flex-col gap-0.5">
-                                            <span className="text-xs text-fg-4">En: ₹{trade.entryPrice || trade.price}</span>
-                                            {trade.exitPrice && <span>Ex: <span className="text-fg">₹{trade.exitPrice}</span></span>}
+                                            <span className="text-xs text-fg-4">En: {premium(trade.entryPrice ?? trade.price)}</span>
+                                            {trade.exitPrice && <span>Ex: <span className="text-fg">{premium(trade.exitPrice)}</span></span>}
                                         </div>
                                     ) : (
-                                        <span>₹{trade.price}</span>
+                                        <span>{premium(trade.price)}</span>
                                     )}
                                 </td>
-                                
-                                <td className={`p-3 font-bold ${trade.pnl >= 0 ? 'text-success' : 'text-danger'}`}>₹{trade.pnl}</td>
+
+                                {/* inr(), not `₹{trade.pnl}`. Raw interpolation put JS float noise
+                                    on screen in the P&L column — "₹2826.0000000000014",
+                                    "₹-2753.9999999999986" — across every visible row. */}
+                                <td className={`p-3 font-bold ${pnlTone(trade.pnl)}`}>{inr(trade.pnl)}</td>
                                 <td className="p-3 text-fg-4 text-xs">{trade.reason}</td>
                             </tr>
                         ))}
@@ -1660,7 +1694,7 @@ export default function Dashboard() {
                   <button 
                       disabled={tradesPage === 1}
                       onClick={() => setTradesPage(p => Math.max(1, p - 1))}
-                      className={`px-3 py-1 rounded text-sm font-medium ${tradesPage === 1 ? 'bg-slate-800 text-fg-6 cursor-not-allowed' : 'bg-slate-700 hover:bg-slate-600 text-fg'}`}
+                      className={`px-3 py-1 rounded text-sm font-medium ${tradesPage === 1 ? 'bg-slate-800 text-fg-5 cursor-not-allowed' : 'bg-slate-700 hover:bg-slate-600 text-fg'}`}
                   >
                       Previous
                   </button>
@@ -1670,7 +1704,7 @@ export default function Dashboard() {
                   <button
                       disabled={tradesPage >= Math.ceil(tradesTotal / tradesLimit)}
                       onClick={() => setTradesPage(p => p + 1)}
-                      className={`px-3 py-1 rounded text-sm font-medium ${tradesPage >= Math.ceil(tradesTotal / tradesLimit) ? 'bg-slate-800 text-fg-6 cursor-not-allowed' : 'bg-slate-700 hover:bg-slate-600 text-fg'}`}
+                      className={`px-3 py-1 rounded text-sm font-medium ${tradesPage >= Math.ceil(tradesTotal / tradesLimit) ? 'bg-slate-800 text-fg-5 cursor-not-allowed' : 'bg-slate-700 hover:bg-slate-600 text-fg'}`}
                   >
                       Next
                   </button>
@@ -1685,13 +1719,13 @@ export default function Dashboard() {
       <div className="bg-surface rounded-xl border border-line p-6">
           <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
               <div className="flex items-center gap-3">
-                  <h3 className="text-xl font-bold flex items-center gap-2">
-                      <Activity className="w-5 h-5 text-primary" /> Live Activity Feed
+                  <h2 className="text-xl font-bold flex items-center gap-2">
+                      <Activity className="w-5 h-5 text-primary-ink" /> Live Activity Feed
                       {activityLoading && <span className="text-3xs text-fg-5 font-normal">refreshing…</span>}
-                  </h3>
+                  </h2>
                   <button
                       onClick={() => setActivityExpanded(v => !v)}
-                      className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-fg-2"
+                      className="text-xs px-2 py-1 rounded border border-transparent bg-slate-700 hover:bg-slate-600 text-fg-2"
                       title={activityExpanded ? 'Pause polling (collapse)' : 'Resume polling'}
                   >
                       {activityExpanded ? 'Collapse' : 'Expand'}
@@ -1735,7 +1769,7 @@ export default function Dashboard() {
                       <select
                           value={activityFilters.limit}
                           onChange={e => setActivityFilters(f => ({ ...f, limit: parseInt(e.target.value, 10) }))}
-                          className="bg-slate-800 border border-line rounded px-2 py-1 text-fg-2"
+                          className="bg-slate-800 border border-line rounded px-2 py-1 leading-4 text-fg-2"
                       >
                           <option value={50}>50</option>
                           <option value={100}>100</option>
@@ -1798,7 +1832,7 @@ export default function Dashboard() {
                                   <th className="p-2 text-left">Symbol</th>
                                   <th className="p-2 text-left">Strategy</th>
                                   <th className="p-2 text-left">Side</th>
-                                  <th className="p-2 text-right">PnL / Conf</th>
+                                  <th className="p-2 text-right">P&L / Conf</th>
                                   <th className="p-2 text-left">Detail</th>
                                   <th className="p-2 text-right w-16"></th>
                               </tr>
@@ -1910,11 +1944,11 @@ export default function Dashboard() {
                                                           type="button"
                                                           onClick={() => setActivityFilters(f => ({ ...f, tradeId: String(ev.trade_id) }))}
                                                           title="Filter feed by this trade ID"
-                                                          className="text-fg-5 hover:text-teal-300 text-2xs leading-none"
+                                                          className="hit-target text-fg-5 hover:text-teal-300 text-2xs leading-none"
                                                       >🔎</button>
                                                   </span>
                                               ) : (
-                                                  <span className="text-fg-6">—</span>
+                                                  <span className="text-fg-5">—</span>
                                               )}
                                           </td>
                                           <td className="p-2 text-xs truncate max-w-[11.25rem]" title={ev.symbol || ''}>{ev.symbol || '—'}</td>

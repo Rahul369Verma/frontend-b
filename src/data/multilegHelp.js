@@ -195,7 +195,7 @@ export const HELP = {
         gotcha: "Amber can mean 'we could not verify' rather than 'the numbers are wrong' — check the warnings printed below the table.",
     },
     "recon-pnl": {
-        label: "PnL at our prices: gross − charges = net",
+        label: "P&L at our prices: gross − charges = net",
         short: "An independent, freshly-marked restatement of what this position is worth right now.",
         detail: "Recomputed on demand from the current quotes rather than the engine's last loop, including any legs already closed. Because it is fresher than the engine's stored mark, the card uses it to replace the headline MTM tile when available — that is why the tile can say 'live' instead of showing an age.",
         gotcha: "It prices at OUR recorded entry prices, so if the Source column says unverified, this restatement inherits the same error.",
@@ -309,7 +309,7 @@ export const HELP = {
         gotcha: "These two can diverge sharply: '4d held (2 sess)' is a position that has barely traded but is nearly aged out.",
     },
     "combined-pnl": {
-        label: "Combined PnL (all books)",
+        label: "Combined P&L (all books)",
         short: "Everything booked today plus everything currently open, real and simulated together.",
         detail: "Adds today's realised P&L from the LIVE book and the PAPER book, then adds the current unrealised profit of every open structure. The sub-line splits it into 'Realized' and 'Open'. It is the fastest read on whether the day is going well overall.",
         gotcha: "It mixes real money with simulation, and the 'Open' half is GROSS (before charges) while the 'Realized' half is net — so the headline is slightly optimistic.",
@@ -455,13 +455,13 @@ export const HELP = {
     "charges-paid": {
         label: "Charges paid",
         short: "Total rupees lost to brokerage, taxes and fees across the filtered trades.",
-        detail: "Sum of the per-trade charge figure booked at close. Compare it to Net PnL: on multi-leg index structures it is common for charges to be a large fraction of, or larger than, the gross edge, because every leg pays its own round trip.",
+        detail: "Sum of the per-trade charge figure booked at close. Compare it to Net P&L: on multi-leg index structures it is common for charges to be a large fraction of, or larger than, the gross edge, because every leg pays its own round trip.",
         gotcha: "Halving the number of legs roughly halves this — it is the strongest argument against four-leg structures on small credits.",
     },
     "gross-pre-cost": {
         label: "Gross (pre-cost)",
         short: "What the trades made before any fees — the difference between this and Net is your cost of doing business.",
-        detail: "Sum of each closed trade's gross P&L. Placed next to Net PnL and Charges paid on purpose: Gross minus Charges equals Net, and seeing all three tells you whether a strategy has a real edge or just an edge-sized cost problem.",
+        detail: "Sum of each closed trade's gross P&L. Placed next to Net P&L and Charges paid on purpose: Gross minus Charges equals Net, and seeing all three tells you whether a strategy has a real edge or just an edge-sized cost problem.",
         gotcha: "A positive Gross with a negative Net is not a rounding issue — it means the strategy works but not enough to pay for itself.",
     },
     "avg-hold": {

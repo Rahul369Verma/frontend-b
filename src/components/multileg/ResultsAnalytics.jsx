@@ -34,6 +34,7 @@ import { useChartTheme } from '../../theme/chartTheme.js';
 import { API_URL } from '../../config/api.js';
 import { num, fmt, rup, shortDate } from './builderFormat';
 import { Tile } from './builderUi';
+import { rupeeTick } from '../viz/tokens';
 
 const DAY_OPTS = [
     { v: 30, label: '30d' },
@@ -47,7 +48,16 @@ const COLS = [
     { k: 'winRate', label: 'Win%', align: 'right' },
     { k: 'net', label: 'Net ₹', align: 'right' },
     { k: 'perTrade', label: 'Per trade ₹', align: 'right' },
+    { k: 'avgMargin', label: 'Avg margin ₹', align: 'right' },
+    { k: 'romPct', label: 'Per trade ÷ margin', align: 'right' },
 ];
+
+const tone = (v) => (num(v) > 0 ? 'text-success' : num(v) < 0 ? 'text-danger' : 'text-fg-4');
+// Margin can be missing on older trades. A row that is only partly covered
+// says so, instead of passing for a figure over all of its trades.
+const marginCoverage = (r) => (num(r.marginN) != null && num(r.marginN) < num(r.trades)
+    ? `margin recorded on ${r.marginN} of ${r.trades} trades — Net ÷ margin covers those only`
+    : 'Avg margin = ₹ blocked per structure at entry. Per trade ÷ margin = Per trade ₹ ÷ Avg margin ₹ (Σ net ÷ Σ margin): the average return each structure made on the capital it tied up.');
 
 function Th({ col, sort, onSort }) {
     const on = sort.k === col.k;
@@ -137,7 +147,11 @@ export default function ResultsAnalytics({
         const dir = sort.dir === 'desc' ? -1 : 1;
         return list.sort((a, b) => {
             if (sort.k === 'key') return dir * String(a.key ?? '').localeCompare(String(b.key ?? ''));
-            return dir * ((num(a?.[sort.k]) ?? 0) - (num(b?.[sort.k]) ?? 0));
+            // a row with NO value (no margin recorded) sorts last either way —
+            // ranking it as 0 would slot it among the break-even rows
+            const av = num(a?.[sort.k]), bv = num(b?.[sort.k]);
+            if (av == null || bv == null) return (av == null) - (bv == null);
+            return dir * (av - bv);
         });
     }, [active, sort]);
 
@@ -151,7 +165,6 @@ export default function ResultsAnalytics({
         : { k, dir: k === 'key' ? 'asc' : 'desc' }));
 
     const chartTip = ct.tooltipStyle({ fontSize: ct.type['3xs'] });
-    const rupTick = (v) => (Math.abs(v) >= 1000 ? `₹${Math.round(v / 1000)}k` : `₹${Math.round(v)}`);
 
     return (
         <div className="bg-surface rounded-xl border border-line p-4 space-y-4">
@@ -201,6 +214,11 @@ export default function ResultsAnalytics({
                                 good={num(summary.profitFactor) >= 1.3} bad={num(summary.profitFactor) != null && num(summary.profitFactor) < 1}
                                 title={summary.profitFactor == null ? 'Undefined — there are no losing trades in this window.' : 'Gross wins ÷ gross losses.'} />
                             <Tile label="Max drawdown" value={rup(summary.maxDrawdown)} bad={num(summary.maxDrawdown) < 0} />
+                            <Tile label="Per trade ÷ margin" value={num(summary.romPct) == null ? '—' : `${fmt(summary.romPct, 2)}%`}
+                                good={num(summary.romPct) > 0} bad={num(summary.romPct) < 0}
+                                title="Per-trade net ÷ per-trade margin (Σ net ÷ Σ margin, over the trades that recorded one) — the average return a structure made on the capital it tied up. Margins are the engine's estimate unless the broker's SPAN was available." />
+                            <Tile label="Avg margin" value={num(summary.avgMargin) == null ? '—' : rup(summary.avgMargin)}
+                                title={num(summary.marginN) ? `₹ blocked per structure at entry, averaged over ${summary.marginN} of ${summary.trades} trades — ${num(summary.marginSpanN) || 0} from the broker's SPAN, the rest estimated.` : 'No margin was recorded on these trades.'} />
                             {/* Gross sits NEXT to charges deliberately. On this book the
                                 gross is Rs9,552 and the charges Rs16,483 — costs are 1.7x the
                                 trading profit, which is invisible if you only ever see net. */}
@@ -239,7 +257,7 @@ export default function ResultsAnalytics({
                                 <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                     <XAxis dataKey="label" tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} minTickGap={26} />
-                                    <YAxis width={54} tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} tickFormatter={rupTick} />
+                                    <YAxis width={54} tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} tickFormatter={rupeeTick} />
                                     {/* Returning null from a recharts formatter DROPS that item, which
                                         is how the empty half of the up/down pair stays out of the
                                         tooltip instead of printing "down —". */}
@@ -259,13 +277,13 @@ export default function ResultsAnalytics({
                         {/* 3 ── Equity + drawdown, one x-axis */}
                         <div>
                             <div className="text-2xs font-semibold text-fg-3 mb-1">
-                                Equity curve <span className="text-fg-6 font-normal">— cumulative net, with the drawdown from peak shaded beneath</span>
+                                Equity curve <span className="text-fg-5 font-normal">— cumulative net, with the drawdown from peak shaded beneath</span>
                             </div>
                             <ZoomableChart data={dailyRows} height={230}>
                                 <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                     <XAxis dataKey="label" tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} minTickGap={26} />
-                                    <YAxis width={54} tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} tickFormatter={rupTick} />
+                                    <YAxis width={54} tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} tickFormatter={rupeeTick} />
                                     <Tooltip contentStyle={chartTip} formatter={(v, n) => (num(v) == null ? null : [rup(v), n])}
                                         labelFormatter={(l, p) => p?.[0]?.payload?.date || String(l)} />
                                     <Legend wrapperStyle={{ fontSize: ct.type['5xs'] }} />
@@ -317,6 +335,11 @@ export default function ResultsAnalytics({
                                                         <td className="text-right text-fg-4">{num(r.winRate) == null ? '—' : `${fmt(r.winRate)}%`}</td>
                                                         <td className={`text-right font-semibold ${num(r.net) > 0 ? 'text-success' : num(r.net) < 0 ? 'text-danger' : 'text-fg-4'}`}>{rup(r.net)}</td>
                                                         <td className={`text-right ${num(r.perTrade) > 0 ? 'text-success' : num(r.perTrade) < 0 ? 'text-danger' : 'text-fg-4'}`}>{rup(r.perTrade)}</td>
+                                                        <td className="text-right text-fg-4" title={marginCoverage(r)}>
+                                                            {num(r.avgMargin) == null ? '—' : rup(r.avgMargin)}
+                                                            {num(r.marginN) != null && num(r.marginN) < num(r.trades) && <span className="text-4xs text-warning"> {r.marginN}/{r.trades}</span>}
+                                                        </td>
+                                                        <td className={`text-right ${tone(r.romPct)}`} title={marginCoverage(r)}>{num(r.romPct) == null ? '—' : `${fmt(r.romPct, 2)}%`}</td>
                                                     </tr>
                                                 ))}
                                             </tbody>

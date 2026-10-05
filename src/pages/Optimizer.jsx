@@ -8,6 +8,7 @@ import { INSTRUMENT_CONFIG } from '../constants';
 import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 import { pollInterval } from '../hooks/usePolling.js';
 import { API_ORIGIN } from '../config/api.js';
+import { pnlTone } from '../components/viz/tokens';
 
 
 
@@ -643,7 +644,7 @@ export default function Optimizer() {
         ) : (
         <div className="bg-surface p-6 rounded-xl border border-line space-y-6 h-fit">
           <div className="flex items-center justify-between">
-            <h3 className="text-xl font-bold">Parameters</h3>
+            <h2 className="text-xl font-bold">Parameters</h2>
             <button
               onClick={toggleConfigCollapsed}
               title="Collapse Parameters"
@@ -677,7 +678,7 @@ export default function Optimizer() {
               {stratOpen && (
                 <div className="absolute z-20 mt-1 w-full bg-slate-900 border border-line rounded-lg shadow-xl max-h-72 overflow-y-auto">
                   <div className="flex items-center justify-between px-3 py-2 border-b border-line-0 sticky top-0 bg-slate-900">
-                    <button onClick={selectAllStrategies} className="text-xs text-primary hover:underline">Select all</button>
+                    <button onClick={selectAllStrategies} className="text-xs text-primary-ink hover:underline">Select all</button>
                     <button onClick={clearStrategies} className="text-xs text-fg-4 hover:underline">Clear</button>
                   </div>
                   {catalog.length === 0 && <div className="px-3 py-2 text-sm text-fg-5">Loading…</div>}
@@ -960,7 +961,7 @@ export default function Optimizer() {
             </div>
 
             <button onClick={startOptimization} disabled={running || selectedStrategies.length === 0}
-              className="w-full bg-primary hover:bg-blue-600 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+              className="w-full bg-primary hover:bg-blue-600 text-on-primary font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
               {running ? 'Optimizing...' : <><Play className="w-4 h-4" /> Optimize {selectedStrategies.length || 0} Strateg{selectedStrategies.length === 1 ? 'y' : 'ies'}</>}
             </button>
 
@@ -1008,7 +1009,7 @@ export default function Optimizer() {
                 {progress.totalStrategies > 1 && progress.strategyLabel && (
                   <p className="text-fg-3">
                     Strategy {(progress.strategyIndex ?? 0) + 1} / {progress.totalStrategies}:{' '}
-                    <span className="text-primary font-semibold">{progress.strategyLabel}</span>
+                    <span className="text-primary-ink font-semibold">{progress.strategyLabel}</span>
                     {stratPct != null && <span className="text-fg-4"> ({stratPct}%)</span>}
                     {stratEtaLabel && <span className="text-fg-5"> · this strategy ~{stratEtaLabel}</span>}
                   </p>
@@ -1033,10 +1034,10 @@ export default function Optimizer() {
             <div className="space-y-6">
               <div className="flex justify-between items-start gap-3">
                 <div>
-                  <h3 className="text-xl font-bold flex items-center gap-2">
+                  <h2 className="text-xl font-bold flex items-center gap-2">
                     <TrendingUp className="w-5 h-5 text-success" />
                     Optimization Results
-                  </h3>
+                  </h2>
                   {/* Run context — what these results were optimized on (from the
                       self-describing result, so it stays correct after refresh). */}
                   {(() => {
@@ -1120,7 +1121,7 @@ export default function Optimizer() {
                       )}
                     </div>
                     <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 text-center">
-                      <div><div className="text-2xs text-fg-4">PnL{hasOos ? ' (IS)' : ''}</div><div className="font-mono text-success">{fmtPnL(m.totalPnL)}</div></div>
+                      <div><div className="text-2xs text-fg-4">P&L{hasOos ? ' (IS)' : ''}</div><div className="font-mono text-success">{fmtPnL(m.totalPnL)}</div></div>
                       <div><div className="text-2xs text-fg-4">Win Rate</div><div className="text-success">{m.winRate}%</div></div>
                       <div><div className="text-2xs text-fg-4">Trades</div><div>{m.totalTrades}</div></div>
                       <div><div className="text-2xs text-fg-4">Max DD</div><div className="text-danger">{m.maxDrawdown}%</div></div>
@@ -1129,7 +1130,7 @@ export default function Optimizer() {
                     </div>
                     {hasOos && winner.best.oos && (
                       <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 text-center mt-2 pt-2 border-t border-amber-500/20">
-                        <div><div className="text-2xs text-success">OOS PnL</div><div className={`font-mono ${(winner.best.oos.totalPnL ?? 0) > 0 ? 'text-success' : 'text-danger'}`}>{fmtPnL(winner.best.oos.totalPnL)}</div></div>
+                        <div><div className="text-2xs text-success">OOS P&L</div><div className={`font-mono ${(winner.best.oos.totalPnL ?? 0) > 0 ? 'text-success' : 'text-danger'}`}>{fmtPnL(winner.best.oos.totalPnL)}</div></div>
                         <div><div className="text-2xs text-success">OOS Win%</div><div className="text-success">{winner.best.oos.winRate}%</div></div>
                         <div><div className="text-2xs text-success">OOS Trades</div><div>{winner.best.oos.totalTrades}</div></div>
                         <div><div className="text-2xs text-success">OOS Max DD</div><div className="text-danger">{winner.best.oos.maxDrawdown}%</div></div>
@@ -1138,23 +1139,23 @@ export default function Optimizer() {
                       </div>
                     )}
                     {/* FULL-RANGE reconciliation — the single most-confusing thing
-                        about OOS results: the headline PnL above is the in-sample
+                        about OOS results: the headline P&L above is the in-sample
                         (train, ~70%) window, but the Backtester runs the WHOLE range.
                         Execution is parity-clean (proven by backend/scripts/parityHarness.js),
                         so the Backtester reproduces THESE full-range numbers 1:1. */}
                     {hasOos && winner.best.full && (
                       <div className="mt-3 pt-2 border-t border-amber-500/20 text-2xs flex flex-wrap items-center gap-x-3 gap-y-1">
                         <span className="text-fg-3 font-medium">📐 Full range (what the Backtester reproduces 1:1):</span>
-                        <span className="text-fg-4">PnL <span className={`font-mono ${(winner.best.full.totalPnL ?? 0) >= 0 ? 'text-success' : 'text-danger'}`}>{fmtPnL(winner.best.full.totalPnL)}</span></span>
+                        <span className="text-fg-4">P&L <span className={`font-mono ${pnlTone((winner.best.full.totalPnL ?? 0))}`}>{fmtPnL(winner.best.full.totalPnL)}</span></span>
                         <span className="text-fg-4">Win <span className="text-fg-2">{winner.best.full.winRate}%</span></span>
                         <span className="text-fg-4">Trades <span className="text-fg-2">{winner.best.full.totalTrades}{winner.best.full.tradingDays ? ` (${(winner.best.full.totalTrades / winner.best.full.tradingDays).toFixed(1)}/day)` : ''}</span></span>
                         <span className="text-fg-4">Max DD <span className="text-danger">{winner.best.full.maxDrawdown}%</span></span>
-                        <span className="text-fg-5 w-full">↳ The “PnL (IS)” above is the in-sample {Math.round((1 - (results.runConfig?.oos_fraction ?? 0.3)) * 100)}% window used for selection — it is intentionally NOT what a full backtest shows.</span>
+                        <span className="text-fg-5 w-full">↳ The “P&L (IS)” above is the in-sample {Math.round((1 - (results.runConfig?.oos_fraction ?? 0.3)) * 100)}% window used for selection — it is intentionally NOT what a full backtest shows.</span>
                       </div>
                     )}
                     <button
                       className="mt-3 text-xs bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-warning px-3 py-1.5 rounded"
-                      title={winner.best.full ? `Replays the exact recorded params over the full range — expect ≈ ${fmtPnL(winner.best.full.totalPnL)} PnL · ${winner.best.full.winRate}% win · ${winner.best.full.totalTrades} trades` : 'Replays the exact recorded params over the full range'}
+                      title={winner.best.full ? `Replays the exact recorded params over the full range — expect ≈ ${fmtPnL(winner.best.full.totalPnL)} P&L · ${winner.best.full.winRate}% win · ${winner.best.full.totalTrades} trades` : 'Replays the exact recorded params over the full range'}
                       onClick={() => handleTestClick(winner.best, winner.strategy)}>
                       Test best on Backtester →
                     </button>
@@ -1172,7 +1173,7 @@ export default function Optimizer() {
                       <th className="p-2">Strategy</th>
                       <th className="p-2">Score</th>
                       <th className="p-2">Win Rate</th>
-                      <th className="p-2">Best PnL</th>
+                      <th className="p-2">Best P&L</th>
                       <th className="p-2">Trades</th>
                       <th className="p-2">Max DD</th>
                       <th className="p-2">Sharpe</th>
@@ -1197,7 +1198,7 @@ export default function Optimizer() {
                             <td className="p-2 text-fg-5">
                               {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                             </td>
-                            <td className="p-2 font-bold text-primary">#{idx + 1}</td>
+                            <td className="p-2 font-bold text-primary-ink">#{idx + 1}</td>
                             <td className="p-2 font-medium text-fg-2">
                               <span className="flex items-center gap-1.5">
                                 {isWinner && <Trophy className="w-3.5 h-3.5 text-warning" />}
@@ -1251,12 +1252,12 @@ export default function Optimizer() {
                                         <th className="p-2">Rank</th>
                                         <th className="p-2">Score</th>
                                         <th className="p-2">{hasOos ? 'Win% (IS)' : 'Win Rate'}</th>
-                                        <th className="p-2">{hasOos ? 'PnL (IS)' : 'PnL'}</th>
+                                        <th className="p-2">{hasOos ? 'P&L (IS)' : 'P&L'}</th>
                                         <th className="p-2">Trades</th>
                                         <th className="p-2">Max DD</th>
                                         <th className="p-2">Sharpe</th>
                                         <th className="p-2">PF</th>
-                                        {hasOos && <th className="p-2 text-success">OOS PnL</th>}
+                                        {hasOos && <th className="p-2 text-success">OOS P&L</th>}
                                         {hasOos && <th className="p-2 text-success">OOS Win%</th>}
                                         {hasOos && <th className="p-2">Verdict</th>}
                                         <th className="p-2">Params</th>
@@ -1274,7 +1275,7 @@ export default function Optimizer() {
                                           <tr key={rowKey}
                                             className={`border-b border-line-0/60 hover:bg-slate-800/40 cursor-pointer ${selectedResult === res ? 'bg-slate-800/70' : ''}`}
                                             onClick={() => setSelectedResult(res)}>
-                                            <td className="p-2 font-bold text-primary">#{ridx + 1}</td>
+                                            <td className="p-2 font-bold text-primary-ink">#{ridx + 1}</td>
                                             <td className="p-2 font-mono text-warning">
                                               {hasOos
                                                 ? (res.robust
@@ -1344,11 +1345,11 @@ export default function Optimizer() {
 
               {selectedResult && (
                 <div className="p-4 bg-slate-900/50 rounded-lg border border-line-0">
-                  <h4 className="font-bold mb-2 text-fg-3 flex items-center gap-2">
-                    <Code className="w-4 h-4 text-primary" />
+                  <h3 className="font-bold mb-2 text-fg-3 flex items-center gap-2">
+                    <Code className="w-4 h-4 text-primary-ink" />
                     Selected Parameters JSON
                     {selectedResult.strategy && <span className="text-xs text-fg-5">({labelFor(selectedResult.strategy)})</span>}
-                  </h4>
+                  </h3>
                   {/* bg-bg-2 (the sunken-surface role), not bg-black: `--color-black` is pinned
                       to #000 in every theme by design, so text-fg-5 on it drops to 1.7:1 on the
                       light themes. bg-2 is #0e1117-dark / near-white-light and keeps the ink

@@ -17,6 +17,7 @@ export const ROUTES = Object.freeze({
     multiLegDeploy: '/multi-leg?tab=deploy',
     backtest: '/backtest',
     risk: '/risk',
+    alerts: '/alerts',
     tickStrategies: '/tick-strategies',
     tickResults: '/tick-results',
 });

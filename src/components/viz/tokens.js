@@ -122,8 +122,24 @@ export const GRID = MIDNIGHT_CHART_THEME.grid;        // solid hairline, one sha
 // Pure text. Nothing below has ever had a colour in it, and none of it moves
 // with the theme.
 
-/** Indian-format rupees. Compact above a lakh so tiles stay one line. */
-export function inr(v, { compact = false, sign = false } = {}) {
+/**
+ * Indian-format rupees. Compact above a lakh so tiles stay one line.
+ *
+ * THE ONE RUPEE FORMATTER. There used to be four — this one, plus private
+ * copies in AiScore, StrategyDetail and multileg/builderFormat — and they had
+ * drifted onto TWO different minus signs: ASCII '-' here and in StrategyDetail,
+ * U+2212 '−' in the other two. The same P&L therefore rendered as "-₹6,399" on
+ * one route and "−₹3,549" on another, and both appeared inside a single card on
+ * /multi-leg. Four helpers will always drift again, so the other three now
+ * delegate here and this is the only place the convention is written down.
+ *
+ * The sign is an ASCII hyphen OUTSIDE the ₹ glyph: it survives a copy-paste into
+ * a spreadsheet as a negative number, which U+2212 does not.
+ *
+ * `dp` pins the decimals; omit it for the default (2 below ₹100, whole rupees
+ * above — small premiums need the paise, a lakh does not).
+ */
+export function inr(v, { compact = false, sign = false, dp = null } = {}) {
     const n = Number(v);
     if (!Number.isFinite(n)) return '—';
     const s = n < 0 ? '-' : (sign && n > 0 ? '+' : '');
@@ -131,7 +147,133 @@ export function inr(v, { compact = false, sign = false } = {}) {
     if (compact && a >= 1e7) return `${s}₹${(a / 1e7).toFixed(2)}Cr`;
     if (compact && a >= 1e5) return `${s}₹${(a / 1e5).toFixed(2)}L`;
     if (compact && a >= 1000) return `${s}₹${(a / 1000).toFixed(1)}k`;
-    return `${s}₹${a.toLocaleString('en-IN', { maximumFractionDigits: a < 100 ? 2 : 0 })}`;
+    const max = dp == null ? (a < 100 ? 2 : 0) : dp;
+    return `${s}₹${a.toLocaleString('en-IN', { maximumFractionDigits: max })}`;
+}
+
+/**
+ * An option premium. ALWAYS 2dp.
+ *
+ * The tick size is 0.05, so "265.8" and "265.80" are the same price — but the
+ * trade table stripped trailing zeros while the activity feed padded them, so
+ * one page showed the same fill two ways. 2dp everywhere, non-finite as an em
+ * dash like every other formatter here.
+ */
+export function premium(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? `₹${n.toFixed(2)}` : '—';
+}
+
+/**
+ * A date and time in IST, 24-hour.
+ *
+ * The app renders 169 timestamps as 24-hour and 23 as 12-hour am/pm, because
+ * `toLocaleString('en-IN', { timeZone })` defaults to am/pm and the `hour12:
+ * false` that appears at 17 other call sites was simply missed here. Two clock
+ * formats sat in adjacent tables on the dashboard. Market times are 24-hour,
+ * so that is the convention; this is the only place it is written down.
+ *
+ * Always IST: a trading timestamp with no timezone is ambiguous, and the
+ * containers run UTC.
+ */
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/**
+ * 'YYYY-MM-DD' (an IST trading date) -> 'Mar 2026'.
+ *
+ * Parsed from the string, never through Date + a timezone (the input is already
+ * a calendar DATE; any shift could cross a month boundary) and never through
+ * toLocaleString: 'en-IN' renders September as "Sept" on newer ICU builds and
+ * "Sep" on older ones, so the same label differed between browsers.
+ */
+export function monthYear(day) {
+    const m = typeof day === 'string' ? /^(\d{4})-(\d{2})-\d{2}$/.exec(day) : null;
+    if (!m) return '\u2014';
+    const mon = MONTHS[Number(m[2]) - 1];
+    return mon ? `${mon} ${m[1]}` : '\u2014';
+}
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+/**
+ * 'YYYY-MM-DD' (an IST trading date) -> 'Mon 28 Sep 2026'.
+ *
+ * Same discipline as monthYear(): the input is already a calendar DATE in IST,
+ * so it is parsed from the string and the weekday is taken from Date.UTC on
+ * those same digits. Routing it through `new Date(day)` + a timezone would let
+ * a browser west of UTC print the previous day.
+ */
+export function istDayLabel(day, { year = true } = {}) {
+    const m = typeof day === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(day) : null;
+    if (!m) return '—';
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    const mon = MONTHS[mo - 1];
+    const wd = WEEKDAYS[new Date(Date.UTC(y, mo - 1, d)).getUTCDay()];
+    if (!mon || !wd) return '—';
+    return `${wd} ${d} ${mon}${year ? ` ${y}` : ''}`;
+}
+
+export function istDateTime(v, { seconds = false } = {}) {
+    const d = v instanceof Date ? v : new Date(v);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+        ...(seconds ? { second: '2-digit' } : {}),
+        hour12: false,
+    });
+}
+
+/** Time of day only, IST, 24-hour. */
+export function istTime(v, { seconds = true } = {}) {
+    const d = v instanceof Date ? v : new Date(v);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleTimeString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        hour: '2-digit', minute: '2-digit',
+        ...(seconds ? { second: '2-digit' } : {}),
+        hour12: false,
+    });
+}
+
+/**
+ * A rupee axis tick.
+ *
+ * Was copy-pasted into five files as a local `rupTick`, every copy compacting to
+ * Western "k" ONLY — so an equity-curve axis read ₹2200k directly beneath a tile
+ * reading -₹15,13,606, two ways of writing the same magnitude a centimetre
+ * apart. Uses the same Cr/L/k ladder as inr({compact}) so the axis and the
+ * number above it agree.
+ *
+ * Trailing zeros are dropped (₹22L, not ₹22.00L) because an axis label has less
+ * room than a tile and the extra precision buys nothing at tick resolution.
+ */
+export function rupeeTick(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '';
+    const s = n < 0 ? '-' : '';
+    const a = Math.abs(n);
+    if (a >= 1e7) return `${s}₹${+(a / 1e7).toFixed(2)}Cr`;
+    if (a >= 1e5) return `${s}₹${+(a / 1e5).toFixed(2)}L`;
+    if (a >= 1000) return `${s}₹${+(a / 1000).toFixed(1)}k`;
+    return `${s}₹${Math.round(a)}`;
+}
+
+/**
+ * Polarity ink for a signed quantity. THREE-way, not two.
+ *
+ * `v >= 0 ? 'text-success' : 'text-danger'` paints ZERO as profit, which is how
+ * "TODAY'S NET P&L ₹0" rendered in green next to a rising arrow, and how every
+ * never-traded strategy row showed `+0.00` in profit green. Zero is neither,
+ * and a non-value is neither — both get neutral ink.
+ *
+ * `Number(null)` is 0, which is normally the trap — here it lands on the SAME
+ * neutral answer as undefined/NaN, so passing a null through is safe and
+ * deliberate. Do not "optimise" this back into a `>= 0` check.
+ */
+export function pnlTone(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return 'text-fg-5';
+    return n > 0 ? 'text-success' : n < 0 ? 'text-danger' : 'text-fg-5';
 }
 
 export function pct(v, dp = 1) {

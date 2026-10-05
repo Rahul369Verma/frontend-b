@@ -135,7 +135,7 @@ function buildCalendar(dayMap, rangeDays) {
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-export default function PnlCalendar({ daily, rangeDays = null, title = 'Daily PnL Calendar' }) {
+export default function PnlCalendar({ daily, rangeDays = null, title = 'Daily P&L Calendar' }) {
     const weeks = useMemo(() => buildCalendar(toDayMap(daily), rangeDays), [daily, rangeDays]);
     return (
         <div>
@@ -175,7 +175,7 @@ export default function PnlCalendar({ daily, rangeDays = null, title = 'Daily Pn
                 <div className="w-4 h-4 rounded border bg-emerald-900/40 border-emerald-800" />
                 <div className="w-4 h-4 rounded border bg-emerald-700/60 border-emerald-600" />
                 <span>More</span>
-                <span className="ml-4">Hover a cell to see the day&apos;s PnL.</span>
+                <span className="ml-4">Hover a cell to see the day&apos;s P&L.</span>
             </div>
         </div>
     );

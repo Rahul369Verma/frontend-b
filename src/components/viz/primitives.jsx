@@ -39,7 +39,7 @@ export function Card({ title, subtitle, right, children, className = '' }) {
             {(title || right) && (
                 <div className="flex items-start justify-between gap-3 px-4 pt-3 pb-2">
                     <div className="min-w-0">
-                        {title && <h3 className="text-sm font-semibold text-fg">{title}</h3>}
+                        {title && <h2 className="text-sm font-semibold text-fg">{title}</h2>}
                         {subtitle && <p className="text-xs text-fg-5 mt-0.5">{subtitle}</p>}
                     </div>
                     {right && <div className="flex-shrink-0 text-xs text-fg-4">{right}</div>}
@@ -77,13 +77,14 @@ export function StatTile({ label, value, hint, tone = 'neutral', badge, hero = f
     const ct = useChartTheme();
     // Tone tints the VALUE text only. The sign is in the number itself, so the
     // colour is reinforcement, never the sole carrier.
-    const toneColor = tone === 'positive' ? ct.diverging.positive
-        : tone === 'negative' ? ct.diverging.negative
+    const toneColor = tone === 'positive' ? 'var(--color-success)'
+        : tone === 'negative' ? 'var(--color-danger)'
         : ct.text.primary;
     return (
         <div className="bg-surface border border-line/60 rounded-lg px-4 py-3 flex flex-col gap-1 min-w-0">
             <div className="flex items-center justify-between gap-2">
-                <span className="text-2xs uppercase tracking-wide text-fg-5 truncate">{label}</span>
+                <span className="text-2xs uppercase tracking-wide text-fg-5 truncate"
+                      title={typeof label === 'string' ? label : undefined}>{label}</span>
                 {badge}
             </div>
             <span
@@ -531,7 +532,7 @@ export function PageHeader({ icon, title, subtitle, badges, actions, backTo, bac
                 )}
                 <div className="min-w-0">
                     <h1 className="text-xl font-bold text-fg flex items-center gap-2 flex-wrap leading-tight">
-                        {Icon && <Icon className="w-5 h-5 text-primary flex-shrink-0" aria-hidden="true" />}
+                        {Icon && <Icon className="w-5 h-5 text-primary-ink flex-shrink-0" aria-hidden="true" />}
                         <span className="truncate">{title}</span>
                         {badges}
                     </h1>
@@ -687,7 +688,7 @@ export function EmptyState({ icon, title, children, action, className = '' }) {
     const Icon = icon;
     return (
         <div className={`flex flex-col items-center justify-center text-center gap-2 py-10 px-4 ${className}`}>
-            {Icon && <Icon className="w-7 h-7 text-fg-6" aria-hidden="true" />}
+            {Icon && <Icon className="w-7 h-7 text-fg-5" aria-hidden="true" />}
             {title && <p className="text-sm font-medium text-fg-3">{title}</p>}
             {children && <p className="text-xs text-fg-5 max-w-md">{children}</p>}
             {action && <div className="mt-1">{action}</div>}

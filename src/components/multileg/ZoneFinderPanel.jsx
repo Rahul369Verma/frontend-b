@@ -21,7 +21,7 @@ import axios from 'axios';
 import { ComposedChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine } from 'recharts';
 import { Target, RefreshCw, Sparkles, Wand2 } from 'lucide-react';
 import { Card, StatTile, StatRow, DataTable, EmptyState, Segmented, Chip, Spinner } from '../viz/primitives';
-import { inr, useChartTheme } from '../viz/tokens';
+import { inr, istDateTime, useChartTheme } from '../viz/tokens';
 import ZoomableChart from '../charts/ZoomableChart';
 import { API_URL } from '../../config/api.js';
 
@@ -111,25 +111,25 @@ export default function ZoneFinderPanel({ symbol, lots = 1, currentLegs = [], on
     const bes = pick?.stats?.breakevens || [];
     const tip = ct.tooltipStyle({ fontSize: ct.type['3xs'] });
     const candidateCols = useMemo(() => [
-        { key: 'pe', header: 'PE', render: (r) => <span className="text-fg-3">{r.pe ?? '—'}{r.deltas?.pe != null ? <span className="text-fg-6"> Δ{r.deltas.pe}</span> : null}</span> },
-        { key: 'ce', header: 'CE', render: (r) => <span className="text-fg-3">{r.ce ?? '—'}{r.deltas?.ce != null ? <span className="text-fg-6"> Δ{r.deltas.ce}</span> : null}</span> },
+        { key: 'pe', header: 'PE', render: (r) => <span className="text-fg-3">{r.pe ?? '—'}{r.deltas?.pe != null ? <span className="text-fg-5"> Δ{r.deltas.pe}</span> : null}</span> },
+        { key: 'ce', header: 'CE', render: (r) => <span className="text-fg-3">{r.ce ?? '—'}{r.deltas?.ce != null ? <span className="text-fg-5"> Δ{r.deltas.ce}</span> : null}</span> },
         { key: 'credit', header: 'Credit', align: 'right', render: (r) => inr(r.credit) },
-        { key: 'ev', header: 'EV', align: 'right', render: (r) => <span style={{ color: r.ev > 0 ? ct.diverging.positive : ct.diverging.negative }}>{inr(r.ev)}</span> },
-        { key: 'pop', header: 'POP', align: 'right', render: (r) => pct(r.pop) },
+        { key: 'ev', header: 'EV', align: 'right', render: (r) => <span className={r.ev > 0 ? 'text-success' : 'text-danger'}>{inr(r.ev)}</span> },
+        { key: 'pop', header: 'POP', align: 'right', render: (r) => pct(r.pop, 1) },
         { key: 'cvar5', header: '5% tail', align: 'right', render: (r) => inr(r.cvar5) },
         { key: 'score', header: 'Score', align: 'right', render: (r) => <span className="text-fg-4">{r.score}</span> },
-        { key: 'use', header: '', render: (r) => <button type="button" onClick={() => applyCandidate(r)} className="text-2xs text-primary hover:underline">use</button> },
+        { key: 'use', header: '', render: (r) => <button type="button" onClick={() => applyCandidate(r)} className="hit-target text-2xs text-primary-ink hover:underline">use</button> },
     ], [ct, applyCandidate]);
     const candidateRows = useMemo(() => (pick?.candidates || []).map((c, i) => ({ ...c, _key: `${c.pe}-${c.ce}-${i}` })), [pick]);
 
     return (
         <Card
-            title={<span className="inline-flex items-center gap-2"><Target className="w-4 h-4 text-primary" aria-hidden="true" />Zone finder — strikes from the market's distribution</span>}
+            title={<span className="inline-flex items-center gap-2"><Target className="w-4 h-4 text-primary-ink" aria-hidden="true" />Zone finder — strikes from the market's distribution</span>}
             subtitle="The smile across strikes IS the market's forecast. The finder reprices every candidate pair at the planned exit, sold at bid with real charges, and picks by expected P&L per rupee of tail. It declines when nothing clears zero."
             right={(
                 <div className="flex items-center gap-2">
                     {data && <Chip tone={data.stale ? 'warning' : 'neutral'} title={`chain source: ${data.source}`}>{data.source}</Chip>}
-                    {data?.preview && <Chip tone="info" title={`Market closed — previewing the next session's ${entryTime} entry on the latest chain`}>preview {new Date(data.entryAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</Chip>}
+                    {data?.preview && <Chip tone="info" title={`Market closed — previewing the next session's ${entryTime} entry on the latest chain`}>preview {istDateTime(data.entryAt)}</Chip>}
                     <button type="button" onClick={() => setNonce((x) => x + 1)} className="px-2 py-1 rounded border border-line-2 bg-card-2 text-2xs text-fg-4 hover:text-fg inline-flex items-center gap-1" title="Re-run on the latest chain">
                         <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin motion-reduce:animate-none' : ''}`} aria-hidden="true" /> Refresh
                     </button>
@@ -173,11 +173,11 @@ export default function ZoneFinderPanel({ symbol, lots = 1, currentLegs = [], on
                     {/* market line */}
                     <div className="flex flex-wrap gap-x-4 gap-y-1 text-2xs text-fg-4">
                         <span>spot <b className="text-fg-2 tabular-nums">{pick.market?.spot}</b></span>
-                        <span>forward <b className="text-fg-2 tabular-nums">{pick.market?.forward}</b> <span className="text-fg-6">(basis {pick.market?.basisPts > 0 ? '+' : ''}{pick.market?.basisPts})</span></span>
-                        <span>ATM IV <b className="text-fg-2 tabular-nums">{pick.market?.atmIvPct}%</b> <span className="text-fg-6">skew {pick.market?.skew}</span></span>
+                        <span>forward <b className="text-fg-2 tabular-nums">{pick.market?.forward}</b> <span className="text-fg-5">(basis {pick.market?.basisPts > 0 ? '+' : ''}{pick.market?.basisPts})</span></span>
+                        <span>ATM IV <b className="text-fg-2 tabular-nums">{pick.market?.atmIvPct}%</b> <span className="text-fg-5">skew {pick.market?.skew}</span></span>
                         <span>expected move to exit <b className="text-fg-2 tabular-nums">±{pick.market?.emExitPts}</b>, to expiry <b className="text-fg-2 tabular-nums">±{pick.market?.emExpiryPts}</b></span>
                         <span>expiry <b className="text-fg-2">{data.expiry}</b> · {pick.market?.dteTrading} sessions · horizon {pick.market?.horizonSessions} sessions</span>
-                        <span className="text-fg-6">{data.chainStrikes} strikes · {pick.market?.smilePoints} in the smile fit</span>
+                        <span className="text-fg-5">{data.chainStrikes} strikes · {pick.market?.smilePoints} in the smile fit</span>
                     </div>
 
                     {pick.ok ? (
@@ -242,7 +242,7 @@ export default function ZoneFinderPanel({ symbol, lots = 1, currentLegs = [], on
                             {mine.out && (
                                 <div className="text-2xs text-fg-4 border border-line-0 rounded p-2">
                                     {mine.out.ok
-                                        ? <>Your legs at ρ {mine.out.rho}: expected P&L <b style={{ color: mine.out.ev > 0 ? ct.diverging.positive : ct.diverging.negative }}>{inr(mine.out.ev)}</b>, POP {pct(mine.out.pop, 1)}, worst 5% {inr(mine.out.cvar5)}, charges {inr(mine.out.charges)}.</>
+                                        ? <>Your legs at ρ {mine.out.rho}: expected P&L <b className={mine.out.ev > 0 ? 'text-success' : 'text-danger'}>{inr(mine.out.ev)}</b>, POP {pct(mine.out.pop, 1)}, worst 5% {inr(mine.out.cvar5)}, charges {inr(mine.out.charges)}.</>
                                         : <>Could not score your legs: {mine.out.reason}</>}
                                 </div>
                             )}
@@ -251,8 +251,8 @@ export default function ZoneFinderPanel({ symbol, lots = 1, currentLegs = [], on
                                     <div className="flex items-center gap-2">
                                         <Chip tone={ai.out.verdict === 'agree' ? 'good' : ai.out.verdict === 'skip' ? 'critical' : ai.out.verdict === 'adjust' ? 'warning' : 'muted'}>AI: {ai.out.verdict}</Chip>
                                         {ai.out.confidence != null && <span className="text-fg-5">confidence {Math.round(ai.out.confidence * 100)}%</span>}
-                                        {ai.out.model && <span className="text-fg-6">{ai.out.model} · {ai.out.latencyMs ?? ai.out.latency_ms} ms</span>}
-                                        <span className="text-fg-6">advisory — the entry does not act on this</span>
+                                        {ai.out.model && <span className="text-fg-5">{ai.out.model} · {ai.out.latencyMs ?? ai.out.latency_ms} ms</span>}
+                                        <span className="text-fg-5">advisory — the entry does not act on this</span>
                                     </div>
                                     {ai.out.reason && <div className="text-fg-5">{ai.out.reason}</div>}
                                     {(ai.out.reasons || []).map((r, i) => <div key={i} className="text-fg-4">• {r}</div>)}
@@ -263,11 +263,11 @@ export default function ZoneFinderPanel({ symbol, lots = 1, currentLegs = [], on
                             {/* candidates */}
                             {candidateRows.length > 1 && (
                                 <div>
-                                    <div className="text-2xs text-fg-5 mb-1">Top candidates by the chosen objective — click <span className="text-primary">use</span> to take one instead.</div>
+                                    <div className="text-2xs text-fg-5 mb-1">Top candidates by the chosen objective — click <span className="text-primary-ink">use</span> to take one instead.</div>
                                     <DataTable columns={candidateCols} rows={candidateRows} dense />
                                 </div>
                             )}
-                            <div className="text-3xs text-fg-6">{levels?.noteworthy}</div>
+                            <div className="text-3xs text-fg-5">{levels?.noteworthy}</div>
                         </>
                     ) : (
                         <EmptyState icon={Target} title="The finder declined to place a zone">

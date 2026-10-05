@@ -52,7 +52,7 @@ import {
     Card, StatTile, StatRow, DataTable, StatusBadge, DivergingBars, Waterfall, PageHeader, Tabs, Segmented,
     Chip, ModeChip, Skeleton, SkeletonTiles, EmptyState, Legend,
 } from '../components/viz/primitives';
-import { inr, useChartTheme } from '../components/viz/tokens';
+import { inr, useChartTheme, rupeeTick } from '../components/viz/tokens';
 import ZoomableChart from '../components/charts/ZoomableChart';
 import PnlCalendar from '../components/charts/PnlCalendar.jsx';
 import { API_URL } from '../config/api.js';
@@ -131,9 +131,8 @@ const DEFAULT_COMPARE = 4;
 
 /** Signed rupee value — the sign is in the glyph, colour only reinforces it. */
 function Money({ v, bold = false, className = '' }) {
-    const ct = useChartTheme();
     const x = n(v);
-    const color = x == null ? undefined : x > 0 ? ct.diverging.positive : x < 0 ? ct.diverging.negative : undefined;
+    const color = x == null ? undefined : x > 0 ? 'var(--color-success)' : x < 0 ? 'var(--color-danger)' : undefined;
     return (
         <span className={`${x == null || x === 0 ? 'text-fg-4' : ''} ${bold ? 'font-semibold' : ''} tabular-nums ${className}`} style={color ? { color } : undefined}>
             {inr(v)}
@@ -209,7 +208,7 @@ function CostReality({ cost, basis }) {
                 return (
                     <span
                         className="tabular-nums font-semibold"
-                        style={{ color: bad ? ct.diverging.negative : ct.text.primary }}
+                        style={{ color: bad ? 'var(--color-danger)' : ct.text.primary }}
                         title={bad
                             ? 'The median trade does not move far enough to pay for itself. Signal tuning cannot fix this — only a wider target or a cheaper instrument can.'
                             : 'The median trade clears its own cost.'}
@@ -314,7 +313,6 @@ function StrategyPanel({ g, color, onClose }) {
     })), [g]);
 
     const chartTip = ct.tooltipStyle({ fontSize: ct.type['3xs'] });
-    const rupTick = (v) => (Math.abs(v) >= 1000 ? `₹${Math.round(v / 1000)}k` : `₹${Math.round(v)}`);
     const axisTick = { fontSize: ct.type['5xs'], fill: ct.text.secondary };
     const meta = g?.meta || {};
 
@@ -364,7 +362,7 @@ function StrategyPanel({ g, color, onClose }) {
                             <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                 <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                 <XAxis dataKey="label" tick={axisTick} minTickGap={26} />
-                                <YAxis width={54} tick={axisTick} tickFormatter={rupTick} />
+                                <YAxis width={54} tick={axisTick} tickFormatter={rupeeTick} />
                                 <Tooltip
                                     contentStyle={chartTip}
                                     formatter={(v, name) => (n(v) == null ? null : [inr(v), name === 'up' || name === 'down' ? 'net' : name])}
@@ -381,7 +379,7 @@ function StrategyPanel({ g, color, onClose }) {
                             <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                 <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                 <XAxis dataKey="label" tick={axisTick} minTickGap={26} />
-                                <YAxis width={54} tick={axisTick} tickFormatter={rupTick} />
+                                <YAxis width={54} tick={axisTick} tickFormatter={rupeeTick} />
                                 <Tooltip contentStyle={chartTip} formatter={(v, name) => (n(v) == null ? null : [inr(v), name])} labelFormatter={(l, p) => p?.[0]?.payload?.date || String(l)} />
                                 <ReferenceLine y={0} stroke={ct.axis} ifOverflow="extendDomain" />
                                 <Area type="monotone" name="drawdown" dataKey="drawdown" baseValue={0} stroke={ct.status.critical} strokeOpacity={0.45} strokeWidth={1} fill={ct.status.critical} fillOpacity={0.16} isAnimationActive={false} />
@@ -509,7 +507,7 @@ export default function TickResults() {
     }, [strategies, compareKeys, colorFor]);
 
     const chartTip = ct.tooltipStyle({ fontSize: ct.type['3xs'] });
-    const rupTick = (v) => (Math.abs(v) >= 1000 ? `₹${Math.round(v / 1000)}k` : `₹${Math.round(v)}`);
+    
     const axisTick = { fontSize: ct.type['5xs'], fill: ct.text.secondary };
 
     const basisMeta = BASES.find((b) => b.id === basis) || BASES[0];
@@ -523,7 +521,7 @@ export default function TickResults() {
                 <button
                     type="button"
                     onClick={() => setOpenStrategy(openStrategy === r.key ? null : r.key)}
-                    className="inline-flex items-center gap-1.5 text-left hover:text-primary hover:underline"
+                    className="inline-flex items-center gap-1.5 text-left hover:text-primary-ink hover:underline"
                     title="Show this strategy's own curve and exits"
                 >
                     <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: r.color }} aria-hidden="true" />
@@ -570,7 +568,7 @@ export default function TickResults() {
     const stratRows = strategies.map((g, i) => ({ ...g, _key: g.key, name: g.meta?.name || g.key, color: colorFor(i) }));
 
     return (
-        <div className="space-y-4">
+        <div className="p-6 space-y-4">
             <PageHeader
                 icon={Zap}
                 title="Tick Results"
@@ -582,7 +580,7 @@ export default function TickResults() {
                 ].filter(Boolean)}
                 actions={(
                     <div className="flex items-center gap-2 flex-wrap">
-                        <Link to="/tick-strategies" className="inline-flex items-center gap-1 text-2xs text-fg-4 hover:text-primary px-2 py-1 rounded border border-line-2" title="Create, start, stop and inspect tick strategies">
+                        <Link to="/tick-strategies" className="inline-flex items-center gap-1 text-2xs text-fg-4 hover:text-primary-ink px-2 py-1 rounded border border-line-2" title="Create, start, stop and inspect tick strategies">
                             Manage <ExternalLink className="w-3 h-3" aria-hidden="true" />
                         </Link>
                         <Segmented
@@ -623,11 +621,11 @@ export default function TickResults() {
                                 className={`text-left px-3 py-2 rounded-lg border transition-colors min-w-[190px] flex-1 ${on ? 'border-primary bg-primary/10' : 'border-line-2 hover:border-line hover:bg-card-2/60'}`}
                             >
                                 <div className="flex items-center justify-between gap-2">
-                                    <span className={`text-2xs uppercase tracking-wide ${on ? 'text-primary' : 'text-fg-5'}`}>{b.label}</span>
-                                    {b.id === 'options_net' && <span className="text-4xs text-fg-5">default</span>}
+                                    <span className={`text-2xs uppercase tracking-wide ${on ? 'text-primary-ink' : 'text-fg-5'}`}>{b.label}</span>
+                                    {b.id === 'options_net' && <span className="text-4xs text-fg-4">default</span>}
                                 </div>
                                 <div className="mt-0.5"><Money v={t?.total} bold /></div>
-                                <div className="text-4xs text-fg-5 mt-0.5">{t ? `${int(t.trades)} priced` : '—'}</div>
+                                <div className="text-4xs text-fg-4 mt-0.5">{t ? `${int(t.trades)} priced` : '—'}</div>
                             </button>
                         );
                     })}
@@ -655,7 +653,7 @@ export default function TickResults() {
                 <EmptyState
                     icon={Zap}
                     title="No closed tick trades in this window"
-                    action={<Link to="/tick-strategies" className="text-primary hover:underline">Open the tick strategies page</Link>}
+                    action={<Link to="/tick-strategies" className="text-primary-ink hover:underline">Open the tick strategies page</Link>}
                 >
                     {n(cov.open) > 0
                         ? `${int(cov.open)} position(s) are still open — they have no realised P&L yet.`
@@ -689,7 +687,7 @@ export default function TickResults() {
                                 <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                     <XAxis dataKey="label" tick={axisTick} minTickGap={26} />
-                                    <YAxis width={54} tick={axisTick} tickFormatter={rupTick} />
+                                    <YAxis width={54} tick={axisTick} tickFormatter={rupeeTick} />
                                     <Tooltip
                                         contentStyle={chartTip}
                                         formatter={(v, name) => (n(v) == null ? null : [inr(v), name === 'up' || name === 'down' ? 'net' : name])}
@@ -706,7 +704,7 @@ export default function TickResults() {
                                 <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                     <XAxis dataKey="label" tick={axisTick} minTickGap={26} />
-                                    <YAxis width={54} tick={axisTick} tickFormatter={rupTick} />
+                                    <YAxis width={54} tick={axisTick} tickFormatter={rupeeTick} />
                                     <Tooltip contentStyle={chartTip} formatter={(v, name) => (n(v) == null ? null : [inr(v), name])} labelFormatter={(l, p) => p?.[0]?.payload?.date || String(l)} />
                                     <ReferenceLine y={0} stroke={ct.axis} ifOverflow="extendDomain" />
                                     <Area type="monotone" name="drawdown" dataKey="drawdown" baseValue={0} stroke={ct.status.critical} strokeOpacity={0.45} strokeWidth={1} fill={ct.status.critical} fillOpacity={0.16} isAnimationActive={false} />
@@ -743,7 +741,7 @@ export default function TickResults() {
                                 <ComposedChart data={compareSeries.rows} margin={{ top: 8, right: 10, bottom: 2, left: 4 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                     <XAxis dataKey="label" tick={axisTick} minTickGap={26} />
-                                    <YAxis width={54} tick={axisTick} tickFormatter={rupTick} />
+                                    <YAxis width={54} tick={axisTick} tickFormatter={rupeeTick} />
                                     <Tooltip contentStyle={chartTip} formatter={(v, name) => [inr(v), compareSeries.members.find((m) => m.key === name)?.name || name]} labelFormatter={(l, p) => p?.[0]?.payload?.date || String(l)} />
                                     <ReferenceLine y={0} stroke={ct.axis} ifOverflow="extendDomain" />
                                     {compareSeries.members.map((m) => (

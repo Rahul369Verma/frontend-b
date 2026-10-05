@@ -450,7 +450,7 @@ const DataManager = () => {
                     </div>
                     <div className="bg-gray-900/70 border border-line rounded p-3">
                         <div className="text-3xs text-fg-5 uppercase">Growth</div>
-                        <div className="text-lg font-bold text-success">{oa.growth ? `${fmtBytes(oa.growth.perDayBytes)}/day` : '—'}</div>
+                        <div className={`text-lg font-bold ${oa.growth ? 'text-success' : 'text-fg-5'}`}>{oa.growth ? `${fmtBytes(oa.growth.perDayBytes)}/day` : '—'}</div>
                         <div className="text-3xs text-fg-5">{oa.growth ? `~${fmtBytes(oa.growth.projected1yBytes)}/yr projected` : 'needs a full day of data'}</div>
                     </div>
                     <div className="bg-gray-900/70 border border-line rounded p-3">
@@ -473,7 +473,7 @@ const DataManager = () => {
                     {oa.storage?.compressionRatio && <span>compression <span className="text-fg-2">{oa.storage.compressionRatio}×</span></span>}
                 </div>
                 {oa.metrics?.lastError && (
-                    <div className="text-2xs text-danger mb-3">last error: {oa.metrics.lastError.message} <span className="text-fg-6">({ago(oa.metrics.lastError.at)})</span></div>
+                    <div className="text-2xs text-danger mb-3">last error: {oa.metrics.lastError.message} <span className="text-fg-5">({ago(oa.metrics.lastError.at)})</span></div>
                 )}
 
                 {/* per-index coverage */}
@@ -485,7 +485,7 @@ const DataManager = () => {
                         </tr></thead>
                         <tbody>
                             {(oa.coverage || []).length === 0 ? (
-                                <tr><td colSpan={7} className="py-3 text-center text-fg-6">No snapshots recorded yet — press “Snapshot now” to verify the pipeline, or wait for market hours in production.</td></tr>
+                                <tr><td colSpan={7} className="py-3 text-center text-fg-5">No snapshots recorded yet — press “Snapshot now” to verify the pipeline, or wait for market hours in production.</td></tr>
                             ) : oa.coverage.map((c) => (
                                 <tr key={c.symbol} className="border-b border-line-0/70">
                                     <td className="py-1 text-fg-2">{String(c.symbol).split(':')[1]?.replace('-INDEX', '') || c.symbol}</td>
@@ -603,7 +603,6 @@ const DataManager = () => {
                                         onChange={(e) => setSpotFromDate(e.target.value)}
                                         className="w-full bg-gray-900 border border-line p-2 rounded text-fg text-sm"
                                     />
-                                th
                                 </div>
                                 <div>
                                     <label htmlFor="datamanager-to-date-3" className="block text-sm text-fg-4 mb-1">To Date</label>

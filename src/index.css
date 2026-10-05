@@ -117,10 +117,25 @@
        `--color-line-0`: no declaration, no `text-primary-ink` utility. */
     --color-primary-ink: #feafa8;
     --color-secondary:  #31333f;
-    --color-success:    #09ab3b;
-    --color-danger:     #ff2b2b;
-    --color-warning:    #ffbd45;
-    --color-info:       #117c9b;
+    /* Status tokens carry two roles, and 2026-09-13 split them (see ramp.js).
+       The plain name is INK — 745 `text-*` call sites against 34 fills, and all
+       but four of those fills are /10-/15 alpha washes sitting behind the ink.
+       `--color-<status>-fill` is the solid-fill role. Declared here for the same
+       build-time reason as `--color-primary-ink`: no declaration, no utility.
+
+       success/danger/warning keep their pinned legacy hexes — spec §3 freezes
+       midnight's output. That freeze is why `text-danger` still measures 3.98:1
+       on a card here (needs 4.5); the other eleven themes clear it. `info` was
+       never one of the three legacy pins, so it moves to the ink stop and gains
+       8.87:1 on card, up from a dark teal on a dark card. */
+    --color-success:      #09ab3b;
+    --color-danger:       #ff2b2b;
+    --color-warning:      #ffbd45;
+    --color-info:         #93d1ea;
+    --color-success-fill: #0e863e;
+    --color-danger-fill:  #d20723;
+    --color-warning-fill: #95650e;
+    --color-info-fill:    #117c9b;
 
     /* ── Legacy aliases — DO NOT REMOVE ──────────────────────────────────────
        `bg-surface` (64 uses) and `bg-background` (4 uses) are load-bearing in
@@ -326,9 +341,23 @@ body {
     }
 }
 
-/* Streamlit-like Inputs */
-input, select, textarea {
-    @apply bg-surface border border-line text-fg rounded-md px-3 py-2 focus:outline-none focus:border-primary transition-colors;
+/* Streamlit-like Inputs.
+ *
+ * ⚠️ MUST STAY IN @layer base. Unlayered, this rule BEATS `@layer utilities`, so
+ * its `px-3` silently overrode every `pl-*`/`pr-*` written in JSX — app-wide.
+ * That is what put the lock icon on top of "Enter dashboard password" on the
+ * login page: the input asked for `pl-10` (40px) and rendered with 12px, so the
+ * icon at `left-3` sat directly on the first glyph. Measured, not guessed —
+ * scripts/ui-geometry-audit.mjs reported "padding-left is 12px but needs ≥ 27px".
+ *
+ * In `base` the cascade is correct: these remain the defaults for any control
+ * that asks for nothing, and any control that DOES pass a padding utility gets
+ * what its author actually wrote.
+ */
+@layer base {
+  input, select, textarea {
+  @apply bg-surface border border-line text-fg rounded-md px-3 py-2 focus:outline-none focus:border-primary transition-colors;
+  }
 }
 
 /**
@@ -455,6 +484,31 @@ input, select, textarea {
 }
 
 /**
+ * focusRing "subtle" — the DEFAULT, and the one nearly everyone runs.
+ *
+ * THE BUG THIS FIXES. The pref advertises "2px, tight", but subtle used to emit
+ * NO RULE at all on the theory that it was "stock browser/Tailwind behaviour".
+ * There is no stock behaviour left to fall back on: the `input, select,
+ * textarea` rule above carries `focus:outline-none`, which erases the browser
+ * outline, and its replacement `focus:border-primary` sits in `@layer base`
+ * while every per-element `border-*` class in the JSX sits in `@layer
+ * utilities` — a later layer, so the utility wins on focus too and the border
+ * never changes.
+ *
+ * Measured with a real Tab press: a focused <select> on /backtest matched
+ * :focus-visible while its outline, box-shadow AND border were byte-identical
+ * to the same element unfocused. 35 controls across the app had no keyboard
+ * focus indicator of any kind on the default setting.
+ *
+ * !important for exactly the reason the strong rule below needs it, and
+ * :focus-visible so a mouse click still does not paint a ring.
+ */
+:root:not([data-focus="strong"]) :focus-visible {
+    outline: 2px solid var(--color-primary) !important;
+    outline-offset: 1px !important;
+}
+
+/**
  * focusRing "strong" — a thick, high-contrast, keyboard-only ring.
  * !important is required, not lazy: the input rule above (and plenty of JSX)
  * carries `focus:outline-none`, which would otherwise erase this.
@@ -467,4 +521,32 @@ input, select, textarea {
        surface close to --color-primary; the runtime block emits it too, and this
        static half has to match it for the same reason as underlineLinks above. */
     box-shadow: 0 0 0 5px color-mix(in oklab, var(--color-primary) 35%, transparent) !important;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * POINTER TARGET SIZE (WCAG 2.2 AA 2.5.8)
+ *
+ * Grows the pointer target to 24×24 WITHOUT changing the painted size or the
+ * layout box. Inline icon buttons — a 14px "?" glyph in running text, a ±1
+ * stepper in a dense table — must stay visually small to sit where they sit,
+ * but a 14×11 tap target is not usable on touch or with a tremor.
+ *
+ * The ::after box is centred on the button and paints nothing; it only
+ * receives pointer events. `max(100%, 24px)` means a button that is already
+ * big enough is left exactly as it is.
+ *
+ * In `@layer utilities` on purpose — see the layering warning above: anything
+ * unlayered would beat it.
+ * ───────────────────────────────────────────────────────────────────────────*/
+@layer utilities {
+  .hit-target { position: relative; }
+  .hit-target::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, 24px);
+    height: max(100%, 24px);
+    transform: translate(-50%, -50%);
+  }
 }

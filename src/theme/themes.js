@@ -147,6 +147,18 @@ export const THEMES = [
                 floor: 1.50,
                 why: 'both hexes are pinned to the shipping stylesheet (#41434d on #262730) by the pixel-identity requirement in spec §3; clearing 1.60 needs L 0.398 vs the shipped 0.385',
             },
+            {
+                group: 'ink/surface',
+                id: 'danger on card',
+                floor: 3.95,
+                why: '#ff2b2b is one of the three LEGACY status hexes spec §3 freezes, and it is the ink on every negative P&L number in the app. The other eleven themes clear 4.5 since the status tokens were split into ink/fill roles; this one cannot move without changing the default theme\'s shipped appearance. Unpinning `danger` here is a product decision, not a palette one — it is the single highest-volume contrast shortfall left in the UI.',
+            },
+            {
+                group: 'ink/surface',
+                id: 'danger on card-2',
+                floor: 4.35,
+                why: 'same pinned #ff2b2b as above, measured against the raised card. Closer to the line (4.40 vs 4.50) but the same freeze causes it.',
+            },
         ],
     },
     {

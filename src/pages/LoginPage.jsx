@@ -78,7 +78,10 @@ export default function LoginPage() {
                                     // password field -> submit, not via this toggle.
                                     // It stays reachable by screen readers and mouse.
                                     tabIndex={-1}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-5 hover:text-fg-3"
+                                    // grid+size gives a 24px hit area around a 16px
+                                    // glyph: WCAG 2.2 AA 2.5.8 wants ≥24×24, and the
+                                    // bare icon measured 16×16.
+                                    className="absolute right-2 top-1/2 -translate-y-1/2 grid place-items-center w-6 h-6 rounded text-fg-5 hover:text-fg-3"
                                 >
                                     {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                                 </button>
@@ -120,7 +123,7 @@ export default function LoginPage() {
                 </div>
 
                 {/* Footer hint */}
-                <p className="text-center text-3xs text-fg-6 mt-4">
+                <p className="text-center text-3xs text-fg-5 mt-4">
                     🔒 Rate-limited · HMAC-signed · HttpOnly · SameSite
                 </p>
             </div>

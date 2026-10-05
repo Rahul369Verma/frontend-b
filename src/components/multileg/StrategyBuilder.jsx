@@ -212,9 +212,25 @@ export default function StrategyBuilder() {
     // have different row heights, so the old scroll offset no longer lands on
     // ATM.
     useEffect(() => {
-        if (atmRowRef.current?.scrollIntoView) {
-            try { atmRowRef.current.scrollIntoView({ block: 'center' }); } catch { /* jsdom / old browsers */ }
-        }
+        const row = atmRowRef.current;
+        if (!row || typeof row.getBoundingClientRect !== 'function') return;
+        try {
+            // NOT scrollIntoView. That scrolls EVERY scrollable ancestor, so
+            // centring the ATM row inside this ladder also dragged the page's
+            // own <main> down — arriving at /multi-leg put you 1,371px below the
+            // title, which measured as the page having no header at all.
+            // Scroll only the ladder's own container.
+            let box = row.parentElement;
+            while (box && box !== document.body) {
+                const st = window.getComputedStyle(box);
+                if (/(auto|scroll)/.test(st.overflowY) && box.scrollHeight > box.clientHeight) break;
+                box = box.parentElement;
+            }
+            if (!box || box === document.body) return;
+            const rowR = row.getBoundingClientRect();
+            const boxR = box.getBoundingClientRect();
+            box.scrollTop += (rowR.top - boxR.top) - (boxR.height - rowR.height) / 2;
+        } catch { /* jsdom / old browsers */ }
     }, [chain, chainView]);
 
     // Changing instrument invalidates every strike (different spot AND different
@@ -668,7 +684,7 @@ export default function StrategyBuilder() {
                     {num(chain?.pcr) != null && <span>PCR {fmt(chain.pcr, 2)}</span>}
                     {num(chain?.maxPain) != null && <span>max pain {fmt(chain.maxPain)}</span>}
                     {chain?.ageSec != null && (
-                        <span className={chain.stale ? 'text-warning' : 'text-fg-6'}>
+                        <span className={chain.stale ? 'text-warning' : 'text-fg-5'}>
                             chain {chain.ageSec < 90 ? `${chain.ageSec}s` : `${Math.round(chain.ageSec / 60)}m`} old{chain.stale ? ' · ⚠ stale' : ''}
                         </span>
                     )}
@@ -723,7 +739,7 @@ export default function StrategyBuilder() {
                         {templates.map(t => <option key={t.key} value={t.key}>{t.name} · {t.outlook}</option>)}
                     </select>
                     {tplKey && <button onClick={clearLegs} className="text-3xs text-fg-5 hover:text-fg-3">clear legs</button>}
-                    {!chain && <span className="text-3xs text-fg-6">needs the chain (for ATM + strike step)</span>}
+                    {!chain && <span className="text-3xs text-fg-5">needs the chain (for ATM + strike step)</span>}
                 </div>
 
                 {/* Pull an existing deployment apart. LIVE first and marked —
@@ -757,10 +773,10 @@ export default function StrategyBuilder() {
                         <button onClick={() => { setDepKey(''); setDepNote(null); clearLegs(); }}
                             className="text-3xs text-fg-5 hover:text-fg-3">clear</button>
                     )}
-                    {!deployments.length && <span className="text-3xs text-fg-6">no deployments found</span>}
+                    {!deployments.length && <span className="text-3xs text-fg-5">no deployments found</span>}
                 </div>
                 {depNote && <div className="text-3xs text-sky-300/80 mt-1">{depNote}</div>}
-                <div className="text-3xs text-fg-6 mt-1">
+                <div className="text-3xs text-fg-5 mt-1">
                     Template offsets are relative to ATM in strike steps, toward OTM. They are resolved to absolute strikes here — edit anything afterwards; the structure is no longer template-bound.
                 </div>
                 {seededFar && (
@@ -788,7 +804,7 @@ export default function StrategyBuilder() {
                             <span className="text-3xs text-fg-4">worst leg half-spread<Help k="max-half-spread-pct" /> {pct(liq.worstHalfSpreadPct, 2)}</span>
                             <span className="text-3xs text-fg-4">round-trip {rup(liq.roundTripRupees)}</span>
                             <span className={`text-3xs ${num(liq.costPctOfGross) > 10 ? 'text-danger' : 'text-fg-4'}`}>{pct(liq.costPctOfGross, 1)} of gross</span>
-                            <span className="text-3xs text-fg-6">{GRADE_NOTE[liq.grade] || GRADE_NOTE.unknown}</span>
+                            <span className="text-3xs text-fg-5">{GRADE_NOTE[liq.grade] || GRADE_NOTE.unknown}</span>
                         </div>
                     )}
                 </div>
@@ -818,7 +834,7 @@ export default function StrategyBuilder() {
                             title={`Shift DOWN — move EVERY leg one strike step (${fmt(step)} pts) lower. The shape is untouched; only where it sits against spot changes.`}>↓ shift</button>
                         <button onClick={() => shiftAll(1)} disabled={!distinctStrikes.length} className={btnCls}
                             title={`Shift UP — move EVERY leg one strike step (${fmt(step)} pts) higher. The shape is untouched; only where it sits against spot changes.`}>↑ shift</button>
-                        <span className="text-fg-6">|</span>
+                        <span className="text-fg-5">|</span>
                         <button onClick={() => changeWidth(-1)} disabled={!canWidth} className={btnCls}
                             title={canWidth
                                 ? `Narrow — pull every leg one step (${fmt(step)} pts) TOWARD the structure's centre (${fmt(centreStrike)}). Tighter wings: less credit, less risk. No leg is allowed to cross the centre.`
@@ -827,8 +843,8 @@ export default function StrategyBuilder() {
                             title={canWidth
                                 ? `Widen — push every leg one step (${fmt(step)} pts) AWAY from the structure's centre (${fmt(centreStrike)}). Wider wings: more credit, more risk.`
                                 : widthReason}>←→ widen</button>
-                        {!canWidth && <span className="text-fg-6">width needs 2+ distinct strikes</span>}
-                        <span className="text-fg-6">|</span>
+                        {!canWidth && <span className="text-fg-5">width needs 2+ distinct strikes</span>}
+                        <span className="text-fg-5">|</span>
                         <label className="flex items-center gap-1 text-fg-5"
                             title="Scale EVERY leg's ratio by this multiplier — 2× turns a 1:1 spread into 2:2. It is applied relative to whatever is already set, so returning to 1× restores the original ratios. To change SIZE without changing shape, use Lots at the top instead.">
                             ratio ×
@@ -839,12 +855,12 @@ export default function StrategyBuilder() {
                                 {RATIO_MULTIPLIERS.map(m => <option key={m} value={m}>{m}×</option>)}
                             </select>
                         </label>
-                        <span className="text-fg-6">step {fmt(step)}</span>
+                        <span className="text-fg-5">step {fmt(step)}</span>
                     </div>
 
                     {legs.length === 0 ? (
                         <div className="text-2xs text-fg-5 py-8 text-center border border-dashed border-line rounded-lg">
-                            No legs yet. Click a strike in the ladder, seed a template, or press <span className="text-primary">+ leg</span>.
+                            No legs yet. Click a strike in the ladder, seed a template, or press <span className="text-primary-ink">+ leg</span>.
                         </div>
                     ) : (
                         <div className="space-y-1.5">
@@ -880,14 +896,14 @@ export default function StrategyBuilder() {
                                             </button>
                                             {/* STRIKE STEPPERS — one strike step per press, on the chain's own grid */}
                                             <button onClick={(e) => { e.stopPropagation(); bumpStrike(l.id, -1); }}
-                                                className="text-2xs w-5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-fg"
+                                                className="hit-target text-2xs w-5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-fg"
                                                 title={`One strike step DOWN (−${fmt(step)} pts) — this leg only`}>−</button>
                                             <input type="number" value={l.strike} placeholder="strike"
                                                 step={step}
                                                 onChange={e => patchLeg(l.id, { strike: e.target.value, premium: '' })}
                                                 className={`${cellCls} w-20`} title="Strike" />
                                             <button onClick={(e) => { e.stopPropagation(); bumpStrike(l.id, 1); }}
-                                                className="text-2xs w-5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-fg"
+                                                className="hit-target text-2xs w-5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-fg"
                                                 title={`One strike step UP (+${fmt(step)} pts) — this leg only`}>+</button>
                                             <input type="number" min={1} value={l.ratio}
                                                 onChange={e => patchLeg(l.id, { ratio: Math.max(1, num(e.target.value) || 1) })}
@@ -901,9 +917,9 @@ export default function StrategyBuilder() {
                                                 className={`${cellCls} w-20`} title="Premium per unit. Blank = priced live by the server." />
                                             <div className="ml-auto flex gap-1">
                                                 <button onClick={(e) => { e.stopPropagation(); dupLeg(l.id); }} disabled={legs.length >= MAX_LEGS}
-                                                    className="text-3xs px-1.5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-fg disabled:opacity-30" title="Duplicate this leg">⧉</button>
+                                                    className="hit-target text-3xs px-1.5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-fg disabled:opacity-30" title="Duplicate this leg">⧉</button>
                                                 <button onClick={(e) => { e.stopPropagation(); removeLeg(l.id); }}
-                                                    className="text-3xs px-1.5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-danger" title="Remove this leg">✕</button>
+                                                    className="hit-target text-3xs px-1.5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-danger" title="Remove this leg">✕</button>
                                             </div>
                                         </div>
                                         <div className="text-4xs font-mono text-fg-5 mt-1 flex flex-wrap gap-x-2">
@@ -932,7 +948,7 @@ export default function StrategyBuilder() {
                                                     )}
                                                 </>
                                             )}
-                                            {!rl && !loading && <span className="text-fg-6">not priced yet</span>}
+                                            {!rl && !loading && <span className="text-fg-5">not priced yet</span>}
                                         </div>
                                     </div>
                                 );
@@ -951,7 +967,7 @@ export default function StrategyBuilder() {
                         </button>
                         {saveState && <span className={`text-3xs ${saveState.ok ? 'text-success' : 'text-danger'}`}>{saveState.msg}</span>}
                     </div>
-                    <div className="text-4xs text-fg-6 mt-1">Saved as a <span className="font-mono">custom</span> structure with absolute strikes — it is a snapshot of these legs, not a relative recipe that re-centres on a future ATM.</div>
+                    <div className="text-4xs text-fg-5 mt-1">Saved as a <span className="font-mono">custom</span> structure with absolute strikes — it is a snapshot of these legs, not a relative recipe that re-centres on a future ATM.</div>
                 </div>
 
                 {/* ── STRIKE LADDER ─────────────────────────────────────── */}
@@ -1044,7 +1060,7 @@ export default function StrategyBuilder() {
                                 value={num(an.dteCalendar) != null ? `${fmt(an.dteCalendar, 2)} d` : '—'}
                                 sub={an.nearestExpiry || null} />
                         </div>
-                        <div className="text-4xs text-fg-6 mt-1.5">
+                        <div className="text-4xs text-fg-5 mt-1.5">
                             Per-unit (&quot;/u&quot;) and rupee figures are the same number in different units<Help k="per-unit-vs-rupees" /> — ×{fmt(lotSize)} lot size ×{fmt(body.lots)} lots. All gross.
                         </div>
 
@@ -1066,7 +1082,7 @@ export default function StrategyBuilder() {
                                 </div>
                                 <table className="text-3xs font-mono">
                                     <thead>
-                                        <tr className="text-fg-6 text-4xs">
+                                        <tr className="text-fg-5 text-4xs">
                                             <th className="font-normal text-left pr-4">SD</th>
                                             <th className="font-normal text-right px-3">points</th>
                                             <th className="font-normal text-right px-3">% of spot</th>
@@ -1086,7 +1102,7 @@ export default function StrategyBuilder() {
                                         ))}
                                     </tbody>
                                 </table>
-                                <div className="text-4xs text-fg-6 mt-1">
+                                <div className="text-4xs text-fg-5 mt-1">
                                     The move the market is pricing between now and the nearest expiry, at this IV. Roughly 68% of outcomes land inside ±1σ and 95% inside ±2σ — IF the IV being used is right, which is exactly the assumption a short structure is making.
                                 </div>
                             </div>
@@ -1201,7 +1217,7 @@ export default function StrategyBuilder() {
                             className="w-full accent-fuchsia-500" />
                     </label>
                 </div>
-                <div className="text-4xs text-fg-6 mt-1">Days forward is CALENDAR time — a weekend ages the position without a single tick, and the slider stops at the nearest expiry.</div>
+                <div className="text-4xs text-fg-5 mt-1">Days forward is CALENDAR time — a weekend ages the position without a single tick, and the slider stops at the nearest expiry.</div>
 
                 {wifOn && (
                     <div className="mt-3">

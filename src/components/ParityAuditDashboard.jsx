@@ -227,14 +227,14 @@ function ResultRow({ row, expanded, onToggle }) {
                                 {/* Tolerance gauge */}
                                 {row.threshold > 0 && (
                                     <div>
-                                        <div className="text-3xs text-fg-6 mb-1">Tolerance gauge</div>
+                                        <div className="text-3xs text-fg-5 mb-1">Tolerance gauge</div>
                                         <div className="h-2 bg-slate-800 rounded-full w-full relative overflow-hidden">
                                             <div
                                                 className={`h-full rounded-full transition-all ${variant === 'fail' ? 'bg-rose-500' : variant === 'warn' ? 'bg-amber-500' : 'bg-emerald-500'}`}
                                                 style={{ width: `${Math.min(100, (row.value / row.threshold) * 100).toFixed(1)}%` }}
                                             />
                                         </div>
-                                        <div className="flex justify-between text-3xs text-fg-6 mt-0.5">
+                                        <div className="flex justify-between text-3xs text-fg-5 mt-0.5">
                                             <span>0</span><span>limit ({row.threshold.toExponential(2)})</span>
                                         </div>
                                     </div>
@@ -242,9 +242,9 @@ function ResultRow({ row, expanded, onToggle }) {
 
                                 {/* Illustrative delta overlay chart */}
                                 <div>
-                                    <div className="text-3xs text-fg-6 mb-1 flex items-center gap-2">
+                                    <div className="text-3xs text-fg-5 mb-1 flex items-center gap-2">
                                         Standard vs. Nitro delta — illustrative (bars 100+, warm-up skipped)
-                                        <span className="italic text-fg-6">Synthetic profile scaled to reported max_diff</span>
+                                        <span className="italic text-fg-5">Synthetic profile scaled to reported max_diff</span>
                                     </div>
                                     <div className="h-32">
                                         <ResponsiveContainer width="100%" height="100%">
@@ -492,7 +492,7 @@ export default function ParityAuditDashboard() {
                     <div>
                         <label htmlFor="parityauditdashboard-warm-up-skip-5" className="text-xs text-fg-4 uppercase tracking-wider font-bold block mb-1">
                             Warm-up Skip
-                            <span className="ml-1 text-fg-6 font-normal normal-case">(bars)</span>
+                            <span className="ml-1 text-fg-5 font-normal normal-case">(bars)</span>
                         </label>
                         <input id="parityauditdashboard-warm-up-skip-5"
                             type="number" min={50} max={500} value={config.skip}
@@ -505,7 +505,7 @@ export default function ParityAuditDashboard() {
                     <div>
                         <label htmlFor="parityauditdashboard-tolerance-6" className="text-xs text-fg-4 uppercase tracking-wider font-bold block mb-1">
                             Tolerance
-                            <span className="ml-1 text-fg-6 font-normal normal-case">(abs)</span>
+                            <span className="ml-1 text-fg-5 font-normal normal-case">(abs)</span>
                         </label>
                         <select id="parityauditdashboard-tolerance-6"
                             value={config.tol}
@@ -646,7 +646,7 @@ export default function ParityAuditDashboard() {
                     </div>
 
                     {filteredResults.length > 0 && (
-                        <div className="px-4 py-2 border-t border-line-0 text-3xs text-fg-6">
+                        <div className="px-4 py-2 border-t border-line-0 text-3xs text-fg-5">
                             {filteredResults.length} row{filteredResults.length !== 1 ? 's' : ''} shown
                             {filterMode !== 'all' && ` (filtered from ${results.length} total)`}
                             {' · '}Click any row to expand the indicator delta chart.

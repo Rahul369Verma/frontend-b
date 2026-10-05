@@ -7,7 +7,7 @@ import {
 } from '../components/viz/primitives';
 import AttributionPanel from '../components/viz/AttributionPanel';
 import RiskLimitsPanel from '../components/risk/RiskLimitsPanel';
-import { inr, num, useChartTheme } from '../components/viz/tokens';
+import { inr, num, istTime, useChartTheme } from '../components/viz/tokens';
 import { pollInterval } from '../hooks/usePolling.js';
 import { API_URL } from '../config/api.js';
 
@@ -140,8 +140,8 @@ export default function Risk() {
                 <Tabs className="flex-1 border-b-0" ariaLabel="Risk views"
                     tabs={tabs.map((t) => ({ id: t.key, label: t.label, icon: t.icon }))}
                     value={tab} onChange={setTab} />
-                {lastAt && <span className="ml-auto self-center text-2xs text-fg-6">
-                    updated {lastAt.toLocaleTimeString('en-IN')}
+                {lastAt && <span className="ml-auto self-center text-2xs text-fg-5">
+                    updated {istTime(lastAt)}
                 </span>}
             </div>
 
@@ -562,7 +562,7 @@ function Portfolio({ factors }) {
                         { key: 'r2', header: 'R²', align: 'right', render: r => r.ok ? num(r.r2) : '—' },
                         { key: 'dominantFactor', header: 'Driver', render: r => r.ok
                             ? <span className="text-fg-2">{r.dominantFactor}</span>
-                            : <span className="text-fg-6">{r.reason}</span> },
+                            : <span className="text-fg-5">{r.reason}</span> },
                         { key: 'interpretation', header: 'Reading', render: r => (
                             <span className="text-fg-4 whitespace-normal">{r.ok ? r.interpretation : ''}</span>
                         ) },

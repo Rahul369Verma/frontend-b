@@ -16,7 +16,7 @@ export function Help({ k, className = '' }) {
                 onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); }}
                 aria-label={`What does "${h.label}" mean?`}
                 aria-expanded={open}
-                className="ml-1 w-3.5 h-3.5 rounded-full border border-line-2 text-fg-5 hover:text-sky-300 hover:border-sky-500 text-4xs leading-none align-middle">?</button>
+                className="hit-target ml-1 w-3.5 h-3.5 rounded-full border border-line-2 text-fg-5 hover:text-sky-300 hover:border-sky-500 text-4xs leading-none align-middle">?</button>
             {open && (
                 <>
                     <span className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setOpen(false); }} />

@@ -8,6 +8,8 @@
 // components in one module breaks Fast Refresh (and trips
 // react-refresh/only-export-components).
 
+import { inr } from '../viz/tokens.js';
+
 export const num = (v) => {
     if (v === null || v === undefined || v === '') return null;
     const n = Number(v);
@@ -19,12 +21,14 @@ export const fmt = (v, d = 0) => {
     return n == null ? '—' : n.toLocaleString('en-IN', { maximumFractionDigits: d });
 };
 
-/** Rupees with a proper minus glyph and the sign outside the ₹. */
-export const rup = (v, d = 0) => {
-    const n = num(v);
-    if (n == null) return '—';
-    return `${n < 0 ? '−' : ''}₹${Math.abs(n).toLocaleString('en-IN', { maximumFractionDigits: d })}`;
-};
+/**
+ * Rupees, sign outside the ₹.
+ *
+ * Delegates to the app's single rupee formatter. This used to be a private copy
+ * using U+2212 while viz/tokens.js used an ASCII hyphen, so a Zone Finder tile
+ * and the P&L beside it disagreed about how a negative number is written.
+ */
+export const rup = (v, d = 0) => inr(v, { dp: d });
 
 export const pct = (v, d = 1) => {
     const n = num(v);
@@ -54,6 +58,23 @@ export const compact = (v) => {
     if (a >= 1e5) return `${(n / 1e5).toFixed(1)}L`;
     if (a >= 1e3) return `${Math.round(n / 1e3)}k`;
     return String(Math.round(n));
+};
+
+/**
+ * Profit factor of a metrics block ({ profitFactor, grossLoss, wins }).
+ * A window with no losing trade has PF ∞, which reaches the client as null
+ * (JSON has no Infinity) — so null only means ∞ when the block itself shows
+ * wins and zero gross loss; otherwise it is unknown.
+ */
+export const pfValue = (x) => {
+    if (!x) return null;
+    const pf = num(x.profitFactor);
+    if (pf != null) return pf;
+    return x.grossLoss === 0 && x.wins > 0 ? Infinity : null;
+};
+export const pfText = (x) => {
+    const v = pfValue(x);
+    return v === Infinity ? '∞' : fmt(v, 2);
 };
 
 export const shortSym = (s) => String(s || '').replace('NSE:', '').replace('BSE:', '').replace('-INDEX', '');
@@ -95,6 +116,25 @@ export function interpAt(curve, x, key) {
     if (av == null || bv == null) return null;
     const span = b.spot - a.spot;
     return span === 0 ? av : av + (bv - av) * ((x - a.spot) / span);
+}
+
+/** How far `at` sits from a reference spot, in points AND percent:
+ *  label "+697 pts (+1.25%)". A payoff curve is read as "how far would the
+ *  index have to move" — the level alone makes you do that subtraction at
+ *  every hover, and the percentage is the half that says whether the move is
+ *  plausible at all. `at` is true within half a point, where a signed zero
+ *  would be noise. null when either end is missing: a chart with no entry
+ *  spot prints nothing, not "0%" measured from Number(null). */
+export function spotMove(at, ref) {
+    const a = num(at), r = num(ref);
+    if (a == null || r == null || r <= 0) return null;
+    const pts = a - r;
+    const pct = (pts / r) * 100;
+    const dir = pts > 0 ? '+' : '−';
+    return {
+        pts, pct, at: Math.abs(pts) < 0.5,
+        label: `${dir}${fmt(Math.abs(pts), 0)} pts (${dir}${Math.abs(pct).toFixed(2)}%)`,
+    };
 }
 
 export const inputCls = 'w-full mt-1 bg-slate-800 border border-line rounded p-1.5 text-fg-2';

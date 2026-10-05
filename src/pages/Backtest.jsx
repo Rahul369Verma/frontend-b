@@ -8,6 +8,7 @@ import CollapsibleCard from '../components/CollapsibleCard';
 import { PageHeader, Spinner } from '../components/viz/primitives';
 import { FlaskConical as BacktestIcon } from 'lucide-react';
 import AttributionPanel from '../components/viz/AttributionPanel';
+import VixBreakdownPanel from '../components/viz/VixBreakdownPanel';
 import { useChartTheme } from '../theme/chartTheme.js';
 
 
@@ -53,6 +54,7 @@ import { API_URL } from '../config/api.js';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { useConfirm } from '../components/confirmContext.js';
 import { toast } from '../components/toastStore.js';
+import { pnlTone } from '../components/viz/tokens';
 
 // Fallback model list — used only if /api/ai-confirmation/models fails.
 // Live list comes from Python's MODEL_REGISTRY via the API.
@@ -1338,7 +1340,7 @@ export default function Backtest() {
         ) : (
         <div className="bg-surface p-6 rounded-xl border border-line space-y-6 sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto">
           <div className="flex items-center justify-between">
-            <h3 className="text-xl font-bold">Configuration</h3>
+            <h2 className="text-xl font-bold">Configuration</h2>
             <button
               onClick={toggleConfigCollapsed}
               title="Collapse Configuration"
@@ -1588,10 +1590,11 @@ export default function Backtest() {
                  {/* Gemini Risk Filter */}
                  <div className="border-t border-purple-800/20 pt-2 flex items-center justify-between">
                      <div>
-                         <label className="text-sm text-purple-200">✨ Gemini Risk Filter</label>
+                         <label htmlFor="backtest-gemini-risk-filter" className="text-sm text-purple-200">✨ Gemini Risk Filter</label>
                          <p className="text-3xs text-fg-5 leading-tight">Batch confirms signals via Gemma 3 27B</p>
                      </div>
                      <input
+                        id="backtest-gemini-risk-filter"
                         type="checkbox"
                         className="w-4 h-4 accent-purple-400 cursor-pointer"
                         checked={params.enable_ai_confirmation || false}
@@ -1870,7 +1873,7 @@ export default function Backtest() {
 
             {/* 2. Risk & Sizing */}
             <div className="border-t border-line pt-4 space-y-4">
-                <h4 className="text-sm font-bold text-fg-3">🛡️ Risk & Sizing</h4>
+                <h3 className="text-sm font-bold text-fg-3">🛡️ Risk & Sizing</h3>
                 
                 <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -1939,7 +1942,7 @@ export default function Backtest() {
 
             {/* 3. Exit & SL/TP (ATR) */}
             <div className="border-t border-line pt-4 space-y-4">
-                <h4 className="text-sm font-bold text-fg-3">🎯 Exit & SL/TP (ATR)</h4>
+                <h3 className="text-sm font-bold text-fg-3">🎯 Exit & SL/TP (ATR)</h3>
                 
                 {params.strategy === 'rl_agent' && (
                     <div className="col-span-2 flex items-start gap-2 bg-violet-900/20 border border-violet-700/40 rounded p-3 mb-2">
@@ -2112,11 +2115,11 @@ export default function Backtest() {
                 {/* ── Internal ML model filter ── */}
                 <div>
                     <div className="flex items-center justify-between mb-2">
-                        <h4 className="text-sm font-bold text-fg-3 flex items-center gap-2">
+                        <h3 className="text-sm font-bold text-fg-3 flex items-center gap-2">
                             <Activity className="w-4 h-4 text-purple-400" />
                             AI Confirmation
                             <span className="text-3xs bg-purple-900/40 text-purple-300 px-1 rounded ml-1">Beta</span>
-                        </h4>
+                        </h3>
                         <input
                           type="checkbox"
                           className="w-4 h-4 accent-purple-500 cursor-pointer"
@@ -2164,12 +2167,12 @@ export default function Backtest() {
                 <div className="bg-slate-800/40 rounded border border-purple-900/40 p-3">
                     <div className="flex items-center justify-between">
                         <div>
-                            <h4 className="text-sm font-bold text-purple-300 flex items-center gap-1">
+                            <h3 className="text-sm font-bold text-purple-300 flex items-center gap-1">
                                 ✨ AI Risk Filter
                                 <span className="text-3xs bg-purple-900/50 text-purple-400 px-1 rounded ml-1">Multi-Model</span>
-                            </h4>
+                            </h3>
                             <p className="text-3xs text-fg-5 mt-0.5 leading-tight">
-                                Confirms every signal via AI before PnL. Select multiple models to split<br/>
+                                Confirms every signal via AI before P&L. Select multiple models to split<br/>
                                 signals across them in parallel — faster than a single model for large runs.
                             </p>
                         </div>
@@ -2231,7 +2234,7 @@ export default function Backtest() {
                                                         }}
                                                     />
                                                     <span className={selected ? 'text-purple-200' : 'text-fg-4'}>{m.label}</span>
-                                                    <span className="text-3xs text-fg-6 ml-auto">{m.quota}</span>
+                                                    <span className="text-3xs text-fg-5 ml-auto">{m.quota}</span>
                                                 </label>
                                             );
                                         });
@@ -2789,7 +2792,7 @@ export default function Backtest() {
 
             {/* 4. Strategy Specific Params */}
             <div className="border-t border-line pt-4 space-y-4">
-                <h4 className="text-sm font-bold text-fg-3">⚡ Strategy Parameters</h4>
+                <h3 className="text-sm font-bold text-fg-3">⚡ Strategy Parameters</h3>
                 
                 <div className="grid grid-cols-2 gap-4">
                     {/* Explicit ORB Inputs for Better UX (Dropdown) */}
@@ -3001,7 +3004,7 @@ export default function Backtest() {
                                                                 }}
                                                             />
                                                             <span>{m.model_name || m.symbol} <span className="text-fg-5">({tag})</span></span>
-                                                            <span className="text-fg-6 ml-auto text-3xs">{file}</span>
+                                                            <span className="text-fg-5 ml-auto text-3xs">{file}</span>
                                                         </label>
                                                     );
                                                 });
@@ -3051,7 +3054,7 @@ export default function Backtest() {
                             };
                             return (
                                 <div key={key} className="col-span-2">
-                                    <label className="block text-xs text-fg-4 mb-1">{label} <span className="text-fg-6">({selected.length} voting)</span></label>
+                                    <label className="block text-xs text-fg-4 mb-1">{label} <span className="text-fg-5">({selected.length} voting)</span></label>
                                     <div className="flex flex-wrap gap-1.5">
                                         {COUNCIL_MEMBER_OPTIONS.map(id => {
                                             const on = selected.includes(id);
@@ -3140,7 +3143,7 @@ export default function Backtest() {
         {/* Results */}
         <div className={`${configCollapsed ? '' : 'lg:col-span-2'} bg-surface p-6 rounded-xl border border-line min-h-[500px]`}>
           <div className="flex items-center justify-between mb-6">
-            <h3 className="text-xl font-bold">Results</h3>
+            <h2 className="text-xl font-bold">Results</h2>
             {loading ? (
                 <button
                     onClick={stopBacktest}
@@ -3153,7 +3156,7 @@ export default function Backtest() {
             ) : (
                 <button
                     onClick={runBacktest}
-                    className="bg-primary hover:bg-blue-600 text-white font-bold py-2 px-5 rounded-lg flex items-center gap-2 transition-colors text-sm"
+                    className="bg-primary hover:bg-blue-600 text-on-primary font-bold py-2 px-5 rounded-lg flex items-center gap-2 transition-colors text-sm"
                 >
                     <Play className="w-4 h-4" /> Run Backtest
                 </button>
@@ -3193,16 +3196,35 @@ export default function Backtest() {
                 </CollapsibleCard>
               )}
 
+              {/* P&L by India VIX band: which DAYS (by the VIX known before the
+                  open) this strategy actually earns on. Present on every run,
+                  filter on or off; the filter itself is the VIX params at the
+                  bottom of the strategy form. */}
+              {result.vix && (
+                <CollapsibleCard
+                  title="India VIX breakdown"
+                  icon={Activity}
+                  storageKey="backtest:vix"
+                  defaultOpen
+                  bodyClassName="px-4 pb-4 pt-0"
+                  summary={<span className="text-xs text-fg-5">
+                    which VIX days this strategy makes money on
+                  </span>}
+                >
+                  <VixBreakdownPanel data={result.vix} />
+                </CollapsibleCard>
+              )}
+
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 <div className="p-4 bg-slate-800 rounded-lg">
                   <p className="text-fg-4 text-sm">Total P&L</p>
-                  <p className={`text-xl font-bold ${result.metrics.totalPnL >= 0 ? 'text-success' : 'text-danger'}`}>
+                  <p className={`text-xl font-bold ${pnlTone(result.metrics.totalPnL)}`}>
                     ₹{result.metrics.totalPnL.toFixed(2)}
                   </p>
                 </div>
                 <div className="p-4 bg-slate-800 rounded-lg">
-                  <p className="text-fg-4 text-sm">Avg PnL / Trade</p>
-                  <p className={`text-xl font-bold ${result.metrics.avgPnL >= 0 ? 'text-success' : 'text-danger'}`}>
+                  <p className="text-fg-4 text-sm">Avg P&L / Trade</p>
+                  <p className={`text-xl font-bold ${pnlTone(result.metrics.avgPnL)}`}>
                     ₹{result.metrics.avgPnL}
                   </p>
                 </div>
@@ -3324,7 +3346,7 @@ export default function Backtest() {
                 return (
                 <div className="bg-slate-800 rounded-lg p-4">
                   <div className="flex items-center justify-between mb-3">
-                    <h4 className="text-fg-4">Equity Curve</h4>
+                    <h3 className="text-fg-4">Equity Curve</h3>
                     <div className="flex items-center gap-2">
                       {showAiSim && hasAiSimAvail && (
                         <div className="flex items-center rounded border border-line-2 overflow-hidden text-xs">
@@ -3335,7 +3357,7 @@ export default function Backtest() {
                             return (
                               <button
                                 key={m.key}
-                                className={`px-2.5 py-1 transition-colors ${i > 0 ? 'border-l border-line-2' : ''} ${m.needsData ? 'text-fg-6 cursor-not-allowed' : isActive ? m.color : 'text-fg-4 hover:text-fg-2'}`}
+                                className={`px-2.5 py-1 transition-colors ${i > 0 ? 'border-l border-line-2' : ''} ${m.needsData ? 'text-fg-5 cursor-not-allowed' : isActive ? m.color : 'text-fg-4 hover:text-fg-2'}`}
                                 onClick={() => !m.needsData && selectResimView(m.key)}
                                 title={m.title || (isCached ? `View ${m.label} simulation` : `Compute and view ${m.label} simulation`)}
                                 disabled={m.needsData}
@@ -3366,7 +3388,7 @@ export default function Backtest() {
                         <div className="grid grid-cols-4 gap-2 text-center">
                           <div className="bg-slate-700/60 rounded p-2">
                             <p className="text-3xs text-fg-4">Strategy P&L</p>
-                            <p className={`text-sm font-bold ${aiSimData.originalPnl >= 0 ? 'text-success' : 'text-danger'}`}>
+                            <p className={`text-sm font-bold ${pnlTone(aiSimData.originalPnl)}`}>
                               ₹{aiSimData.originalPnl.toFixed(0)}
                             </p>
                           </div>
@@ -3378,13 +3400,13 @@ export default function Backtest() {
                               {aiSlTpView === 'ai_both'  && 'AI SL + AI TP P&L'}
                               {aiSlTpView === 'ai_fve'   && 'AI SL+TP + Fair Entry P&L'}
                             </p>
-                            <p className={`text-sm font-bold ${aiSimData.totalPnl >= 0 ? 'text-success' : 'text-danger'}`}>
+                            <p className={`text-sm font-bold ${pnlTone(aiSimData.totalPnl)}`}>
                               ₹{aiSimData.totalPnl.toFixed(0)}
                             </p>
                           </div>
                           <div className="bg-slate-700/60 rounded p-2">
                             <p className="text-3xs text-fg-4">Difference</p>
-                            <p className={`text-sm font-bold ${diff >= 0 ? 'text-success' : 'text-danger'}`}>
+                            <p className={`text-sm font-bold ${pnlTone(diff)}`}>
                               {diff >= 0 ? '+' : ''}₹{diff.toFixed(0)}
                             </p>
                           </div>
@@ -3464,7 +3486,7 @@ export default function Backtest() {
                 return (
                 <div className="bg-slate-800 rounded-lg p-4 overflow-hidden">
                   <div className="flex items-center justify-between mb-4">
-                    <h4 className="text-fg-4">All Trades ({result.trades.length})</h4>
+                    <h3 className="text-fg-4">All Trades ({result.trades.length})</h3>
                     {hasSpotData && (
                       <div className="flex items-center gap-2">
                         {isSwingMode && (
@@ -3516,7 +3538,7 @@ export default function Backtest() {
                         <th className="px-4 py-3 bg-slate-800">
                           {showSpotView && hasSpotData ? <span className="text-blue-400">Spot Exit</span> : 'Prem Exit'}
                         </th>
-                        <th className="px-4 py-3 bg-slate-800">PnL</th>
+                        <th className="px-4 py-3 bg-slate-800">P&L</th>
                         <th className="px-4 py-3 bg-slate-800">Reason</th>
                         {showAiSim && aiSimData && <>
                           <th className="px-4 py-3 bg-green-900/20 text-success/80 border-l border-green-700/30" title="AI-suggested stop-loss index level">AI SL</th>
@@ -3602,14 +3624,14 @@ export default function Backtest() {
                                 )}
                               </div>
                             ) : aiPolling ? (
-                              <span className="text-fg-6 animate-pulse text-xs">analyzing…</span>
+                              <span className="text-fg-5 animate-pulse text-xs">analyzing…</span>
                             ) : '-'}
                           </td>
                           {/* Model: which AI produced the decision (helps spot per-model bias) */}
                           <td className="px-3 py-3 text-xs">
                             {(() => {
                               const mid = trade.aiConfirmation?.model_id;
-                              if (!mid) return aiPolling ? <span className="text-fg-6 text-3xs">…</span> : <span className="text-fg-6 text-3xs">-</span>;
+                              if (!mid) return aiPolling ? <span className="text-fg-5 text-3xs">…</span> : <span className="text-fg-5 text-3xs">-</span>;
                               const b = modelBadgeFor(mid);
                               if (!b) return <span className="text-fg-5 text-3xs">{mid}</span>;
                               return (
@@ -3653,7 +3675,7 @@ export default function Backtest() {
                               ? (trade.spot_exit ? Number(trade.spot_exit).toFixed(2) : '-')
                               : Number(trade.exitPrice).toFixed(2)}
                           </td>
-                          <td className={`px-4 py-3 font-bold text-xs ${trade.pnl >= 0 ? 'text-success' : 'text-danger'}`}>
+                          <td className={`px-4 py-3 font-bold text-xs ${pnlTone(trade.pnl)}`}>
                             {Number(trade.pnl).toFixed(2)}
                           </td>
                           <td className="px-4 py-3 text-fg-4 text-xs">{trade.reason}</td>
@@ -3669,11 +3691,11 @@ export default function Backtest() {
                               <>
                                 <td className="px-4 py-3 text-xs font-mono border-l border-green-700/20"
                                   title={aiSl ? `AI SL: ${Number(aiSl).toFixed(2)} (${isCE ? 'below' : 'above'} entry)` : 'No AI SL'}>
-                                  {aiSl ? <span className="text-danger/80">{Number(aiSl).toFixed(0)}</span> : <span className="text-fg-6">-</span>}
+                                  {aiSl ? <span className="text-danger/80">{Number(aiSl).toFixed(0)}</span> : <span className="text-fg-5">-</span>}
                                 </td>
                                 <td className="px-4 py-3 text-xs font-mono"
                                   title={aiTp ? `AI TP: ${Number(aiTp).toFixed(2)} (${isCE ? 'above' : 'below'} entry)` : 'No AI TP'}>
-                                  {aiTp ? <span className="text-success/80">{Number(aiTp).toFixed(0)}</span> : <span className="text-fg-6">-</span>}
+                                  {aiTp ? <span className="text-success/80">{Number(aiTp).toFixed(0)}</span> : <span className="text-fg-5">-</span>}
                                 </td>
                                 {(aiSlTpView === 'ai_fve' || (aiSlTpView === 'ai_both' && result.trades.some(t => t.aiConfirmation?.suggested_entry_spot != null))) && (
                                   <td className="px-4 py-3 text-xs font-mono"
@@ -3686,7 +3708,7 @@ export default function Backtest() {
                                       'AI did not return a fair entry level for this trade'
                                     }>
                                     {isReject ? (
-                                      <span className="text-fg-6">-</span>
+                                      <span className="text-fg-5">-</span>
                                     ) : sim?.fair_skipped ? (
                                       <span className="flex flex-col gap-0.5">
                                         <span className="px-1.5 py-0.5 rounded text-3xs bg-orange-900/50 text-warning font-semibold whitespace-nowrap">⏭ Not reached</span>
@@ -3702,10 +3724,10 @@ export default function Backtest() {
                                     ) : trade.aiConfirmation?.suggested_entry_spot > 0 ? (
                                       <span className="flex flex-col gap-0.5">
                                         <span className="text-fg-4 text-3xs">⏳ {Number(trade.aiConfirmation.suggested_entry_spot).toFixed(0)}</span>
-                                        <span className="text-fg-6 text-3xs">run resim</span>
+                                        <span className="text-fg-5 text-3xs">run resim</span>
                                       </span>
                                     ) : (
-                                      <span className="text-fg-6 text-3xs">—</span>
+                                      <span className="text-fg-5 text-3xs">—</span>
                                     )}
                                   </td>
                                 )}
@@ -3719,7 +3741,7 @@ export default function Backtest() {
                                         ? <span className="px-1 py-0.5 rounded text-3xs bg-orange-900/30 text-warning" title="Fair value level not reached within 15 min — trade not entered">FVE SKIPPED</span>
                                         : <span className="px-1 py-0.5 rounded text-3xs bg-slate-700 text-fg-4">NO DATA</span>}
                                     </td>
-                                    <td className={`px-4 py-3 text-xs font-bold ${pnl >= 0 ? 'text-success' : 'text-danger'}`}>
+                                    <td className={`px-4 py-3 text-xs font-bold ${pnlTone(pnl)}`}>
                                       {isReject || sim?.fair_skipped ? <span title={sim?.fair_skipped ? 'Trade skipped — fair entry not reached' : 'Trade not taken — AI rejected'}>₹0</span> : Number(pnl).toFixed(2)}
                                       {!isReject && !sim?.fair_skipped && <span className={`block text-3xs font-normal ${diff >= 0 ? 'text-success/70' : 'text-danger/70'}`}>{diff >= 0 ? '↑+' : '↓'}{diff.toFixed(0)}</span>}
                                     </td>
@@ -3735,7 +3757,7 @@ export default function Backtest() {
                                         {sim.ai_sim_exit.reason}
                                       </span>
                                     </td>
-                                    <td className={`px-4 py-3 text-xs font-bold ${sim.ai_sim_pnl >= 0 ? 'text-success' : 'text-danger'}`}>
+                                    <td className={`px-4 py-3 text-xs font-bold ${pnlTone(sim.ai_sim_pnl)}`}>
                                       {Number(sim.ai_sim_pnl).toFixed(2)}
                                       <span className={`block text-3xs font-normal ${(sim.ai_sim_pnl - trade.pnl) >= 0 ? 'text-success/70' : 'text-danger/70'}`}>{(sim.ai_sim_pnl - trade.pnl) >= 0 ? '↑+' : '↓'}{(sim.ai_sim_pnl - trade.pnl).toFixed(0)}</span>
                                     </td>
@@ -3780,9 +3802,9 @@ export default function Backtest() {
                       {/* Header */}
                       <div className="p-4 border-b border-violet-700/30 bg-violet-950/20 flex justify-between items-center">
                           <div>
-                              <h3 className="text-lg font-bold text-violet-200 flex items-center gap-2">
+                              <h2 className="text-lg font-bold text-violet-200 flex items-center gap-2">
                                   {isReviewMode ? '🤖 Ask AI to Improve This Strategy' : '🤖 Ask AI for Parameter Suggestions'}
-                              </h3>
+                              </h2>
                               <p className="text-2xs text-fg-4 mt-0.5">
                                   Strategy: <code className="bg-slate-800 px-1 rounded">{params.strategy}</code>
                                   &nbsp;·&nbsp; Symbol: <code className="bg-slate-800 px-1 rounded">{params.symbol}</code>
@@ -3896,7 +3918,7 @@ export default function Backtest() {
                               <p className="text-2xs text-fg-5 mt-2">
                                   {isWebSession ? 'Web-session calls can take 30–120s with thinking enabled.' : 'API calls usually complete in 5–20s.'}
                               </p>
-                              <p className="text-3xs text-fg-6 mt-3 font-mono">
+                              <p className="text-3xs text-fg-5 mt-3 font-mono">
                                   Elapsed: {Math.round((askAiModal.elapsedMs || 0) / 1000)}s
                               </p>
                           </div>
@@ -4009,9 +4031,9 @@ export default function Backtest() {
                                                           </td>
                                                           <td className="p-2 font-mono text-fg-3">{k}</td>
                                                           <td className="p-2 text-right font-mono text-fg-4">{String(cur)}</td>
-                                                          <td className="p-2 text-center text-fg-6">→</td>
+                                                          <td className="p-2 text-center text-fg-5">→</td>
                                                           <td className={`p-2 text-right font-mono font-bold ${sameValue ? 'text-fg-5' : 'text-success'}`}>
-                                                              {String(sug)}{sameValue && <span className="text-fg-6 text-3xs ml-1">(no change)</span>}
+                                                              {String(sug)}{sameValue && <span className="text-fg-5 text-3xs ml-1">(no change)</span>}
                                                           </td>
                                                       </tr>
                                                   );
@@ -4104,7 +4126,7 @@ export default function Backtest() {
                     {tradeChart.data.priceLines.filter(l => l.kind !== 'entry').map(l => (
                       <span key={l.kind} style={{ color: l.color }}>{l.title}</span>
                     ))}
-                    <span className={(Number(tradeChart.data.trade.pnl) || 0) >= 0 ? 'text-success' : 'text-danger'}>
+                    <span className={pnlTone((Number(tradeChart.data.trade.pnl) || 0))}>
                       P&L ₹{Math.round(Number(tradeChart.data.trade.pnl) || 0).toLocaleString('en-IN')}
                     </span>
                     <span className="text-fg-5">{tradeChart.data.trade.reason}</span>

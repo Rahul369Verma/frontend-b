@@ -300,7 +300,7 @@ export default function Charts() {
         },
         { key: 'entryAt', header: 'Entry', render: (t) => <span className="text-fg-5">{istStamp(t.entryAt)}</span> },
         { key: 'net', header: 'Net', align: 'right', render: (t) => <span style={{ color: (n(t.net) ?? 0) > 0 ? ct.diverging.positive : (n(t.net) ?? 0) < 0 ? ct.diverging.negative : undefined }} className="tabular-nums">{inr(t.net)}</span> },
-        { key: 'reason', header: 'Exit', render: (t) => <span className="text-fg-6 truncate max-w-[9rem] inline-block align-middle" title={t.reason || ''}>{t.reason || (t.open ? 'still open' : '—')}</span> },
+        { key: 'reason', header: 'Exit', render: (t) => <span className="text-fg-5 truncate max-w-[9rem] inline-block align-middle" title={t.reason || ''}>{t.reason || (t.open ? 'still open' : '—')}</span> },
     ], [ct]);
     const tradeRows = useMemo(() => trades.map((t, i) => ({ ...t, _key: `${t.id}-${i}` })), [trades]);
 
@@ -362,7 +362,7 @@ export default function Charts() {
                         onClick={() => setDrawMode(v => !v)}
                         aria-pressed={drawMode}
                         title="Draw a trend line (D). Click once to start, again to finish."
-                        className={`px-2 py-1 rounded border text-2xs inline-flex items-center gap-1 ${drawMode ? 'border-primary bg-primary/15 text-primary' : 'border-line text-fg-4 hover:text-fg-2'}`}
+                        className={`px-2 py-1 rounded border text-2xs inline-flex items-center gap-1 ${drawMode ? 'border-primary bg-primary/15 text-primary-ink' : 'border-line text-fg-4 hover:text-fg-2'}`}
                     >
                         <PenLine className="w-3.5 h-3.5" aria-hidden="true" />
                         Trend line
@@ -374,7 +374,7 @@ export default function Charts() {
                         title={lockToData
                             ? 'Locked: zooming out stops at the first and last bar.'
                             : 'Free: you can zoom out past the data (empty space around the candles).'}
-                        className={`px-2 py-1 rounded border text-2xs inline-flex items-center gap-1 ${lockToData ? 'border-primary bg-primary/15 text-primary' : 'border-line text-fg-4 hover:text-fg-2'}`}
+                        className={`px-2 py-1 rounded border text-2xs inline-flex items-center gap-1 ${lockToData ? 'border-primary bg-primary/15 text-primary-ink' : 'border-line text-fg-4 hover:text-fg-2'}`}
                     >
                         {lockToData ? <Lock className="w-3.5 h-3.5" aria-hidden="true" /> : <Unlock className="w-3.5 h-3.5" aria-hidden="true" />}
                         {lockToData ? 'Locked to data' : 'Free zoom'}
@@ -396,7 +396,7 @@ export default function Charts() {
                     // to fitContent when there is no fitKey), so the label should
                     // say both — "show all trades" alone left people manually
                     // dragging the time scale to get their view back.
-                    <button type="button" onClick={() => setSelected(null)} className="text-2xs text-primary hover:underline pb-1.5">
+                    <button type="button" onClick={() => setSelected(null)} className="text-2xs text-primary-ink hover:underline pb-1.5">
                         show all trades &amp; reset zoom
                     </button>
                 )}
@@ -430,7 +430,7 @@ export default function Charts() {
                             <div>
                                 Chain archive: {errDetail.archive.why || (errDetail.archive.ok ? 'available' : 'no premium history for this contract in range')}
                                 {Array.isArray(errDetail.archive.excludedDays) && errDetail.archive.excludedDays.length > 0 && (
-                                    <ul className="mt-1 ml-3 list-disc text-3xs text-fg-6">
+                                    <ul className="mt-1 ml-3 list-disc text-3xs text-fg-5">
                                         {errDetail.archive.excludedDays.slice(0, 4).map((d) => (
                                             <li key={d.day}>{d.day} — {d.why}</li>
                                         ))}
@@ -439,7 +439,7 @@ export default function Charts() {
                             </div>
                         )}
                         {typeof errDetail?.archive === 'string' && <div>Chain archive: {errDetail.archive}</div>}
-                        <div className="text-3xs text-fg-6">
+                        <div className="text-3xs text-fg-5">
                             The option-chain archive only covers the ATM±10 strikes recorded in production since 2026-08-05.
                             Widen the date range to include the contract&apos;s own trading week, or try a coarser interval.
                         </div>
@@ -479,7 +479,7 @@ export default function Charts() {
                             onLinesChange={commitLines}
                             onDrawModeChange={setDrawMode}
                         />
-                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-3xs text-fg-6">
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-3xs text-fg-5">
                             <span className="inline-flex items-center gap-1">
                                 <Keyboard className="w-3 h-3" aria-hidden="true" />
                                 click the chart first, then:
@@ -493,14 +493,14 @@ export default function Charts() {
                             {drawMode && <span className="text-warning">drawing — click once to start, again to finish (pan/zoom paused)</span>}
                         </div>
                         {!candleData?.meta?.hasVolume && (
-                            <div className="text-3xs text-fg-6 mt-1">Volume pane hidden — this series reports none (index feeds usually do not).</div>
+                            <div className="text-3xs text-fg-5 mt-1">Volume pane hidden — this series reports none (index feeds usually do not).</div>
                         )}
                         {candleData?.meta?.source === 'archive' && (
                             // Archive candles are NOT broker candles: they are ~1/min
                             // samples of the chain, and on older rows the contract is
                             // inferred rather than recorded. Both facts change how much
                             // weight a reader should put on the picture, so both are said.
-                            <div className="mt-1 space-y-0.5 text-3xs text-fg-6">
+                            <div className="mt-1 space-y-0.5 text-3xs text-fg-5">
                                 <div>
                                     Prices are <b>option premium</b> rebuilt from the chain archive
                                     {candleData.meta.contract ? ` · ${candleData.meta.contract.strike} ${candleData.meta.contract.side} exp ${candleData.meta.contract.expiry}` : ''}
@@ -578,7 +578,7 @@ export default function Charts() {
                                         <div className="space-y-1.5">
                                             <div className="flex flex-wrap items-center gap-3 text-2xs text-fg-4">
                                                 <span>fills <b className="text-fg-2">{sel.entryPremium ?? '—'}</b> → <b className="text-fg-2">{sel.exitPremium ?? '—'}</b> premium</span>
-                                                <button type="button" onClick={openTheOption} className="text-primary hover:underline inline-flex items-center gap-1">
+                                                <button type="button" onClick={openTheOption} className="text-primary-ink hover:underline inline-flex items-center gap-1">
                                                     open the option <ExternalLink className="w-3 h-3" aria-hidden="true" />
                                                 </button>
                                             </div>
@@ -603,7 +603,7 @@ export default function Charts() {
                                             </ResponsiveContainer>
                                         </div>
                                     ) : (
-                                        <div className="text-3xs text-fg-6">
+                                        <div className="text-3xs text-fg-5">
                                             No stored MTM path for this trade — the engine began persisting one only recently, so older trades show entry and exit alone.
                                         </div>
                                     )}

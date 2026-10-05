@@ -9,6 +9,7 @@ import { API_URL, SOCKET_URL } from '../config/api.js';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { useConfirm } from '../components/confirmContext.js';
 import { PageHeader, Chip } from '../components/viz/primitives';
+import { inr, pnlTone } from '../components/viz/tokens';
 import { toast } from '../components/toastStore.js';
 
 // Build a Fyers futures symbol from an index key + expiry date.
@@ -441,7 +442,7 @@ export default function TickStrategies() {
     };
 
     // Merge runtime snapshot stats onto the persisted strategy docs so each
-    // card can show live state (open position, hit count, PnL) without two
+    // card can show live state (open position, hit count, P&L) without two
     // separate lookups in render.
     const merged = useMemo(() => {
         const bySnapId = new Map((snapshot.strategies || []).map(s => [s._id, s]));
@@ -648,11 +649,11 @@ export default function TickStrategies() {
                     return (
                         <StatBox
                             label="Today's Net P&L (all strategies)"
-                            value={`${pos ? '+' : '−'}₹${Math.abs(Math.round(net)).toLocaleString('en-IN')}`}
+                            value={inr(net, { sign: true, dp: 0 })}
                             icon={pos ? TrendingUp : TrendingDown}
                             color={pos ? 'green' : 'rose'}
                             valueClass={pos ? 'text-success' : 'text-danger'}
-                            subtext={`${limit > 0 ? `auto-halt at −₹${limit.toLocaleString('en-IN')} · ` : ''}${entries}${maxEntries > 0 ? `/${maxEntries}` : ''} entries today`}
+                            subtext={`${limit > 0 ? `auto-halt at ${inr(-limit, { dp: 0 })} · ` : ''}${entries}${maxEntries > 0 ? `/${maxEntries}` : ''} entries today`}
                         />
                     );
                 })()}
@@ -733,9 +734,9 @@ export default function TickStrategies() {
                 {trades.length === 0 ? (
                     <div className="text-fg-5 text-sm italic text-center py-6">No trades recorded yet.</div>
                 ) : (
-                    <div className="overflow-x-auto">
+                    <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
                         <table className="w-full text-sm">
-                            <thead className="text-xs uppercase text-fg-5 border-b border-line">
+                            <thead className="text-xs uppercase text-fg-5 border-b border-line sticky top-0 z-10 bg-surface">
                                 <tr>
                                     <th className="text-left py-2 pr-3">Date · Time</th>
                                     <th className="text-left py-2 pr-3">Strategy</th>
@@ -743,15 +744,15 @@ export default function TickStrategies() {
                                     <th className="text-left py-2 pr-3">Dir</th>
                                     <th className="text-right py-2 pr-3">Entry</th>
                                     <th className="text-right py-2 pr-3">Exit</th>
-                                    <th className="text-right py-2 pr-3">PnL pts</th>
-                                    <th className="text-right py-2 pr-3" title="Estimated net rupee PnL after Indian options charges + slippage, projected onto an ATM option leg">Net ₹ (est)</th>
+                                    <th className="text-right py-2 pr-3">P&L pts</th>
+                                    <th className="text-right py-2 pr-3" title="Estimated net rupee P&L after Indian options charges + slippage, projected onto an ATM option leg">Net ₹ (est)</th>
                                     <th className="text-right py-2 pr-3">Hold</th>
                                     <th className="text-left py-2 pr-3">Status</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {trades.map(t => {
-                                    // For OPEN trades, surface the LIVE unrealized PnL/hold time
+                                    // For OPEN trades, surface the LIVE unrealized P&L/hold time
                                     // from the snapshot rather than the persisted defaults (0).
                                     // We match the snapshot openPosition by tickTradeId.
                                     const liveOpen = t.status === 'OPEN'
@@ -783,13 +784,13 @@ export default function TickStrategies() {
                                             <td className="py-2 pr-3 text-right font-mono" title={liveOpen ? 'Live LTP (position still open)' : ''}>
                                                 {displayExit}
                                             </td>
-                                            <td className={`py-2 pr-3 text-right font-mono font-bold ${displayPnl == null ? 'text-fg-5' : (displayPnl >= 0 ? 'text-success' : 'text-danger')}`}
+                                            <td className={`py-2 pr-3 text-right font-mono font-bold ${displayPnl == null ? 'text-fg-5' : (pnlTone(displayPnl))}`}
                                                 title={liveOpen ? 'Unrealized — updates live' : ''}>
                                                 {displayPnl != null
                                                     ? (displayPnl >= 0 ? '+' : '') + displayPnl.toFixed(2) + (liveOpen ? ' (live)' : '')
                                                     : '—'}
                                             </td>
-                                            <td className={`py-2 pr-3 text-right font-mono ${netRupees == null ? 'text-fg-5' : (netRupees >= 0 ? 'text-success' : 'text-danger')}`}
+                                            <td className={`py-2 pr-3 text-right font-mono ${netRupees == null ? 'text-fg-5' : (pnlTone(netRupees))}`}
                                                 title={netTooltip}>
                                                 {netRupees != null
                                                     ? (netRupees >= 0 ? '+' : '') + Math.round(netRupees).toLocaleString()
@@ -1035,7 +1036,7 @@ export default function TickStrategies() {
 // `icon: _Icon` (renamed to silence no-unused-vars) left `<Icon>` undefined and
 // crashed this page with "ReferenceError: Icon is not defined" on every load.
 const STATBOX_TONES = {
-    violet: 'bg-primary/10 text-primary',
+    violet: 'bg-primary/10 text-primary-ink',
     green: 'bg-success/10 text-success',
     amber: 'bg-warning/10 text-warning',
     red: 'bg-danger/10 text-danger',
@@ -1048,7 +1049,7 @@ function StatBox({ label, value, icon, color, subtext, valueClass = 'text-fg' })
         <div className="bg-surface p-5 rounded-xl border border-line flex items-center justify-between gap-3">
             <div className="min-w-0">
                 <p className="text-fg-4 text-2xs uppercase tracking-wider">{label}</p>
-                <h3 className={`text-2xl font-bold mt-1 tabular-nums truncate ${valueClass}`} title={String(value)}>{value}</h3>
+                <div className={`text-2xl font-bold mt-1 tabular-nums truncate ${valueClass}`} title={String(value)}>{value}</div>
                 {subtext && <p className="text-2xs text-fg-5 mt-1">{subtext}</p>}
             </div>
             <div className={`p-3 rounded-lg flex-shrink-0 ${STATBOX_TONES[color] || STATBOX_TONES.violet}`}>
@@ -1098,7 +1099,7 @@ function StrategyCard({ strategy: s, typeMeta, engineMarketOpen, onToggle, onEdi
                     </button>
                     <div>
                         <div className="flex items-center gap-2 flex-wrap">
-                            <h4 className="font-bold text-fg">{s.name}</h4>
+                            <h3 className="font-bold text-fg">{s.name}</h3>
                             <span className="text-3xs px-2 py-0.5 rounded bg-violet-500/20 text-violet-300 border border-violet-500/40">
                                 {typeMeta?.label || s.strategyType}
                             </span>
@@ -1134,13 +1135,13 @@ function StrategyCard({ strategy: s, typeMeta, engineMarketOpen, onToggle, onEdi
                                     Open <span className={open.direction === 'LONG' ? 'text-success font-semibold' : 'text-danger font-semibold'}>{open.direction}</span>
                                     {' @ '}{open.entryPrice?.toFixed(2)}, held {(open.holdMs / 1000).toFixed(1)}s
                                     {open.unrealizedPoints != null && (
-                                        <span className={`ml-1 font-mono ${open.unrealizedPoints >= 0 ? 'text-success' : 'text-danger'}`}>
+                                        <span className={`ml-1 font-mono ${pnlTone(open.unrealizedPoints)}`}>
                                             ({open.unrealizedPoints >= 0 ? '+' : ''}{open.unrealizedPoints.toFixed(2)} pts)
                                         </span>
                                     )}
                                     {open.unrealizedOption?.net_pnl != null && (
-                                        <span className={`ml-1 font-mono ${open.unrealizedOption.net_pnl >= 0 ? 'text-success' : 'text-danger'}`}
-                                              title={`Estimated net option-leg PnL if closed now (gross ₹${open.unrealizedOption.gross_pnl?.toFixed(0)}, charges ₹${open.unrealizedOption.charges?.total?.toFixed(0)}, slippage ₹${open.unrealizedOption.slippage_cost?.toFixed(0)})`}>
+                                        <span className={`ml-1 font-mono ${pnlTone(open.unrealizedOption.net_pnl)}`}
+                                              title={`Estimated net option-leg P&L if closed now (gross ₹${open.unrealizedOption.gross_pnl?.toFixed(0)}, charges ₹${open.unrealizedOption.charges?.total?.toFixed(0)}, slippage ₹${open.unrealizedOption.slippage_cost?.toFixed(0)})`}>
                                             · est net ₹{open.unrealizedOption.net_pnl >= 0 ? '+' : ''}{open.unrealizedOption.net_pnl.toFixed(0)}
                                         </span>
                                     )}
@@ -1160,9 +1161,9 @@ function StrategyCard({ strategy: s, typeMeta, engineMarketOpen, onToggle, onEdi
                         }
                     />
                     <Stat
-                        label="PnL pts"
+                        label="P&L pts"
                         value={(stats.totalPnl >= 0 ? '+' : '') + stats.totalPnl.toFixed(2)}
-                        color={stats.totalPnl >= 0 ? 'text-success' : 'text-danger'}
+                        color={pnlTone(stats.totalPnl)}
                     />
                     <Stat
                         label="Net ₹ (est)"
@@ -1171,7 +1172,7 @@ function StrategyCard({ strategy: s, typeMeta, engineMarketOpen, onToggle, onEdi
                                 ? (stats.optionNetPnl >= 0 ? '+' : '') + Math.round(stats.optionNetPnl).toLocaleString()
                                 : '—'
                         }
-                        color={(stats.optionNetPnl || 0) >= 0 ? 'text-success' : 'text-danger'}
+                        color={pnlTone((stats.optionNetPnl || 0))}
                     />
                     <button onClick={onEdit} className="text-xs px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-fg-2">Edit</button>
                     <button onClick={onDelete} className="p-2 rounded text-danger hover:bg-red-500/10" title="Delete">
@@ -1205,7 +1206,7 @@ function EventRow({ ev }) {
     const color = isWarn || isStreamStale ? 'text-warning'
         : isStreamHealthy ? 'text-success'
         : isEntry ? (ev.direction === 'LONG' ? 'text-success' : 'text-danger')
-        : isExit ? (ev.pnl >= 0 ? 'text-success' : 'text-danger')
+        : isExit ? (pnlTone(ev.pnl))
         : 'text-fg-4';
     const rowCls = isWarn || isStreamStale
         ? 'bg-amber-900/20 border-amber-700/40'
@@ -1233,7 +1234,7 @@ function EventRow({ ev }) {
                     )}
                     <span className="text-xs text-fg-5 ml-auto font-mono">{new Date(ev.time).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</span>
                 </div>
-                <p className={`text-xs mt-0.5 ${isWarn || isStreamStale ? 'text-warning' : isStreamHealthy ? 'text-success' : 'text-fg-5 truncate'}`}>{ev.reason}</p>
+                <p className={`text-xs mt-0.5 ${isWarn || isStreamStale ? 'text-warning' : isStreamHealthy ? 'text-success' : 'text-fg-5 truncate'}`} title={ev.reason}>{ev.reason}</p>
             </div>
         </div>
     );
@@ -1356,7 +1357,7 @@ function RecordingList({ recordings, onStop, onDelete, onSample, onReplay }) {
                         <div className="flex items-center justify-between gap-4 flex-wrap">
                             <div className="flex-1 min-w-[200px]">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                    <h4 className="font-bold text-fg">{rec.name}</h4>
+                                    <h3 className="font-bold text-fg">{rec.name}</h3>
                                     <RecordingStatusPill status={rec.status} />
                                     {rec.autoStopMinutes != null && isActive && (
                                         <span className="text-3xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/40">
@@ -2028,7 +2029,7 @@ function ReplayModal({ recording, types, onClose }) {
                                         <div key={key}>
                                             <label className="text-3xs uppercase tracking-wider text-fg-5 flex items-center gap-1.5">
                                                 <span>{key.replace(/_/g, ' ')}</span>
-                                                <span className="text-4xs normal-case text-fg-6 font-mono">
+                                                <span className="text-4xs normal-case text-fg-5 font-mono">
                                                     {isNumeric ? 'number' : (typeof defVal === 'boolean' ? 'bool' : 'text')}
                                                 </span>
                                             </label>
@@ -2057,7 +2058,7 @@ function ReplayModal({ recording, types, onClose }) {
                                 className="w-full bg-slate-800 border border-line rounded px-3 py-2 text-fg-2"
                             />
                             <p className="text-xs text-fg-5 mt-1.5">
-                                The engine will run this many trials with randomized parameters and rank by net PnL. Larger counts take longer.
+                                The engine will run this many trials with randomized parameters and rank by net P&L. Larger counts take longer.
                             </p>
                         </FormField>
                     )}
@@ -2122,7 +2123,7 @@ function ReplayResults({ result, expandedRun, onExpandRun }) {
                             <thead className="text-3xs uppercase text-fg-5 border-b border-line bg-slate-900">
                                 <tr>
                                     <th className="text-left py-2 px-2">#</th>
-                                    <th className="text-right py-2 px-2">Net PnL</th>
+                                    <th className="text-right py-2 px-2">Net P&L</th>
                                     <th className="text-right py-2 px-2">Win %</th>
                                     <th className="text-right py-2 px-2">Trades</th>
                                     <th className="text-right py-2 px-2">Avg Hold</th>
@@ -2144,7 +2145,7 @@ function ReplayResults({ result, expandedRun, onExpandRun }) {
                                                 <td className="py-1.5 px-2 font-mono text-fg-3">
                                                     #{run.runIndex}{isBest && <span className="ml-1 text-warning">★</span>}
                                                 </td>
-                                                <td className={`py-1.5 px-2 text-right font-mono font-bold ${net >= 0 ? 'text-success' : 'text-danger'}`}>
+                                                <td className={`py-1.5 px-2 text-right font-mono font-bold ${pnlTone(net)}`}>
                                                     {net >= 0 ? '+' : ''}{net.toFixed(2)}
                                                 </td>
                                                 <td className="py-1.5 px-2 text-right font-mono text-fg-3">{winRate.toFixed(0)}%</td>
@@ -2181,7 +2182,7 @@ function ReplayResults({ result, expandedRun, onExpandRun }) {
 function ReplayRunDetail({ run, isOptimizer }) {
     const stats = run?.stats || {};
     const trades = run?.trades || [];
-    const netCls = (stats.netPnl || 0) >= 0 ? 'text-success' : 'text-danger';
+    const netCls =pnlTone((stats.netPnl || 0));
 
     return (
         <div className="space-y-3">
@@ -2200,7 +2201,7 @@ function ReplayRunDetail({ run, isOptimizer }) {
                     value={stats.totalTrades > 0 ? `${((stats.winningTrades / stats.totalTrades) * 100).toFixed(0)}%` : '—'}
                 />
                 <ReplayStatBox
-                    label="Net PnL"
+                    label="Net P&L"
                     value={(stats.netPnl || 0) >= 0 ? `+${(stats.netPnl || 0).toFixed(2)}` : (stats.netPnl || 0).toFixed(2)}
                     color={netCls}
                 />
@@ -2223,7 +2224,7 @@ function ReplayRunDetail({ run, isOptimizer }) {
                             <th className="text-left py-2 px-2">Dir</th>
                             <th className="text-right py-2 px-2">Entry</th>
                             <th className="text-right py-2 px-2">Exit</th>
-                            <th className="text-right py-2 px-2">PnL pts</th>
+                            <th className="text-right py-2 px-2">P&L pts</th>
                             <th className="text-right py-2 px-2">Hold</th>
                             <th className="text-left py-2 px-2">Entry → Exit Reason</th>
                         </tr>
@@ -2237,7 +2238,7 @@ function ReplayRunDetail({ run, isOptimizer }) {
                                 <td className={`py-1 px-2 font-bold ${t.direction === 'LONG' ? 'text-success' : 'text-danger'}`}>{t.direction}</td>
                                 <td className="py-1 px-2 text-right font-mono">{t.entryPrice != null ? Number(t.entryPrice).toFixed(2) : '—'}</td>
                                 <td className="py-1 px-2 text-right font-mono">{t.exitPrice != null ? Number(t.exitPrice).toFixed(2) : '—'}</td>
-                                <td className={`py-1 px-2 text-right font-mono font-bold ${(t.pnlPoints || 0) >= 0 ? 'text-success' : 'text-danger'}`}>
+                                <td className={`py-1 px-2 text-right font-mono font-bold ${pnlTone((t.pnlPoints || 0))}`}>
                                     {(t.pnlPoints || 0) >= 0 ? '+' : ''}{(t.pnlPoints || 0).toFixed(2)}
                                 </td>
                                 <td className="py-1 px-2 text-right font-mono text-fg-4">{formatDuration(t.holdMs)}</td>

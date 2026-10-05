@@ -167,7 +167,7 @@ function AxisRange({ axis, value, onChange }) {
                 {/* aria-hidden: the same value is already in the input's
                     aria-valuetext, and a screen reader announcing it twice on
                     every arrow-key press is worse than not having it. */}
-                <span aria-hidden="true" className="text-xs font-semibold tabular-nums text-primary">{readout}</span>
+                <span aria-hidden="true" className="text-xs font-semibold tabular-nums text-primary-ink">{readout}</span>
             </div>
             <input
                 id={id}
@@ -596,7 +596,7 @@ export function ThemePanel({ open, onClose }) {
                                         aria-label={`${name}. ${description}`}
                                         className={`flex items-center gap-1.5 rounded-full border border-line bg-card-2 px-3 py-1.5 text-xs font-medium text-fg-3 transition-colors hover:border-primary hover:text-fg ${FOCUS}`}
                                     >
-                                        <Wand2 className="h-3 w-3 flex-shrink-0 text-primary" />
+                                        <Wand2 className="h-3 w-3 flex-shrink-0 text-primary-ink" />
                                         {name}
                                     </button>
                                 );
@@ -611,7 +611,7 @@ export function ThemePanel({ open, onClose }) {
                                 <div>
                                     <h4 className="text-xs font-semibold text-fg-2">{section.title}</h4>
                                     {section.hint ? (
-                                        <p className="mt-0.5 text-xs leading-snug text-fg-6">{section.hint}</p>
+                                        <p className="mt-0.5 text-xs leading-snug text-fg-5">{section.hint}</p>
                                     ) : null}
                                 </div>
                                 <div className="grid grid-cols-2 gap-2">
@@ -692,7 +692,7 @@ export function ThemePanel({ open, onClose }) {
                             {t('theme.reset')}
                         </button>
                         {atDefaults ? (
-                            <p className="text-xs text-fg-6">{t('theme.resetDone')}</p>
+                            <p className="text-xs text-fg-5">{t('theme.resetDone')}</p>
                         ) : null}
                     </Section>
                 </div>

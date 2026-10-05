@@ -43,8 +43,9 @@ export default function CollapsibleCard({
                     {open
                         ? <ChevronDown className="w-4 h-4 text-fg-4 flex-shrink-0" />
                         : <ChevronRight className="w-4 h-4 text-fg-4 flex-shrink-0" />}
-                    {Icon && <Icon className="w-5 h-5 text-primary flex-shrink-0" />}
-                    <span className="text-lg font-bold text-fg truncate">{title}</span>
+                    {Icon && <Icon className="w-5 h-5 text-primary-ink flex-shrink-0" />}
+                    <span className="text-lg font-bold text-fg truncate"
+                          title={typeof title === 'string' ? title : undefined}>{title}</span>
                     {!open && summary && (
                         <span className="text-xs font-normal text-fg-5 truncate hidden sm:inline">{summary}</span>
                     )}

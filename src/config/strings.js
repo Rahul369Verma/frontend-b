@@ -66,6 +66,7 @@ export const STRINGS = {
         optimizer: 'Optimizer',
         multiLeg: 'Multi-Leg',
         risk: 'Portfolio Risk',
+        alerts: 'Stock Alerts',
         tickStrategies: 'Tick Strategies',
         tickResults: 'Tick Results',
         aiManager: 'AI Manager',
@@ -84,6 +85,11 @@ export const STRINGS = {
         appearance: 'Appearance',
         appearanceTitle: 'Appearance — theme, text size, contrast',
         systemOnline: 'System Online',
+        // The rail light used to be a hard-coded green dot that could never
+        // change. These are the states /api/health actually reports.
+        systemDegraded: 'Degraded',
+        systemDown: 'Backend unreachable',
+        systemChecking: 'Checking…',
         // `{time}` is a humanised remaining-time string ("3d 4h", "45m").
         session: 'Session: {time}',
         sessionActive: 'Session active',

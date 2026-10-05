@@ -109,7 +109,7 @@ export function ConfirmProvider({ children }) {
                                 autoFocus={!needsText}
                                 onClick={() => ok && settle(true)}
                                 disabled={!ok}
-                                className={`px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-40 ${danger ? 'bg-danger text-on-primary' : 'btn-primary'}`}
+                                className={`px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-40 ${danger ? 'bg-danger-fill text-white' : 'btn-primary'}`}
                             >
                                 {opts.confirmLabel || 'Confirm'}
                             </button>

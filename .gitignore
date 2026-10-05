@@ -23,3 +23,15 @@ dist-ssr
 *.sln
 *.sw?
 .env
+
+graphify-out/
+# Throwaway UI-audit probes and screenshots.
+# The auditors default to writing screenshots under /tmp (UI_OUT), but one-off
+# probe scripts MUST live at the package root — puppeteer-core resolves only
+# from there, not from /tmp. A batch of agents once left 43 probe-*.mjs and
+# 270 screenshots (26 MB) here after being killed mid-run, which buried 40 real
+# file changes in 68 untracked entries.
+# Leading slash = package root only, so scripts/ui-*-audit.mjs is NOT ignored.
+/probe-*.mjs
+/probe-*-out.json
+/shots-*/

@@ -964,11 +964,27 @@ export function buildPalette(themeSpec) {
 
     // ── Status + secondary ──────────────────────────────────────────────────
     // Cut at the "solid bg" role for the mode so they read as fills AND as text.
-    const statusL = T.L.accent[T.mode === 'dark' ? 500 : 600];
+    // ROLE SPLIT (2026-09-13). These were cut ONCE, at the solid-fill lightness,
+    // "so they read as fills AND as text". A rendered-DOM audit shows they do
+    // not: `text-danger` measured 3.98:1 on a card against the 4.5 body-copy
+    // floor, and that single pair was 121 of 197 contrast findings — every P&L
+    // number in the app. A fill lightness cannot also be ink.
+    //
+    // The measured usage settles which role owns the plain name: 745 `text-*`
+    // call sites against 34 `bg-*`/`border-*`, and all but four of those are
+    // /10-/15 ALPHA WASHES sitting behind the ink. So `--color-<status>` is cut
+    // as INK (the same 300/700 accent stop `--color-primary-ink` uses), and the
+    // solid-fill role moves to `--color-<status>-fill`. Washes are unaffected —
+    // a 10% tint of a lighter red is still a faint red.
+    const statusFillL = T.L.accent[T.mode === 'dark' ? 500 : 600];
+    const statusInkL = T.L.accent[T.mode === 'dark' ? 300 : 700];
     for (const [name, baseHue] of Object.entries(STATUS_HUES)) {
         const h = accentHue(baseHue);
-        const c = accentChroma(baseHue, h, peakChromaAt(h) * pwl(ACCENT_C_ENVELOPE, statusL));
-        out[`--color-${name}`] = oklchToHex(statusL, c, h);
+        const cut = (L) => oklchToHex(
+            L, accentChroma(baseHue, h, peakChromaAt(h) * pwl(ACCENT_C_ENVELOPE, L)), h,
+        );
+        out[`--color-${name}`] = cut(statusInkL);
+        out[`--color-${name}-fill`] = cut(statusFillL);
     }
     // `secondary` is a neutral chip/fill, not a hue — the raised-fill role.
     out['--color-secondary'] = neutralHex[700];
@@ -1091,6 +1107,26 @@ const CONTRAST_STEPS = {
 const FG_TOKENS = ['--color-fg', '--color-fg-2', '--color-fg-3', '--color-fg-4', '--color-fg-5', '--color-fg-6'];
 
 /**
+ * CHROMATIC ink — the four semantic status colours and the accent ink.
+ *
+ * These are ink and the axis says so on the tin ("Clears WCAG AA on every ink
+ * level"), but they were never lifted: FG_TOKENS is the six NEUTRAL levels, so
+ * a reader who asked for more contrast still got `text-danger` at 3.98:1 on
+ * midnight's card — and on that theme the hex is pinned, so the axis was the
+ * only remedy available. Per this function's own doctrine, a pin is a fidelity
+ * decision for the default look, not a licence to ignore an accessibility
+ * request.
+ *
+ * They lift on the SAME curve as neutral ink but re-map chroma through
+ * ACCENT_C_ENVELOPE rather than NEUTRAL_C_ENVELOPE: these are saturated hues,
+ * and running them through the neutral envelope would strip the chroma that
+ * makes danger read as danger.
+ */
+const ACCENT_INK_TOKENS = [
+    '--color-success', '--color-danger', '--color-warning', '--color-info', '--color-primary-ink',
+];
+
+/**
  * Border tokens — pulled AWAY from the surface, which is what makes a boundary
  * more visible. All four line levels and nothing else.
  *
@@ -1154,6 +1190,14 @@ export function applyContrast(palette, level, mode) {
         // Chroma has to come down as ink approaches white/black or it goes out
         // of gamut and the gamut mapper silently eats the lift we just applied.
         out[key] = oklchToHex(nl, C * pwl(NEUTRAL_C_ENVELOPE, nl) / Math.max(0.001, pwl(NEUTRAL_C_ENVELOPE, L)), H);
+    }
+
+    for (const key of ACCENT_INK_TOKENS) {
+        const hex = out[key];
+        if (!hex) continue;
+        const { L, C, H } = hexToOklch(hex);
+        const nl = clamp(L + (inkExtreme - L) * step.fg, 0, 1);
+        out[key] = oklchToHex(nl, C * pwl(ACCENT_C_ENVELOPE, nl) / Math.max(0.001, pwl(ACCENT_C_ENVELOPE, L)), H);
     }
 
     for (const key of BORDER_TOKENS) {

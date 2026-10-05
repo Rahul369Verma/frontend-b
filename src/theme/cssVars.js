@@ -133,6 +133,7 @@ const SEMANTIC_ORDER = [
     '--color-fg', '--color-fg-2', '--color-fg-3', '--color-fg-4', '--color-fg-5', '--color-fg-6',
     '--color-primary', '--color-primary-ink', '--color-on-primary', '--color-secondary',
     '--color-success', '--color-danger', '--color-warning', '--color-info',
+    '--color-success-fill', '--color-danger-fill', '--color-warning-fill', '--color-info-fill',
     '--color-background', '--color-surface',
     '--color-white', '--color-black',
     '--chart-1', '--chart-2', '--chart-3', '--chart-pos', '--chart-neg', '--chart-neutral',

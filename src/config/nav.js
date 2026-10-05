@@ -30,6 +30,7 @@
  */
 import {
     Activity,
+    BellRing,
     Brain,
     Gauge,
     CandlestickChart,
@@ -81,6 +82,7 @@ const StrategyDetail = lazy(() => import('../pages/StrategyDetail'));
 const Callback = lazy(() => import('../pages/Callback'));
 const AiManager = lazy(() => import('../components/AiManager'));
 const AiScore = lazy(() => import('../pages/AiScore'));
+const Alerts = lazy(() => import('../pages/Alerts'));
 const DataManager = lazy(() => import('../components/DataManager'));
 const ParityAuditDashboard = lazy(() => import('../components/ParityAuditDashboard'));
 
@@ -97,6 +99,9 @@ export const NAV_ITEMS = [
     { path: '/optimizer', icon: Activity, labelKey: 'nav.optimizer', component: Optimizer },
     { path: '/multi-leg', icon: Layers, labelKey: 'nav.multiLeg', component: MultiLeg },
     { path: '/risk', icon: Gauge, labelKey: 'nav.risk', component: Risk },
+    // Stock screener + scheduled alerts over every NSE stock. Discovery, not
+    // execution: nothing on this page places an order.
+    { path: '/alerts', icon: BellRing, labelKey: 'nav.alerts', component: Alerts },
     { path: '/tick-strategies', icon: Zap, labelKey: 'nav.tickStrategies', component: TickStrategies },
     // Sits directly under the tick control room, for the same reason Live
     // Portfolio sits under Dashboard: one is "what is running", the other is

@@ -62,7 +62,7 @@ function OiCell({ value, side, max }) {
                         style={{ width: `${w}%` }}
                     />
                 )}
-                <span className={`relative z-10 block px-1 leading-4 ${call ? 'text-right' : 'text-left'} ${n > 0 ? 'text-fg-2' : 'text-fg-6'}`}>
+                <span className={`relative z-10 block px-1 leading-4 ${call ? 'text-right' : 'text-left'} ${n > 0 ? 'text-fg-2' : 'text-fg-5'}`}>
                     {fmt(n)}
                 </span>
             </div>
@@ -74,7 +74,7 @@ function OiCell({ value, side, max }) {
 function ChgCell({ value }) {
     const n = num(value);
     return (
-        <td className={`text-center text-4xs ${n == null || n === 0 ? 'text-fg-6' : n > 0 ? 'text-success' : 'text-danger'}`}>
+        <td className={`text-center text-4xs ${n == null || n === 0 ? 'text-fg-5' : n > 0 ? 'text-success' : 'text-danger'}`}>
             {n == null ? '—' : `${n > 0 ? '+' : n < 0 ? '−' : ''}${fmt(Math.abs(n))}`}
         </td>
     );
@@ -105,13 +105,13 @@ export default function ChainLadder({
         switch (key) {
             case 'bidask':
                 return (
-                    <td key={key} className="text-center text-4xs text-fg-5">
+                    <td key={key} className="text-center text-4xs text-fg-4">
                         {num(d.bid) != null || num(d.ask) != null ? `${fmt(d.bid, 2)}/${fmt(d.ask, 2)}` : '—'}
                     </td>
                 );
             case 'sp':
                 return (
-                    <td key={key} className={`text-center ${num(d.halfSpreadPct) > 2 ? 'text-danger' : 'text-fg-6'}`}>
+                    <td key={key} className={`text-center ${num(d.halfSpreadPct) > 2 ? 'text-danger' : 'text-fg-4'}`}>
                         {num(d.halfSpreadPct) != null ? `${fmt(d.halfSpreadPct, 1)}%` : '—'}
                     </td>
                 );
@@ -138,7 +138,7 @@ export default function ChainLadder({
     const deltaCell = (d, side) => {
         const dv = num(d.delta);
         return (
-            <td className={`text-center ${dv == null ? 'text-fg-6' : side === 'CE' ? 'text-sky-300/80' : 'text-violet-300/80'}`}
+            <td className={`text-center ${dv == null ? 'text-fg-5' : side === 'CE' ? 'text-sky-300/80' : 'text-violet-300/80'}`}
                 title={dv == null ? 'delta not available for this strike' : `delta ${dv} — the market is pricing roughly a ${Math.round(Math.abs(dv) * 100)}% chance this strike finishes in the money`}>
                 {dv == null ? '—' : sgnNum(dv, 2)}
             </td>
@@ -176,7 +176,7 @@ export default function ChainLadder({
 
             {/* VIEW TOGGLE — the same rows, three readings. */}
             <div className="flex items-center gap-1 mb-1.5 text-3xs">
-                <span className="text-fg-6 mr-1">view</span>
+                <span className="text-fg-5 mr-1">view</span>
                 {Object.keys(VIEW_COLS).map(v => (
                     <button key={v} onClick={() => onView(v)}
                         title={v === 'ltp' ? 'Prices: bid/ask, half-spread and the traded price'
@@ -188,7 +188,7 @@ export default function ChainLadder({
                         {VIEW_LABEL[v]}
                     </button>
                 ))}
-                <span className="text-fg-6 ml-1">· strike, IV and delta stay put in every view</span>
+                <span className="text-fg-5 ml-1">· strike, IV and delta stay put in every view</span>
             </div>
 
             {!chain ? (
@@ -203,7 +203,7 @@ export default function ChainLadder({
                                     <th className="py-1 font-normal">strike</th>
                                     <th className="py-1 font-normal text-violet-400/80" colSpan={perSide}>PUTS</th>
                                 </tr>
-                                <tr className="text-fg-6 text-4xs border-b border-line-0">
+                                <tr className="text-fg-5 text-4xs border-b border-line-0">
                                     {cols.map(c => <th key={`c-${c.key}`} className={`font-normal ${c.w || ''}`}>{c.label}</th>)}
                                     <th className="font-normal">Δ</th>
                                     <th className="font-normal text-right pr-1">LTP</th>
@@ -291,7 +291,7 @@ export default function ChainLadder({
                                         );
                                     };
                                     const ivCell = (d) => (
-                                        <td className="text-center text-fg-5">{num(d.iv) != null ? fmt(d.iv, 1) : '—'}</td>
+                                        <td className="text-center text-fg-4">{num(d.iv) != null ? fmt(d.iv, 1) : '—'}</td>
                                     );
                                     return (
                                         <tr key={k} ref={isAtm ? atmRowRef : null}
@@ -315,7 +315,7 @@ export default function ChainLadder({
                                                     {!isAtm && num(row.distancePct) != null
                                                         ? <span>{row.distancePct > 0 ? '+' : '−'}{fmt(Math.abs(row.distancePct), 1)}%</span>
                                                         : null}
-                                                    {isAtm ? <span className="text-primary">ATM</span> : null}
+                                                    {isAtm ? <span className="text-primary-ink">ATM</span> : null}
                                                     {isPain ? <span className="text-warning"> ⊙MP</span> : null}
                                                     {ceWall ? <span className="text-sky-400"> ▲CE</span> : null}
                                                     {peWall ? <span className="text-violet-400"> ▼PE</span> : null}
@@ -331,8 +331,8 @@ export default function ChainLadder({
                             </tbody>
                         </table>
                     </div>
-                    <div className="text-4xs text-fg-6 mt-1.5 flex flex-wrap gap-x-3">
-                        <span><span className="text-primary">ATM</span> at-the-money</span>
+                    <div className="text-4xs text-fg-5 mt-1.5 flex flex-wrap gap-x-3">
+                        <span><span className="text-primary-ink">ATM</span> at-the-money</span>
                         {num(chain.maxPain) != null && <span><span className="text-warning">⊙MP</span> max pain {fmt(chain.maxPain)}</span>}
                         {chain.ceWall && <span><span className="text-sky-400">▲CE</span> call wall {fmt(chain.ceWall.strike)} ({fmt(chain.ceWall.oi)} OI)</span>}
                         {chain.peWall && <span><span className="text-violet-400">▼PE</span> put wall {fmt(chain.peWall.strike)} ({fmt(chain.peWall.oi)} OI)</span>}
@@ -342,12 +342,12 @@ export default function ChainLadder({
                         <span><span className="inline-flex items-center rounded-xs px-1 text-5xs font-black leading-none ring-1 bg-emerald-900 text-success ring-emerald-500">B</span> bought leg · <span className="inline-flex items-center rounded-xs px-1 text-5xs font-black leading-none ring-1 bg-rose-900 text-danger ring-rose-500">S</span> sold leg — ×n is the ratio; the row is tinted and the active leg is outlined</span>
                         <span>Δ ≈ the market&apos;s odds the strike expires in the money</span>
                         <span>ring = a leg sits here (green buy / red sell)</span>
-                        <span className="text-fg-6">
+                        <span className="text-fg-5">
                             source: {chain.source === 'archive' ? 'archived snapshot'
                                 : chain.source === 'broker' ? 'live broker chain' : 'none'}
                             {chain.brokerFallback ? ' (broker fallback)' : ''}
                         </span>
-                        {activeLegId ? <span className="text-primary/70">a click retargets the selected leg</span> : null}
+                        {activeLegId ? <span className="text-primary-ink/70">a click retargets the selected leg</span> : null}
                     </div>
                 </>
             )}

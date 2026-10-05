@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import { Key, Bell, RefreshCw, Trash2, CheckCircle, AlertTriangle, Cookie, Save, Settings as SettingsIcon } from 'lucide-react';
 import { PageHeader, Tabs } from '../components/viz/primitives';
+import { istDateTime } from '../components/viz/tokens';
 import { API_URL } from '../config/api.js';
 import { useConfirm } from '../components/confirmContext.js';
 
@@ -185,13 +186,13 @@ export default function Settings() {
             <div className="space-y-8">
               {/* General Configuration */}
               <div className="space-y-4">
-                <h3 className="text-xl font-bold text-fg flex items-center gap-2">
+                <h2 className="text-xl font-bold text-fg flex items-center gap-2">
                    <div className="w-2 h-8 bg-purple-500 rounded-full"></div>
                    General Configuration
-                </h3>
+                </h2>
                 <div className="p-4 bg-slate-900/50 rounded-lg border border-line flex items-center justify-between">
                      <div>
-                        <h4 className="text-fg font-medium">Live Data Source</h4>
+                        <h3 className="text-fg font-medium">Live Data Source</h3>
                         <p className="text-sm text-fg-4">Select the price source for analysis (Spot vs Futures).</p>
                      </div>
                      <select 
@@ -214,7 +215,7 @@ export default function Settings() {
                 </div>
                 <div className="p-4 bg-slate-900/50 rounded-lg border border-line flex items-center justify-between">
                      <div>
-                        <h4 className="text-fg font-medium">Max Daily Loss (₹)</h4>
+                        <h3 className="text-fg font-medium">Max Daily Loss (₹)</h3>
                         <p className="text-sm text-fg-4">Circuit breaker: blocks new entries when daily loss hits this limit.</p>
                      </div>
                      <div className="flex items-center gap-2">
@@ -244,10 +245,10 @@ export default function Settings() {
 
               {/* Fyers Section */}
               <div className="space-y-4">
-                <h3 className="text-xl font-bold text-fg flex items-center gap-2">
+                <h2 className="text-xl font-bold text-fg flex items-center gap-2">
                   <div className="w-2 h-8 bg-blue-500 rounded-full"></div>
                   Fyers API Settings
-                </h3>
+                </h2>
                 <div className="grid gap-4 p-4 bg-slate-900/50 rounded-lg border border-line">
                   <div>
                     <label className="block text-sm font-medium text-fg-4 mb-1">App ID</label>
@@ -282,7 +283,7 @@ export default function Settings() {
                       }
                     }}
                     disabled={loading}
-                    className="flex-1 bg-primary hover:bg-red-600 text-white py-2 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                    className="flex-1 bg-primary hover:bg-red-600 text-on-primary py-2 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
                   >
                     <Key className="w-4 h-4" />
                     {config?.fyers_connected ? 'Re-Login (Browser)' : 'Login to Fyers'}
@@ -310,10 +311,10 @@ export default function Settings() {
 
               {/* Angel Section */}
               <div className="space-y-4">
-                <h3 className="text-xl font-bold text-fg flex items-center gap-2">
+                <h2 className="text-xl font-bold text-fg flex items-center gap-2">
                   <div className="w-2 h-8 bg-orange-500 rounded-full"></div>
                   Angel One Settings
-                </h3>
+                </h2>
                 <div className="grid gap-4 p-4 bg-slate-900/50 rounded-lg border border-line">
                    <div>
                     <label className="block text-sm font-medium text-fg-4 mb-1">API Key</label>
@@ -334,13 +335,13 @@ export default function Settings() {
 
               {/* MCX Section */}
               <div className="space-y-4">
-                <h3 className="text-xl font-bold text-fg flex items-center gap-2">
+                <h2 className="text-xl font-bold text-fg flex items-center gap-2">
                   <div className="w-2 h-8 bg-yellow-500 rounded-full"></div>
                   Commodities (MCX)
-                </h3>
+                </h2>
                 <div className="p-4 bg-slate-900/50 rounded-lg border border-line flex items-center justify-between">
                   <div>
-                    <h4 className="text-fg font-medium">Enable MCX Trading</h4>
+                    <h3 className="text-fg font-medium">Enable MCX Trading</h3>
                     <p className="text-sm text-fg-4">Allow the bot to trade Gold, Silver, and Crude Oil Futures.</p>
                   </div>
                   
@@ -379,10 +380,10 @@ export default function Settings() {
           {activeTab === 'cookies' && (
             <div className="space-y-6">
               <div>
-                <h3 className="text-xl font-bold text-fg flex items-center gap-2">
+                <h2 className="text-xl font-bold text-fg flex items-center gap-2">
                   <div className="w-2 h-8 bg-amber-500 rounded-full"></div>
                   AI Web Cookies (Global)
-                </h3>
+                </h2>
                 <p className="text-sm text-fg-4 mt-2">
                   Update Claude.ai and Gemini web-session cookies in ONE place. Every backtest
                   and every deployed live strategy reads from here — you no longer need to
@@ -411,7 +412,7 @@ export default function Settings() {
                         </span>
                       </div>
                       <div className="font-mono text-sm text-fg mt-1">
-                        {isSet ? <>…{m.last4} <span className="text-fg-5 text-xs">({vendor})</span></> : <span className="text-fg-6">—</span>}
+                        {isSet ? <>…{m.last4} <span className="text-fg-5 text-xs">({vendor})</span></> : <span className="text-fg-5">—</span>}
                       </div>
                     </div>
                   );
@@ -419,7 +420,7 @@ export default function Settings() {
               </div>
               {cookieMeta?.updatedAt && (
                 <div className="text-xs text-fg-5">
-                  Last updated: {new Date(cookieMeta.updatedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}
+                  Last updated: {istDateTime(cookieMeta.updatedAt)}
                 </div>
               )}
 
@@ -427,7 +428,7 @@ export default function Settings() {
 
               {/* Edit form — paste in new values; leave blank to keep existing */}
               <div className="space-y-4">
-                <h4 className="text-fg font-semibold">Update cookies</h4>
+                <h3 className="text-fg font-semibold">Update cookies</h3>
                 <p className="text-xs text-fg-5">
                   Paste fresh values from <code className="text-fg-3">claude.ai</code> or
                   <code className="text-fg-3"> gemini.google.com</code> (DevTools → Application → Cookies).
@@ -502,7 +503,7 @@ export default function Settings() {
                 <button
                   onClick={handleSaveCookies}
                   disabled={cookieSaving}
-                  className="bg-primary hover:bg-red-600 text-white px-6 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50"
+                  className="bg-primary hover:bg-red-600 text-on-primary px-6 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50"
                 >
                   <Save className="w-4 h-4" />
                   {cookieSaving ? 'Saving…' : 'Save Cookies'}
@@ -513,13 +514,13 @@ export default function Settings() {
 
           {activeTab === 'notifications' && (
              <div className="space-y-6">
-                <h3 className="text-xl font-bold text-fg">Telegram Notifications</h3>
+                <h2 className="text-xl font-bold text-fg">Telegram Notifications</h2>
                 <div className="p-4 bg-slate-900/50 rounded-lg border border-line space-y-4">
                     <p className="text-fg-4 text-sm">Send a test message to verify your Telegram bot integration.</p>
                     <button 
                         onClick={handleTestNotification}
                         disabled={loading}
-                        className="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2 disabled:opacity-50"
+                        className="bg-primary hover:bg-blue-600 text-on-primary px-4 py-2 rounded flex items-center gap-2 disabled:opacity-50"
                     >
                         <Bell className="w-4 h-4" /> 
                         {loading ? 'Sending...' : 'Send Test Notification'}

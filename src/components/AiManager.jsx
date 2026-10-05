@@ -10,6 +10,7 @@ import { pollInterval } from '../hooks/usePolling.js';
 import { API_BASE } from '../config/api.js';
 import { useConfirm } from './confirmContext.js';
 import { toast } from './toastStore.js';
+import { istDateTime, pnlTone } from './viz/tokens';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -140,7 +141,7 @@ function JobCard({ job, onStop, expanded, onToggleExpand }) {
                         </span>
                     </div>
                     <div className="text-xs text-fg-5 mt-0.5">
-                        {job.timesteps?.toLocaleString()} steps
+                        {job.timesteps?.toLocaleString('en-IN')} steps
                         {job.startedAt && ` · Started ${new Date(job.startedAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false })}`}
                     </div>
                 </div>
@@ -212,6 +213,26 @@ function JobCard({ job, onStop, expanded, onToggleExpand }) {
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
+/**
+ * A training-metadata date from the trainer.
+ *
+ * train_rl.py writes `str(df.index[0])[:19]` and that index is UTC, so every
+ * stored value reads like "2020-01-01 03:45:00" — which is 09:15 IST, the NSE
+ * open, shifted back 5:30. Verified against every *_metadata.json on disk: all
+ * of them are 03:45:00. The string carries NO zone, so JS would parse it as
+ * LOCAL time; it is pinned to UTC explicitly and then rendered in IST like every
+ * other timestamp in the app, instead of sitting unlabelled beside IST ones.
+ *
+ * Older metadata stores a date with no time at all — nothing to convert, so it
+ * is passed through untouched.
+ */
+const metaDate = (v) => {
+    if (!v || v === 'N/A') return v || '—';
+    if (!/\d{2}:\d{2}/.test(v)) return v;
+    const d = new Date(String(v).replace(' ', 'T') + 'Z');
+    return Number.isNaN(d.getTime()) ? v : istDateTime(d);
+};
+
 const AiManager = () => {
     const confirm = useConfirm();
     // The equity curve is recharts, so its colours have to be concrete strings
@@ -436,7 +457,7 @@ const AiManager = () => {
 
     // ── Resume a training run from its last checkpoint ───────────────────────
     const handleResumeTraining = async (ckpt) => {
-        if (!await confirm(`Resume "${ckpt.model_name}" from step ${ckpt.step.toLocaleString()} (${ckpt.pct_complete}% complete)?`)) return;
+        if (!await confirm(`Resume "${ckpt.model_name}" from step ${ckpt.step.toLocaleString('en-IN')} (${ckpt.pct_complete}% complete)?`)) return;
         setResumingModel(ckpt.model_name);
         try {
             const res  = await fetch(`${API_BASE}/api/rl/resume`, {
@@ -775,7 +796,7 @@ const AiManager = () => {
                                             <div>
                                                 <label htmlFor="aimanager-parallel-envs-6" className="text-xs text-fg-4 font-semibold block mb-1">
                                                     Parallel Envs
-                                                    <span className="ml-1 text-3xs text-fg-6 font-normal">(n_envs · vmap)</span>
+                                                    <span className="ml-1 text-3xs text-fg-5 font-normal">(n_envs · vmap)</span>
                                                 </label>
                                                 <select id="aimanager-parallel-envs-6"
                                                     value={rlTrainConfig.nitroNEnvs}
@@ -790,12 +811,12 @@ const AiManager = () => {
                                                     <option value={512}>512 — High · multi-GPU</option>
                                                     <option value={1024}>1024 — Max · 8-GPU cluster</option>
                                                 </select>
-                                                <p className="text-3xs text-fg-6 mt-1">More envs = more diverse rollouts per update.</p>
+                                                <p className="text-3xs text-fg-5 mt-1">More envs = more diverse rollouts per update.</p>
                                             </div>
                                             <div>
                                                 <label htmlFor="aimanager-steps-env-7" className="text-xs text-fg-4 font-semibold block mb-1">
                                                     Steps / Env
-                                                    <span className="ml-1 text-3xs text-fg-6 font-normal">(n_steps)</span>
+                                                    <span className="ml-1 text-3xs text-fg-5 font-normal">(n_steps)</span>
                                                 </label>
                                                 <select id="aimanager-steps-env-7"
                                                     value={rlTrainConfig.nitroNSteps}
@@ -809,11 +830,11 @@ const AiManager = () => {
                                                     <option value={256}>256 — Longer horizon</option>
                                                     <option value={512}>512 — Max horizon</option>
                                                 </select>
-                                                <p className="text-3xs text-fg-6 mt-1">Pool = n_envs × n_steps transitions.</p>
+                                                <p className="text-3xs text-fg-5 mt-1">Pool = n_envs × n_steps transitions.</p>
                                             </div>
                                         </div>
                                         <p className="text-3xs text-warning/70">
-                                            Pool size: {(rlTrainConfig.nitroNEnvs * rlTrainConfig.nitroNSteps).toLocaleString()} transitions/update
+                                            Pool size: {(rlTrainConfig.nitroNEnvs * rlTrainConfig.nitroNSteps).toLocaleString('en-IN')} transitions/update
                                         </p>
                                     </div>
                                 )}
@@ -917,7 +938,7 @@ const AiManager = () => {
 
                                 {/* Custom model name */}
                                 <div>
-                                    <label htmlFor="aimanager-custom-model-name-15" className="text-xs text-fg-4 uppercase tracking-wider font-bold block mb-1">Custom Model Name <span className="text-fg-6 font-normal normal-case">(optional)</span></label>
+                                    <label htmlFor="aimanager-custom-model-name-15" className="text-xs text-fg-4 uppercase tracking-wider font-bold block mb-1">Custom Model Name <span className="text-fg-5 font-normal normal-case">(optional)</span></label>
                                     <input id="aimanager-custom-model-name-15" type="text" placeholder="e.g. SCALPER_BOT_V2" value={rlTrainConfig.customName} onChange={(e) => setRlTrainConfig({...rlTrainConfig, customName: e.target.value})} className="w-full bg-slate-900 border border-line rounded p-2 text-sm focus:border-indigo-500 outline-none placeholder-fg-6" />
                                 </div>
 
@@ -962,7 +983,7 @@ const AiManager = () => {
                                     <summary className="cursor-pointer text-xs text-fg-4 uppercase tracking-wider font-bold flex items-center gap-2 select-none">
                                         <span className="group-open:rotate-90 transition-transform inline-block">▶</span>
                                         Advanced Hyperparameters
-                                        <span className="text-3xs text-fg-6 font-normal normal-case">
+                                        <span className="text-3xs text-fg-5 font-normal normal-case">
                                             {rlTrainConfig.engineMode === 'NITRO'
                                                 ? 'LR (fixed) · Epochs · GAE · Gamma · Entropy · Curriculum · Minibatch'
                                                 : 'LR · Epochs · GAE · Gamma · Entropy · Curriculum · Batch'}
@@ -993,7 +1014,7 @@ const AiManager = () => {
                                             <div className="grid grid-cols-2 gap-4">
                                                 <div>
                                                     <label htmlFor="aimanager-lr-start-18" className="text-xs text-fg-4 font-semibold block mb-1">LR Start
-                                                        <span className="ml-1 text-3xs text-fg-6 font-normal">initial learning rate</span>
+                                                        <span className="ml-1 text-3xs text-fg-5 font-normal">initial learning rate</span>
                                                     </label>
                                                     <select id="aimanager-lr-start-18" value={rlTrainConfig.lrInitial} onChange={(e) => setRlTrainConfig({...rlTrainConfig, lrInitial: parseFloat(e.target.value)})} className="w-full bg-slate-900 border border-line rounded p-2 text-sm focus:border-indigo-500 outline-none">
                                                         <option value={0.001}>1e-3 — Aggressive (fast but unstable)</option>
@@ -1006,7 +1027,7 @@ const AiManager = () => {
                                                 </div>
                                                 <div>
                                                     <label htmlFor="aimanager-lr-end-19" className="text-xs text-fg-4 font-semibold block mb-1">LR End
-                                                        <span className="ml-1 text-3xs text-fg-6 font-normal">final learning rate</span>
+                                                        <span className="ml-1 text-3xs text-fg-5 font-normal">final learning rate</span>
                                                     </label>
                                                     <select id="aimanager-lr-end-19" value={rlTrainConfig.lrFinal} onChange={(e) => setRlTrainConfig({...rlTrainConfig, lrFinal: parseFloat(e.target.value)})} className="w-full bg-slate-900 border border-line rounded p-2 text-sm focus:border-indigo-500 outline-none">
                                                         <option value={0.0003}>3e-4 — No decay</option>
@@ -1023,7 +1044,7 @@ const AiManager = () => {
                                         <div className="grid grid-cols-2 gap-4">
                                             <div>
                                                 <label className="text-xs text-fg-4 font-semibold block mb-1">PPO Epochs
-                                                    <span className="ml-1 text-3xs text-fg-6 font-normal">gradient passes per rollout</span>
+                                                    <span className="ml-1 text-3xs text-fg-5 font-normal">gradient passes per rollout</span>
                                                 </label>
                                                 {rlTrainConfig.engineMode === 'NITRO' ? (
                                                     <select value={rlTrainConfig.nEpochs} onChange={(e) => setRlTrainConfig({...rlTrainConfig, nEpochs: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-amber-700/50 rounded p-2 text-sm focus:border-amber-500 outline-none">
@@ -1050,7 +1071,7 @@ const AiManager = () => {
                                             </div>
                                             <div>
                                                 <label htmlFor="aimanager-gae-lambda-20" className="text-xs text-fg-4 font-semibold block mb-1">GAE Lambda
-                                                    <span className="ml-1 text-3xs text-fg-6 font-normal">bias/variance tradeoff</span>
+                                                    <span className="ml-1 text-3xs text-fg-5 font-normal">bias/variance tradeoff</span>
                                                 </label>
                                                 <select id="aimanager-gae-lambda-20" value={rlTrainConfig.gaeLambda} onChange={(e) => setRlTrainConfig({...rlTrainConfig, gaeLambda: parseFloat(e.target.value)})} className="w-full bg-slate-900 border border-line rounded p-2 text-sm focus:border-indigo-500 outline-none">
                                                     <option value={0.90}>0.90 — Low variance · scalping</option>
@@ -1066,7 +1087,7 @@ const AiManager = () => {
                                         {/* Gamma */}
                                         <div>
                                             <label htmlFor="aimanager-gamma-discount-factor-21" className="text-xs text-fg-4 font-semibold block mb-1">Gamma (Discount Factor)
-                                                <span className="ml-1 text-3xs text-fg-6 font-normal">how much future rewards matter</span>
+                                                <span className="ml-1 text-3xs text-fg-5 font-normal">how much future rewards matter</span>
                                             </label>
                                             <select id="aimanager-gamma-discount-factor-21" value={rlTrainConfig.gamma} onChange={(e) => setRlTrainConfig({...rlTrainConfig, gamma: parseFloat(e.target.value)})} className="w-full bg-slate-900 border border-line rounded p-2 text-sm focus:border-indigo-500 outline-none">
                                                 <option value={0.95}>0.95 — Scalping: focus on immediate P&L</option>
@@ -1081,7 +1102,7 @@ const AiManager = () => {
                                         {/* Entropy */}
                                         <div>
                                             <label className="text-xs text-fg-4 font-semibold block mb-1">Entropy Schedule
-                                                <span className="ml-1 text-3xs text-fg-6 font-normal">exploration → exploitation across phases</span>
+                                                <span className="ml-1 text-3xs text-fg-5 font-normal">exploration → exploitation across phases</span>
                                             </label>
                                             <div className="grid grid-cols-4 gap-2">
                                                 {[
@@ -1107,7 +1128,7 @@ const AiManager = () => {
                                         {/* Curriculum */}
                                         <div>
                                             <label htmlFor="aimanager-curriculum-split-p1-p2-p3-22" className="text-xs text-fg-4 font-semibold block mb-1">Curriculum Split (P1/P2/P3 %)
-                                                <span className="ml-1 text-3xs text-fg-6 font-normal">must sum to 100</span>
+                                                <span className="ml-1 text-3xs text-fg-5 font-normal">must sum to 100</span>
                                             </label>
                                             <select id="aimanager-curriculum-split-p1-p2-p3-22" value={rlTrainConfig.curriculum} onChange={(e) => setRlTrainConfig({...rlTrainConfig, curriculum: e.target.value})} className="w-full bg-slate-900 border border-line rounded p-2 text-sm focus:border-indigo-500 outline-none">
                                                 <option value="20/20/60">20/20/60 — Max final-phase (best for long datasets)</option>
@@ -1128,7 +1149,7 @@ const AiManager = () => {
                                         <div>
                                             <label className="text-xs text-fg-4 font-semibold block mb-1">
                                                 {rlTrainConfig.engineMode === 'NITRO' ? 'Minibatch Size' : 'Batch Size'}
-                                                <span className="ml-1 text-3xs text-fg-6 font-normal">gradient step size (0 = auto)</span>
+                                                <span className="ml-1 text-3xs text-fg-5 font-normal">gradient step size (0 = auto)</span>
                                             </label>
                                             {rlTrainConfig.engineMode === 'NITRO' ? (
                                                 <select value={rlTrainConfig.batchSize} onChange={(e) => setRlTrainConfig({...rlTrainConfig, batchSize: parseInt(e.target.value)})} className="w-full bg-slate-900 border border-amber-700/50 rounded p-2 text-sm focus:border-amber-500 outline-none">
@@ -1150,7 +1171,7 @@ const AiManager = () => {
                                             )}
                                             <p className="text-3xs text-fg-5 mt-1">
                                                 {rlTrainConfig.engineMode === 'NITRO'
-                                                    ? `Pool = ${rlTrainConfig.nitroNEnvs} envs × ${rlTrainConfig.nitroNSteps} steps = ${(rlTrainConfig.nitroNEnvs * rlTrainConfig.nitroNSteps).toLocaleString()} transitions. Minibatch must divide evenly into pool.`
+                                                    ? `Pool = ${rlTrainConfig.nitroNEnvs} envs × ${rlTrainConfig.nitroNSteps} steps = ${(rlTrainConfig.nitroNEnvs * rlTrainConfig.nitroNSteps).toLocaleString('en-IN')} transitions. Minibatch must divide evenly into pool.`
                                                     : 'Pool = n_envs × n_steps (auto-sized per hardware). Batch must divide evenly into pool.'}
                                             </p>
                                         </div>
@@ -1190,7 +1211,7 @@ const AiManager = () => {
 
                                 {/* Base model (continual learning) */}
                                 <div>
-                                    <label htmlFor="aimanager-base-model-25" className="text-xs text-fg-4 uppercase tracking-wider font-bold block mb-1">Base Model <span className="text-fg-6 font-normal normal-case">(continual learning)</span></label>
+                                    <label htmlFor="aimanager-base-model-25" className="text-xs text-fg-4 uppercase tracking-wider font-bold block mb-1">Base Model <span className="text-fg-5 font-normal normal-case">(continual learning)</span></label>
                                     <select id="aimanager-base-model-25" value={rlTrainConfig.baseModel} onChange={(e) => setRlTrainConfig({...rlTrainConfig, baseModel: e.target.value})} className="w-full bg-slate-900 border border-line rounded p-2 text-sm focus:border-indigo-500 outline-none">
                                         <option value="">-- None (Train from scratch) --</option>
                                         {availableRlModels.flatMap((model, idx) => {
@@ -1222,9 +1243,9 @@ const AiManager = () => {
                                 {/* Model registry */}
                                 <div className="mt-4 border-t border-line pt-6">
                                     <div className="flex justify-between items-center mb-4">
-                                        <h3 className="text-sm font-bold text-fg-3 flex items-center gap-2">
+                                        <h2 className="text-sm font-bold text-fg-3 flex items-center gap-2">
                                             <FaBrain className="text-indigo-400" /> Saved RL Models
-                                        </h3>
+                                        </h2>
                                         <div className="flex gap-2 items-center">
                                             {/* The file button was the Tailwind-docs pale chip (bg-indigo-50 +
                                                 text-indigo-700), which inverts catastrophically: shades 50/100
@@ -1243,9 +1264,9 @@ const AiManager = () => {
                                             <p className="text-sm text-fg-4">No trained PPO models found in registry.</p>
                                         </div>
                                     ) : (
-                                        <div className="overflow-x-auto rounded-lg border border-line">
+                                        <div className="overflow-x-auto max-h-[60vh] overflow-y-auto rounded-lg border border-line">
                                             <table className="w-full text-left text-xs whitespace-nowrap">
-                                                <thead className="bg-slate-800 text-fg-4 uppercase tracking-wider">
+                                                <thead className="bg-slate-800 text-fg-4 uppercase tracking-wider sticky top-0 z-10">
                                                     <tr>
                                                         <th className="px-4 py-3 font-semibold">Symbol / Name</th>
                                                         <th className="px-4 py-3 font-semibold">Data Range</th>
@@ -1266,12 +1287,12 @@ const AiManager = () => {
                                                                 <div className="text-fg-5 mt-1 flex gap-2">
                                                                     <span>{new Date(model.timestamp || model.trained_at).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
                                                                     <span>•</span>
-                                                                    <span>{model.timesteps?.toLocaleString() || 0} steps</span>
+                                                                    <span>{model.timesteps?.toLocaleString('en-IN') || 0} steps</span>
                                                                 </div>
                                                             </td>
                                                             <td className="px-4 py-3 text-fg-3">
-                                                                <div>{model.data_length ? `${model.data_length.toLocaleString()} candles` : (model.description || 'N/A')}</div>
-                                                                <div className="text-fg-5 mt-1">{model.start_date && model.start_date !== 'N/A' ? `${model.start_date} → ${model.end_date}` : 'Custom / Uploaded'}</div>
+                                                                <div>{model.data_length ? `${model.data_length.toLocaleString('en-IN')} candles` : (model.description || 'N/A')}</div>
+                                                                <div className="text-fg-5 mt-1">{model.start_date && model.start_date !== 'N/A' ? `${metaDate(model.start_date)} → ${metaDate(model.end_date)}` : 'Custom / Uploaded'}</div>
                                                             </td>
                                                             <td className="px-4 py-3">
                                                                 {model.action_distribution ? (
@@ -1329,7 +1350,7 @@ const AiManager = () => {
                                                                                                     <span className="text-fg-4"> · {r.n_trades}T · WR </span>
                                                                                                     <span className={r.win_rate >= 0.5 ? 'text-success' : 'text-danger'}>{(r.win_rate * 100).toFixed(1)}%</span>
                                                                                                     <span className="text-fg-4"> · </span>
-                                                                                                    <span className={r.total_pnl >= 0 ? 'text-success' : 'text-danger'}>{r.total_pnl > 0 ? '+' : ''}{r.total_pnl}</span>
+                                                                                                    <span className={pnlTone(r.total_pnl)}>{r.total_pnl > 0 ? '+' : ''}{r.total_pnl}</span>
                                                                                                     <span className="text-fg-5"> · S:{r.sharpe?.toFixed(2)}</span>
                                                                                                 </div>
                                                                                             )
@@ -1375,17 +1396,18 @@ const AiManager = () => {
                             <div className="p-4 bg-slate-900 rounded-lg space-y-3">
                                 <div className="flex justify-between items-center">
                                     <label className="text-sm text-fg-3">Confidence Threshold</label>
-                                    <span className="text-indigo-400 font-mono font-bold">{backtestConfig.params.confidence_threshold}</span>
+                                    <span className="text-indigo-400 font-mono font-bold">{Math.round((backtestConfig.params.confidence_threshold ?? 0.6) * 100)}%</span>
                                 </div>
                                 <input type="range" min="0.5" max="0.9" step="0.05" value={backtestConfig.params.confidence_threshold}
                                     onChange={(e) => setBacktestConfig(c => ({ ...c, params: { ...c.params, confidence_threshold: parseFloat(e.target.value) } }))}
                                     className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500" />
                                 {backtestConfig.strategy === 'ai_adaptive' && (
                                     <div className="flex items-center gap-2 mt-2">
-                                        <input type="checkbox" checked={backtestConfig.params.use_adaptive_risk}
+                                        <input type="checkbox" id="ai-use-adaptive-risk"
+                                            checked={backtestConfig.params.use_adaptive_risk}
                                             onChange={(e) => setBacktestConfig(c => ({ ...c, params: { ...c.params, use_adaptive_risk: e.target.checked } }))}
                                             className="w-4 h-4 rounded border-line-2 bg-slate-800 text-indigo-400 focus:ring-indigo-500" />
-                                        <label className="text-sm text-fg-3">Enable Dynamic TP/SL Scaling</label>
+                                        <label htmlFor="ai-use-adaptive-risk" className="text-sm text-fg-3 cursor-pointer">Enable Dynamic TP/SL Scaling</label>
                                     </div>
                                 )}
                             </div>
@@ -1469,7 +1491,7 @@ const AiManager = () => {
                                         />
                                     </div>
                                     <div className="flex gap-3 mt-1 text-xs text-fg-5">
-                                        <span>Step {ckpt.step.toLocaleString()} / {ckpt.total_timesteps.toLocaleString()}</span>
+                                        <span>Step {ckpt.step.toLocaleString('en-IN')} / {ckpt.total_timesteps.toLocaleString('en-IN')}</span>
                                         <span>{new Date(ckpt.timestamp).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</span>
                                     </div>
                                 </div>
@@ -1491,7 +1513,7 @@ const AiManager = () => {
                 <div className="mt-8 bg-slate-800/50 border border-line rounded-xl p-6">
                     <h2 className="text-xl font-bold mb-6">Backtest Performance</h2>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-                        <ResultCard label="Total Return"  value={`₹${backtestResult.total_pnl?.toFixed(2)}`}    color={backtestResult.total_pnl >= 0 ? 'text-success' : 'text-danger'} />
+                        <ResultCard label="Total Return"  value={`₹${backtestResult.total_pnl?.toFixed(2)}`}    color={pnlTone(backtestResult.total_pnl)} />
                         <ResultCard label="Win Rate"      value={`${(backtestResult.win_rate * 100).toFixed(1)}%`} color="text-blue-400" />
                         <ResultCard label="Trades"        value={backtestResult.total_trades}                    color="text-fg" />
                         <ResultCard label="Drawdown"      value={`₹${backtestResult.max_drawdown?.toFixed(2)}`}  color="text-danger" />

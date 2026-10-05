@@ -15,6 +15,7 @@
 //   POST /api/deployments/:id/toggle         → on/off (per deployment)
 //   POST /api/deployments/:id/toggle-mode    → PAPER/LIVE (per deployment)
 //   POST /api/deployments/:id/toggle-ai      → AI confirmation on/off (per deployment)
+//   POST /api/deployments/:id/toggle-inflight-review → AI in-flight review on/off + SL/TP permissions
 //   POST /api/deployments/:id/lots           → position size in lots (per deployment)
 //   DELETE /api/deployments/:id              → remove (refuses if open position)
 //
@@ -89,6 +90,8 @@ const AI_PARAM_KEYS = [
     'claude_thinking_enabled', 'claude_thinking_budget',
     'ai_fail_closed', 'ai_use_spot_exits', 'ai_sl_safety_buffer',
     'use_ai_fair_entry', 'enable_mastra_validator',
+    // AI in-flight review: master switch + SL/TP permissions are on the card itself.
+    'ai_inflight_review_enabled', 'ai_inflight_review_sl_enabled', 'ai_inflight_review_tp_enabled',
 ];
 
 function _normalizeStrategies(list) {
@@ -168,7 +171,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
         return () => { cancelled = true; };
     }, []);
 
-    // Per-deployment realized PnL over trailing windows (7d + 30d) — ONE
+    // Per-deployment realized P&L over trailing windows (7d + 30d) — ONE
     // aggregation for all cards (badges next to each Results button).
     // { [deploymentId]: { d7: {pnl,trades,wins}, d30: {...} } }
     const [pnlSummary, setPnlSummary] = useState({});
@@ -274,6 +277,34 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
             await _mutate('AI toggle', () => axios.post(`${API_URL}/deployments/${d._id}/toggle-ai`, { enabled: next }));
         } finally { setBusyId(null); }
     };
+    // AI in-flight review for THIS deployment: the master switch, and separately
+    // whether a review may move the stop (sl) or the target (tp). Independent of
+    // AI confirmation — a deployment can enter without an AI gate and still have
+    // its open positions reviewed. See POST /api/deployments/:id/toggle-inflight-review.
+    const toggleInflight = async (d, patch) => {
+        const p = d.params || {};
+        const slOn = p.ai_inflight_review_sl_enabled !== false && p.ai_inflight_review_sl_enabled !== 'false';
+        const tpOn = p.ai_inflight_review_tp_enabled !== false && p.ai_inflight_review_tp_enabled !== 'false';
+        let msg = null;
+        if ('enabled' in patch) {
+            msg = patch.enabled
+                ? `Enable AI in-flight review for "${d.name}"?\n\nOpen positions will be re-assessed by the AI every ${p.ai_inflight_review_interval_min || 15} min. `
+                  + `It may close early, scale out, or extend the hold` + (slOn || tpOn ? `, and move the ${[slOn && 'stop-loss', tpOn && 'target'].filter(Boolean).join(' and ')}` : '') + '.'
+                : `Disable AI in-flight review for "${d.name}"?\n\nOpen positions will run on their own SL/TP and exit rules, with no AI re-assessment.`;
+        } else if (d.tradeMode === 'LIVE') {
+            // Letting an AI move a REAL broker stop or target deserves a second look.
+            const side = 'sl' in patch ? 'stop-loss' : 'target';
+            const next = 'sl' in patch ? patch.sl : patch.tp;
+            msg = { title: `${next ? 'Allow' : 'Stop'} AI ${side} changes`, danger: next,
+                    body: `"${d.name}" is trading LIVE.\n\n${next ? `The AI review may move this deployment's REAL ${side}.` : `The AI review will no longer move the ${side}; suggestions will be ignored.`}`,
+                    confirmLabel: next ? `Allow ${side} changes` : 'Confirm' };
+        }
+        if (msg && !await confirm(msg)) return;
+        setBusyId(d._id);
+        try {
+            await _mutate('AI review', () => axios.post(`${API_URL}/deployments/${d._id}/toggle-inflight-review`, patch));
+        } finally { setBusyId(null); }
+    };
     // Position SIZE for THIS deployment. `lots` is the multiplier the engine
     // applies at entry (quantity = lots × lotSize), so it scales risk and reward
     // together — hence the explicit confirmation on a LIVE deployment, which is
@@ -316,7 +347,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                     onClick={togglePanel}
                     aria-expanded={panelOpen}
                     title={panelOpen ? 'Collapse panel' : 'Expand panel'}
-                    className="text-xl font-bold flex items-center gap-2 text-left hover:text-primary transition-colors"
+                    className="text-xl font-bold flex items-center gap-2 text-left hover:text-primary-ink transition-colors"
                 >
                     {panelOpen
                         ? <ChevronDown className="w-4 h-4 text-fg-4" />
@@ -355,7 +386,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                     </button>
                     <button
                         onClick={() => { setCreateDefaults(null); setShowCreate(true); }}
-                        className="text-2xs px-3 py-1 rounded bg-primary text-white font-semibold hover:opacity-90"
+                        className="text-2xs px-3 py-1 rounded bg-primary text-on-primary font-semibold hover:opacity-90"
                     >
                         + Add Deployment
                     </button>
@@ -429,7 +460,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                         <div key={sym} className="rounded-lg border border-line-0 bg-slate-900/30 p-3">
                             <div className="flex items-center justify-between mb-2 gap-2">
                                 <div className="flex items-center gap-2 min-w-0">
-                                    <span className="font-mono text-sm text-fg truncate">{sym}</span>
+                                    <span className="font-mono text-sm text-fg truncate" title={sym}>{sym}</span>
                                     <span className="text-3xs px-1.5 py-0.5 rounded bg-slate-800 text-fg-4">
                                         {list.length} deployment{list.length === 1 ? '' : 's'}
                                     </span>
@@ -457,6 +488,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                                         onToggleActive={() => toggleActive(d)}
                                         onToggleMode={() => toggleMode(d)}
                                         onToggleAi={() => toggleAi(d)}
+                                        onToggleInflight={(patch) => toggleInflight(d, patch)}
                                         onSetLots={(n) => setLots(d, n)}
                                         onDelete={() => remove(d)}
                                         onToggleExpand={() => setExpanded(s => ({ ...s, [d._id]: !s[d._id] }))}
@@ -490,7 +522,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
 }
 
 // ── One deployment card — full parity with the legacy strategy card ────────
-// Compact realized-PnL badge for one trailing window ("7d" / "30d").
+// Compact realized-P&L badge for one trailing window ("7d" / "30d").
 // stats = { pnl, trades, wins } or null (no closed tagged trades in window).
 function PnlBadge({ label, stats }) {
     const has = stats && stats.trades > 0;
@@ -533,7 +565,7 @@ function LotsControl({ lots, lotSize, isLive, disabled, onSetLots }) {
                     type="button"
                     onClick={() => bump(-1)}
                     disabled={disabled || shown <= 1}
-                    className="px-1.5 leading-none text-fg-4 hover:text-fg disabled:opacity-30"
+                    className="hit-target px-1.5 leading-none text-fg-4 hover:text-fg disabled:opacity-30"
                     title="Fewer lots"
                 >
                     −
@@ -555,7 +587,7 @@ function LotsControl({ lots, lotSize, isLive, disabled, onSetLots }) {
                     type="button"
                     onClick={() => bump(1)}
                     disabled={disabled || shown >= 500}
-                    className="px-1.5 leading-none text-fg-4 hover:text-fg disabled:opacity-30"
+                    className="hit-target px-1.5 leading-none text-fg-4 hover:text-fg disabled:opacity-30"
                     title="More lots"
                 >
                     +
@@ -573,7 +605,7 @@ function LotsControl({ lots, lotSize, isLive, disabled, onSetLots }) {
                         onClick={() => onSetLots(pending)}
                         disabled={disabled}
                         className={`px-1.5 py-0.5 rounded text-4xs font-bold ${
-                            isLive ? 'bg-red-600/80 hover:bg-red-600 text-white' : 'bg-primary hover:opacity-90 text-white'
+                            isLive ? 'bg-red-600/80 hover:bg-red-600 text-white' : 'bg-primary hover:opacity-90 text-on-primary'
                         } disabled:opacity-50`}
                         title={isLive
                             ? `Apply ${pending} lot(s) to this LIVE deployment — future entries only`
@@ -598,7 +630,7 @@ function LotsControl({ lots, lotSize, isLive, disabled, onSetLots }) {
 function DeploymentCard({
     d, strategies, sessionHealth, globalConfig,
     isBusy, isExpanded, isEditing,
-    onToggleActive, onToggleMode, onToggleAi, onSetLots, onDelete, onToggleExpand, onToggleEdit, onEdited,
+    onToggleActive, onToggleMode, onToggleAi, onToggleInflight, onSetLots, onDelete, onToggleExpand, onToggleEdit, onEdited,
     onTest, onSim, onManualTrade, onResults, pnlWindows,
 }) {
     const params = d.params || {};
@@ -606,6 +638,11 @@ function DeploymentCard({
     const isLive = d.tradeMode === 'LIVE';
     const resolution = String(params.resolution || '?');
     const aiEnabled = !!(params.enable_ai_confirmation || params.use_ai_confirmation);
+    // Parsed strictly — a stored "false" string must read as OFF on the card.
+    const reviewOn = params.ai_inflight_review_enabled === true || params.ai_inflight_review_enabled === 'true';
+    const reviewSl = params.ai_inflight_review_sl_enabled !== false && params.ai_inflight_review_sl_enabled !== 'false';
+    const reviewTp = params.ai_inflight_review_tp_enabled !== false && params.ai_inflight_review_tp_enabled !== 'false';
+    const reviewEvery = params.ai_inflight_review_interval_min || 15;
 
     return (
         <div className={`rounded-lg border overflow-hidden ${
@@ -624,6 +661,7 @@ function DeploymentCard({
                             checked={isActive}
                             disabled={isBusy}
                             onChange={onToggleActive}
+                            aria-label="Deployment active"
                         />
                         <div className="w-9 h-5 bg-slate-600 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-500"></div>
                     </label>
@@ -638,6 +676,7 @@ function DeploymentCard({
                                 checked={isLive}
                                 disabled={isBusy}
                                 onChange={onToggleMode}
+                                aria-label="Live trading (off = paper)"
                             />
                             <div className="w-9 h-5 bg-blue-500/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-red-500/80"></div>
                         </label>
@@ -661,16 +700,65 @@ function DeploymentCard({
                                 checked={aiEnabled}
                                 disabled={isBusy}
                                 onChange={onToggleAi}
+                                aria-label="AI confirmation"
                             />
                             <div className="w-9 h-5 bg-slate-600 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-violet-500"></div>
                         </label>
                         <span className={`text-xs ml-2 font-bold ${aiEnabled ? 'text-violet-300' : 'text-fg-5'}`}>AI</span>
                     </div>
 
+                    {/* AI in-flight review (switch, same affordance as AI confirmation).
+                        Independent of it: a deployment can enter with no AI gate and
+                        still have open positions re-assessed. The SL / TP chips only
+                        exist while the review is on — they say whether a review may
+                        move the stop and/or the target; the engine refuses a
+                        disabled side even if the model proposes it. */}
+                    <div className="flex items-center gap-1.5 bg-slate-800/80 px-2 py-1 rounded border border-line-2/50">
+                        <span className="text-xs" aria-hidden="true">🔄</span>
+                        <label
+                            className="relative inline-flex items-center cursor-pointer"
+                            title={reviewOn
+                                ? `AI in-flight review ON — open positions re-assessed every ${reviewEvery} min. Click to disable for THIS deployment only.`
+                                : 'AI in-flight review OFF — open positions run on their own SL/TP and exit rules. Click to enable for THIS deployment only.'}
+                        >
+                            <input
+                                type="checkbox"
+                                className="sr-only peer"
+                                checked={reviewOn}
+                                disabled={isBusy}
+                                onChange={() => onToggleInflight && onToggleInflight({ enabled: !reviewOn })}
+                                aria-label="AI in-flight review"
+                            />
+                            <div className="w-9 h-5 bg-slate-600 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
+                        </label>
+                        <span className={`text-xs font-bold ${reviewOn ? 'text-sky-300' : 'text-fg-5'}`}>Review</span>
+                        {reviewOn && (
+                            <>
+                                {[['sl', 'SL', reviewSl, 'stop-loss'], ['tp', 'TP', reviewTp, 'target']].map(([key, label, on, what]) => (
+                                    <button
+                                        key={key}
+                                        type="button"
+                                        aria-pressed={on}
+                                        disabled={isBusy}
+                                        onClick={() => onToggleInflight && onToggleInflight({ [key]: !on })}
+                                        title={on
+                                            ? `The AI review MAY move the ${what}. Click to stop it — its ${what} suggestions will be ignored.`
+                                            : `The AI review may NOT move the ${what}; suggestions are ignored. Click to allow.`}
+                                        className={`text-3xs font-bold px-1.5 py-0.5 rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                                            on ? 'bg-sky-500/20 border-sky-500/50 text-sky-300'
+                                               : 'bg-transparent border-line-2/60 text-fg-5 line-through'}`}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                            </>
+                        )}
+                    </div>
+
                     {/* Identity — name is clickable → opens analytics for this deployment */}
                     <button
                         onClick={onResults}
-                        className="text-sm text-fg font-semibold truncate hover:text-primary hover:underline text-left"
+                        className="text-sm text-fg font-semibold truncate hover:text-primary-ink hover:underline text-left"
                         title={`View results & charts for "${d.name}"`}
                     >
                         {d.name}
@@ -712,7 +800,7 @@ function DeploymentCard({
 
                 {/* Action buttons — identical affordances to the legacy card */}
                 <div className="flex gap-2 items-center flex-wrap">
-                    {/* Trailing realized PnL for THIS deployment (tagged trades
+                    {/* Trailing realized P&L for THIS deployment (tagged trades
                         only) — 7-day and 30-day windows. */}
                     <PnlBadge label="7d" stats={pnlWindows?.d7 || null} />
                     <PnlBadge label="30d" stats={pnlWindows?.d30 || null} />
@@ -720,7 +808,7 @@ function DeploymentCard({
                         <button
                             onClick={onResults}
                             className="px-3 py-1 bg-primary/15 hover:bg-primary/25 text-primary-ink border border-primary/40 rounded text-xs font-semibold transition-colors"
-                            title="Equity curve, calendar, trades table & PnL distribution for this deployment"
+                            title="Equity curve, calendar, trades table & P&L distribution for this deployment"
                         >
                             📊 Results
                         </button>
@@ -1156,7 +1244,7 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
                     <button
                         onClick={submit}
                         disabled={submitting}
-                        className="px-3 py-1 text-xs rounded bg-primary text-white font-semibold disabled:opacity-50"
+                        className="px-3 py-1 text-xs rounded bg-primary text-on-primary font-semibold disabled:opacity-50"
                     >
                         {submitting ? 'Creating…' : 'Create'}
                     </button>
@@ -1202,7 +1290,7 @@ function EditDeployment({ deployment, onClose, onSaved }) {
             </label>
             <div className="flex justify-end gap-2">
                 <button onClick={onClose} className="px-2 py-0.5 rounded bg-slate-800 text-fg-3 hover:bg-slate-700">Cancel</button>
-                <button onClick={save} disabled={busy} className="px-2 py-0.5 rounded bg-primary text-white disabled:opacity-50">
+                <button onClick={save} disabled={busy} className="px-2 py-0.5 rounded bg-primary text-on-primary disabled:opacity-50">
                     {busy ? 'Saving…' : 'Save'}
                 </button>
             </div>
