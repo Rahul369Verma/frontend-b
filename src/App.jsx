@@ -93,8 +93,10 @@ function useHealth(pollMs = 30000) {
             }
         };
         read();
-        const id = setInterval(read, pollMs);
-        return () => { dead = true; clearInterval(id); };
+        // pollInterval: pauses in hidden tabs, and skips a tick while the last
+        // health read is still in flight (read is async → returns its promise).
+        const stop = pollInterval(read, pollMs);
+        return () => { dead = true; stop(); };
     }, [pollMs, t]);
 
     return health;

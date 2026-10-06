@@ -2347,7 +2347,8 @@ export default function Backtest() {
                                                     <option value="claude-web/claude-sonnet-4-6">Claude Sonnet 4.6 (balanced)</option>
                                                     <option value="claude-web/claude-opus-4-7">Claude Opus 4.7 (strong reasoning)</option>
                                                     <option value="claude-web/claude-opus-4-8">Claude Opus 4.8</option>
-                                                    <option value="claude-web/claude-opus-5">Claude Opus 5 (newest, best)</option>
+                                                    <option value="claude-web/claude-opus-5-5">Claude Opus 5.5 (newest, best)</option>
+                                                    <option value="claude-web/claude-opus-5">Claude Opus 5</option>
                                                     <option value="claude-web/claude-fable-5">Claude Fable 5 (deprecated)</option>
                                                 </select>
                                             </div>
@@ -3827,7 +3828,8 @@ export default function Backtest() {
                                       className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
                                   >
                                       <optgroup label="🌐 Web Sessions (no API cost)">
-                                          <option value="claude-web/claude-opus-5">Claude Opus 5 (web) — newest, best</option>
+                                          <option value="claude-web/claude-opus-5-5">Claude Opus 5.5 (web) — newest, best</option>
+                                          <option value="claude-web/claude-opus-5">Claude Opus 5 (web)</option>
                                           <option value="claude-web/claude-fable-5">Claude Fable 5 (web) — deprecated</option>
                                           <option value="claude-web/claude-opus-4-8">Claude Opus 4.8 (web)</option>
                                           <option value="claude-web/claude-opus-4-7">Claude Opus 4.7 (web) — strong reasoning</option>

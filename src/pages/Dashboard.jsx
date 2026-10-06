@@ -220,7 +220,11 @@ export default function Dashboard() {
 
     socket.on('dashboard_update', (data) => {
         // console.log("🔄 Received Dashboard Update via Socket");
-        if (data) {
+        // Only the 2s full snapshot carries `positions`. The trade logger also
+        // emits a partial dashboard_update ({mongoTrades} only, execution.js) on
+        // every ENTRY/EXIT; applying it blanked the panel — positions [], P&L 0,
+        // engine "stopped" — until the next full emit.
+        if (data && Array.isArray(data.positions)) {
             setStatus(data.status || { is_running: false });
             setMarketData(data.marketData || null);
             setPnl(data.pnl || { daily_pnl: 0, trades_count: 0 });
@@ -246,20 +250,27 @@ export default function Dashboard() {
     // tick-driven mini-updates emitted from the fyersData onTick callback —
     // ~200 bytes per emit, throttled to one per 200ms per position.
     //
-    // Each payload is { positions: [{spotSymbol, symbol, ltp, spot_ltp, pnl,
-    // pnl_pct, holding_seconds}], at }. We merge by `spotSymbol` into the
-    // existing positions state, preserving all other fields (entryPrice,
-    // broker_sl_price, follow_mode, AI metadata, etc.) from the last full
-    // dashboard_update. Pure merge — no re-render of the whole panel.
+    // Each payload is { positions: [{deploymentId, spotSymbol, symbol, ltp,
+    // spot_ltp, pnl, pnl_pct, holding_seconds}], at }. We merge by POSITION
+    // identity (deploymentId + option symbol) into the existing positions state,
+    // preserving all other fields (entryPrice, broker_sl_price, follow_mode, AI
+    // metadata, etc.) from the last full dashboard_update.
+    //
+    // Never by spotSymbol: two deployments on one underlying (6-Oct: inside_bar
+    // 13725CE + hybrid_inside_bar 13775CE on MIDCPNIFTY) share it, so every tick
+    // for either was painted onto BOTH cards and each card's P&L flickered
+    // between its own value and its sibling's. Orphan cards have no engine
+    // position behind them and are never tick-merged.
     socket.on('position_tick', ({ positions: tickUpdates }) => {
         if (!Array.isArray(tickUpdates) || tickUpdates.length === 0) return;
         setPositions(prev => {
             if (!Array.isArray(prev) || prev.length === 0) return prev;
-            const byKey = new Map(tickUpdates.map(u => [u.spotSymbol || u.symbol, u]));
+            const tickKey = (x) => `${x.deploymentId || ''}|${x.symbol || ''}`;
+            const byKey = new Map(tickUpdates.map(u => [tickKey(u), u]));
             let changed = false;
             const next = prev.map(p => {
-                const key = p.spotSymbol || p.symbol;
-                const u = byKey.get(key);
+                if (p.orphan) return p;
+                const u = byKey.get(tickKey(p));
                 if (!u) return p;
                 changed = true;
                 return {
@@ -1332,7 +1343,7 @@ export default function Dashboard() {
                                                                       {applied === true && (
                                                                           <span className="text-success text-3xs" title="Verdict applied">✓ applied</span>
                                                                       )}
-                                                                      {applied === false && (
+                                                                      {applied === false && r.action !== 'ERROR' && (
                                                                           <span
                                                                               className="text-warning text-3xs"
                                                                               title={r.rejection_reason || 'Sanity check rejected this verdict'}

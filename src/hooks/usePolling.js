@@ -1,6 +1,37 @@
 import { useEffect, useRef } from 'react';
 
 /**
+ * guardedTick — wrap a poll callback so a tick is SKIPPED while the previous
+ * tick's promise is still pending.
+ *
+ * WHY. Both helpers below fired on a bare setInterval and ignored the
+ * callback's promise. On a slow link (or a slow handler on a starved box) a
+ * 5 s poll whose request takes 2 minutes queued ~24 more identical requests
+ * behind it — the "(pending)" pile-up seen on /multi-leg on 6-Oct-2026 — and
+ * every one of them still cost the server a full read + serialize + gzip.
+ *
+ * Callbacks that return a promise get the guard; callbacks that return
+ * undefined behave exactly as before. The guard releases itself after
+ * `maxWaitMs` so a request that never settles cannot freeze the poll forever.
+ */
+export function guardedTick(callback, intervalMs) {
+    let pendingSince = 0;
+    const maxWaitMs = Math.max(60000, (intervalMs || 0) * 6);
+    return () => {
+        if (pendingSince && Date.now() - pendingSince < maxWaitMs) return;
+        let r;
+        try { r = callback(); } catch { pendingSince = 0; return; }
+        if (r && typeof r.then === 'function') {
+            const mine = Date.now();
+            pendingSince = mine;
+            Promise.resolve(r).catch(() => {}).finally(() => { if (pendingSince === mine) pendingSince = 0; });
+        } else {
+            pendingSince = 0;
+        }
+    };
+}
+
+/**
  * usePolling — setInterval that stops while the tab is hidden.
  *
  * WHY. Eight pages in this app poll the backend on a timer (Dashboard every 8s,
@@ -36,7 +67,8 @@ export function usePolling(callback, intervalMs, { enabled = true, immediate = t
         if (!enabled || !intervalMs) return undefined;
 
         let id = null;
-        const tick = () => { saved.current?.(); };
+        // Skips while the previous tick's promise is pending (see guardedTick).
+        const tick = guardedTick(() => saved.current?.(), intervalMs);
         const start = () => { if (id === null) id = setInterval(tick, intervalMs); };
         const stop = () => { if (id !== null) { clearInterval(id); id = null; } };
 
@@ -84,7 +116,9 @@ export function pollInterval(callback, intervalMs, { immediate = false } = {}) {
     if (!intervalMs) return () => {};
 
     let id = null;
-    const tick = () => { callback(); };
+    // Skips while the previous tick's promise is pending (see guardedTick) —
+    // so return the request's promise from `callback` to get the guard.
+    const tick = guardedTick(callback, intervalMs);
     const start = () => { if (id === null) id = setInterval(tick, intervalMs); };
     const stop = () => { if (id !== null) { clearInterval(id); id = null; } };
 

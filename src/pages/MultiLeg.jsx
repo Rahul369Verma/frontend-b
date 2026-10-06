@@ -20,10 +20,12 @@ import { riskOpenMin, riskCloseMin } from '../config/marketSession.js';
 import { HELP } from '../data/multilegHelp';
 import { useChartTheme } from '../theme/chartTheme.js';
 import { pollInterval } from '../hooks/usePolling.js';
+import { newestExitIso, mergeTradesById } from '../utils/tradeMerge.js';
 import { API_URL } from '../config/api.js';
 import { pnlTone } from '../components/viz/tokens';
 import { spotMove, pfText, pfValue } from '../components/multileg/builderFormat';
 import SavedStrategiesPanel from '../components/multileg/SavedStrategiesPanel';
+import EngineJournal from '../components/multileg/EngineJournal';
 
 
 // Static fallback — replaced by /api/config/instruments (same source as Backtest).
@@ -230,6 +232,9 @@ export default function MultiLeg() {
     const [saveMsg, setSaveMsg] = useState(null);
     const [deployLots, setDeployLots] = useState(1);
     const [mlDeps, setMlDeps] = useState({ deployments: [], events: [] });
+    // { id, n } — focus the engine journal on one deployment (n re-triggers the same id)
+    const [journalFocus, setJournalFocus] = useState(null);
+    const focusJournal = useCallback((id) => setJournalFocus(f => ({ id: String(id), n: (f?.n || 0) + 1 })), []);
     const [mlStatus, setMlStatus] = useState(null); // engine book status (limits vs exposure, greeks)
     const [mlTrades, setMlTrades] = useState([]);
     // Results tab: full trade history + filters (deployment/template/symbol/mode)
@@ -427,9 +432,8 @@ export default function MultiLeg() {
         if (autoJob?.jobId) await axios.post(`${API_URL}/multileg/optimize/${autoJob.jobId}/cancel`).catch(() => { /* best effort */ });
     };
     // recent persisted runs (re-attach after a refresh; see interrupted runs)
-    const refreshAutoJobs = useCallback(() => {
-        axios.get(`${API_URL}/multileg/optimize`).then(r => setAutoJobs(r.data?.jobs || [])).catch(() => {});
-    }, []);
+    const refreshAutoJobs = useCallback(() =>   // returns the promise → poll skips while in flight
+        axios.get(`${API_URL}/multileg/optimize`, { timeout: 20000 }).then(r => setAutoJobs(r.data?.jobs || [])).catch(() => {}), []);
     useEffect(() => {
         if (mode !== 'auto') return;
         refreshAutoJobs();
@@ -524,11 +528,13 @@ export default function MultiLeg() {
     });
 
     // poll the running job
+    const watching = mode === 'auto';
     useEffect(() => {
         if (!autoJob?.jobId) return;
         let idleTicks = 0; // polls spent stopped — bounds how long we wait for an auto-resume
+        // Returns the promise so a slow response is never overlapped by the next 2.5 s tick.
         const t = pollInterval(() => {
-            axios.get(`${API_URL}/multileg/optimize/${autoJob.jobId}`).then(r => {
+            return axios.get(`${API_URL}/multileg/optimize/${autoJob.jobId}`, { timeout: 20000 }).then(r => {
                 const st = r.data.status;
                 setAutoState(r.data);
                 recordAutoProgress(r.data, sizesForRequest(r.data.request, templates, budgetForLevel(3)));
@@ -542,11 +548,11 @@ export default function MultiLeg() {
                 const parked = st === 'paused' && r.data.pausedByGovernor && !r.data.pausedManually;
                 if (st === 'running' || parked) idleTicks = 0;
                 else if (['done', 'cancelled', 'paused'].includes(st)) t?.();
-                else if (++idleTicks > 72) t?.(); // ~3 min
+                else if (++idleTicks > (watching ? 72 : 6)) t?.(); // ~3 min either way
             }).catch(() => { /* transient poll failure — keep polling */ });
-        }, 2500);
+        }, watching ? 2500 : 30000);   // full speed only while the Auto tab shows it
         return () => t?.();
-    }, [autoJob, recordAutoProgress, templates]);
+    }, [autoJob, recordAutoProgress, templates, watching]);
 
     // Load a champion's FULL config into Setup + Backtest for hand inspection:
     // template + structure params + strategy + its TUNED params + the exact
@@ -578,20 +584,35 @@ export default function MultiLeg() {
     const refreshSaved = useCallback(() => {
         axios.get(`${API_URL}/multileg/strategies`).then(r => setSavedList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
     }, []);
-    const refreshDeployments = useCallback(() => {
-        axios.get(`${API_URL}/multileg/deployments`)
+    // Cards + book status. Returns its promise so pollInterval skips a tick while
+    // the previous one is still in flight (no "(pending)" pile-up on slow links).
+    const refreshDeployCards = useCallback(() => Promise.allSettled([
+        axios.get(`${API_URL}/multileg/deployments`, { timeout: 20000 })
             .then(r => { setMlDeps(r.data || { deployments: [], events: [] }); setLastPoll({ at: Date.now(), ok: true }); })
-            .catch(() => setLastPoll(p => ({ at: p.at, ok: false })));
-        axios.get(`${API_URL}/multileg/trades`).then(r => setMlTrades(Array.isArray(r.data) ? r.data.slice(0, 30) : [])).catch(() => {});
-        axios.get(`${API_URL}/multileg/status`).then(r => setMlStatus(r.data || null)).catch(() => {});
-    }, []);
-    // poll while the Deploy tab is visible
+            .catch(() => setLastPoll(p => ({ at: p.at, ok: false }))),
+        axios.get(`${API_URL}/multileg/status`, { timeout: 20000 })
+            .then(r => setMlStatus(r.data || null)).catch(() => {}),
+    ]), []);
+    // "Structure trades" table: the 30 newest rows, only the columns it shows.
+    // Was the server's default 200 FULL rows (≈4 MB on prod, 92% of it the
+    // per-trade MTM path) every 5 s, sliced to 30 here.
+    const refreshMlTrades = useCallback(() =>
+        axios.get(`${API_URL}/multileg/trades`, { params: { limit: 30, fields: 'list' }, timeout: 20000 })
+            .then(r => setMlTrades(Array.isArray(r.data) ? r.data.slice(0, 30) : []))
+            .catch(() => {}), []);
+    // Everything on the Deploy tab — used on entry and after an action.
+    const refreshDeployments = useCallback(
+        () => Promise.allSettled([refreshDeployCards(), refreshMlTrades()]),
+        [refreshDeployCards, refreshMlTrades]);
+    // poll while the Deploy tab is visible. Separate pollers so a slow trades
+    // read never holds back the cards.
     useEffect(() => {
         if (mode !== 'deploy') return;
         refreshSaved(); refreshDeployments();
-        const t = pollInterval(refreshDeployments, 5000);
-        return () => t?.();
-    }, [mode, refreshSaved, refreshDeployments]);
+        const stopCards = pollInterval(refreshDeployCards, 5000);
+        const stopTrades = pollInterval(refreshMlTrades, 15000);   // trades change only when a structure exits
+        return () => { stopCards?.(); stopTrades?.(); };
+    }, [mode, refreshSaved, refreshDeployments, refreshDeployCards, refreshMlTrades]);
 
     // Eligibility as a STABLE primitive — depending on mlDeps.deployments (a
     // fresh array identity every 5s poll) would re-create this effect every
@@ -643,22 +664,47 @@ export default function MultiLeg() {
         return () => { alive = false; t?.(); };
     }, [depActivity, mode]);
 
-    // Results tab: pull the FULL structure-trade history (deployment list too,
-    // for the filter dropdown). Refreshes on open + a gentle poll for live runs.
+    // Results tab: the FULL structure-trade history, with paths (the day curves
+    // and per-trade path charts need them). It used to be re-downloaded whole
+    // every 15 s although it only changes when a structure exits. Now: one full
+    // load on entry / Refresh / every 10 min, and an incremental pull every 60 s
+    // of rows that exited or were quarantined since the newest exit we hold.
+    const resNewestExitRef = React.useRef(null);   // ISO of the newest exitAt loaded
+    const resFullAtRef = React.useRef(0);
+    const [resDepList, setResDepList] = useState([]);   // dropdown names only — never written into mlDeps (the Deploy cards' state)
     const refreshResults = useCallback(() => {
         setResLoading(true);
-        axios.get(`${API_URL}/multileg/trades`, { params: { limit: 2000 } })
-            .then(r => setResTrades(Array.isArray(r.data) ? r.data : []))
+        axios.get(`${API_URL}/multileg/deployments`, { params: { lite: 1 }, timeout: 20000 })
+            .then(r => setResDepList(Array.isArray(r.data?.deployments) ? r.data.deployments : []))
+            .catch(() => {});
+        return axios.get(`${API_URL}/multileg/trades`, { params: { limit: 2000 }, timeout: 120000 })
+            .then(r => {
+                const rows = Array.isArray(r.data) ? r.data : [];
+                setResTrades(rows);
+                resNewestExitRef.current = newestExitIso(rows);
+                resFullAtRef.current = Date.now();
+            })
             .catch(() => {})
             .finally(() => setResLoading(false));
-        axios.get(`${API_URL}/multileg/deployments`).then(r => setMlDeps(r.data || { deployments: [], events: [] })).catch(() => {});
     }, []);
+    const pollResults = useCallback(() => {
+        if (!resNewestExitRef.current || Date.now() - resFullAtRef.current > 10 * 60 * 1000) return refreshResults();
+        return axios.get(`${API_URL}/multileg/trades`, { params: { after: resNewestExitRef.current, limit: 500 }, timeout: 30000 })
+            .then(r => {
+                const rows = Array.isArray(r.data) ? r.data : [];
+                if (!rows.length) return;
+                setResTrades(prev => mergeTradesById(prev, rows));   // returns prev when nothing changed → no curve rebuild
+                const n = newestExitIso(rows);
+                if (n && n > resNewestExitRef.current) resNewestExitRef.current = n;
+            })
+            .catch(() => {});
+    }, [refreshResults]);
     useEffect(() => {
         if (mode !== 'results') return;
         refreshResults();
-        const t = pollInterval(refreshResults, 15000);
+        const t = pollInterval(pollResults, 60000);
         return () => t?.();
-    }, [mode, refreshResults]);
+    }, [mode, refreshResults, pollResults]);
 
     // Calibrate the backtest IV proxy to the LIVE chain ATM IV (level parity).
     const calibrateIv = useCallback(() => {
@@ -698,7 +744,7 @@ export default function MultiLeg() {
     // otherwise render as "All deployments" while the table shows nothing.
     const resDeploymentOptions = useMemo(() => {
         const m = new Map();
-        for (const d of (mlDeps.deployments || [])) if (d && d._id) m.set(String(d._id), { name: d.name || null, n: 0 });
+        for (const d of (resDepList.length ? resDepList : (mlDeps.deployments || []))) if (d && d._id) m.set(String(d._id), { name: d.name || null, n: 0 });
         for (const t of resTrades) {
             const id = String(t.deploymentId);
             if (!t.deploymentId || id === 'undefined') continue;
@@ -710,7 +756,7 @@ export default function MultiLeg() {
         return [...m.entries()]
             .map(([id, e]) => ({ id, name: e.name || `deployment …${id.slice(-6)}`, n: e.n }))
             .sort((a, b) => a.name.localeCompare(b.name));
-    }, [mlDeps, resTrades, resFilter.deploymentId]);
+    }, [resDepList, mlDeps, resTrades, resFilter.deploymentId]);
     const resDeploymentName = resFilter.deploymentId === 'all' ? null
         : (resDeploymentOptions.find(o => o.id === resFilter.deploymentId)?.name || resFilter.deploymentId);
 
@@ -2032,7 +2078,7 @@ export default function MultiLeg() {
                                     const colorFor = (a) => a === 'ENTRY' ? 'bg-emerald-500' : a === 'READY' ? 'bg-blue-500/70' : a === 'WAIT' ? 'bg-amber-500/70' : a === 'DONE' ? 'bg-fg-5' : 'bg-fg-6';
                                     return (
                                         <div key={d._id} className="flex items-center gap-3 text-xs">
-                                            <div className="w-40 truncate text-fg-3" title={d.name}>{d.name}</div>
+                                            <button type="button" onClick={() => focusJournal(d._id)} className="w-40 truncate text-left text-fg-3 hover:text-fg hover:underline" title={`${d.name} — show its engine journal`}>{d.name}</button>
                                             <div className="flex items-center gap-1.5 w-24">
                                                 <span className={`w-2 h-2 rounded-full ${colorFor(cur?.action)}`} />
                                                 <span className={`uppercase text-3xs font-bold ${cur?.action === 'ENTRY' ? 'text-success' : cur?.action === 'READY' ? 'text-blue-300' : cur?.action === 'WAIT' ? 'text-warning' : 'text-fg-4'}`}>{cur?.action || '—'}</span>
@@ -2287,6 +2333,9 @@ export default function MultiLeg() {
                                                         title={d.totals?.trades > 0
                                                             ? `Open Results for ${d.name} only — every booked trade with its P&L, margin and legs, plus the breakdowns and curves`
                                                             : `Open Results for ${d.name} only — nothing booked yet, so it fills in after the first exit`}>🧾 results</Link>
+                                                    <button onClick={() => focusJournal(d._id)}
+                                                        className="text-3xs px-1.5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-fg"
+                                                        title={`Engine journal for ${d.name} only — every event it raised (signals, skips, stand-downs, entries, exits), paged back to its first day`}>📜 journal</button>
                                                     <button onClick={() => setDepDetail(detailOpen ? null : d._id)}
                                                         className={`text-3xs px-1.5 py-0.5 rounded border ${detailOpen ? 'border-amber-600 text-warning' : 'border-line-2 text-fg-4'} hover:text-fg`}
                                                         title="Full order detail — legs, prices, SL/TP levels, exit deadlines">{detailOpen ? '▲' : '▾'} details</button>
@@ -2524,7 +2573,11 @@ export default function MultiLeg() {
                                             {!open && d.status === 'ACTIVE' && (
                                                 <div className="text-3xs font-mono text-fg-5 mb-2 border-t border-line-0 pt-1.5">
                                                     flat — waiting for {d.entry_mode === 'signal' ? `a ${d.signal_strategy} signal` : `the ${P.entry_time || '09:20'} entry`}
-                                                    {d.daily?.entered ? ' · already entered today' : ''}{exitBits.length ? ` · exits: ${exitBits.slice(0, 3).join(' · ')}` : ''}
+                                                    {/* `entered` is the one-per-day SLOT; a stand-down (DTE guard, uncapped
+                                                        tail, funds) uses it WITHOUT a trade — say which */}
+                                                    {d.daily?.standDown
+                                                        ? <span className="text-warning" title={`Stood down ${istTimeSec(d.daily.standDown.at)} IST — no structure was entered today`}> · no entry today: {d.daily.standDown.reason}</span>
+                                                        : d.daily?.entered ? ' · already entered today' : ''}{exitBits.length ? ` · exits: ${exitBits.slice(0, 3).join(' · ')}` : ''}
                                                 </div>
                                             )}
                                             {/* ── Full order detail (professional view) ── */}
@@ -2695,23 +2748,11 @@ export default function MultiLeg() {
                       Size axis instead of clipping more rows as text grows.
                     */}
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-stretch">
-                        <div className="bg-surface rounded-xl border border-line p-4 flex flex-col max-h-[32rem]">
-                            <div className="text-sm font-semibold text-fg mb-2">Engine events</div>
-                            {mlDeps.events.length === 0 ? <div className="text-xs text-fg-5">No events yet.</div> : (
-                                <div className="flex-1 min-h-0 overflow-y-auto text-2xs space-y-1">
-                                    {mlDeps.events.map((e, i) => (
-                                        <div key={i} className="flex flex-wrap gap-x-2 border-b border-line-0/60 pb-1">
-                                            <span className="text-fg-5 whitespace-nowrap" title={istDateTimeSec(e.at) + ' IST'}>
-                                                <span className="text-fg-5">{istDate(e.at)}</span> {istTimeSec(e.at)}
-                                            </span>
-                                            <span className={`font-semibold whitespace-nowrap ${/FAIL|ERROR|SKIP/.test(e.type) ? 'text-danger' : /ENTRY|EXIT/.test(e.type) ? 'text-success' : 'text-sky-300'}`}>{e.type}</span>
-                                            <span className="text-fg-4 min-w-0 break-words">{e.name ? `[${e.name}] ` : ''}{e.message}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                        <div className="bg-surface rounded-xl border border-line p-4 flex flex-col max-h-[32rem]">
+                        {/* Pages the DURABLE journal with deployment/type filters — the old
+                            panel showed the engine's last 60 in-memory rows, which one
+                            flooding deployment could fill in minutes. */}
+                        <EngineJournal deployments={mlDeps.deployments || []} repeats={mlDeps.repeats || {}} focus={journalFocus} active={mode === 'deploy'} />
+                        <div className="bg-surface rounded-xl border border-line p-4 flex flex-col max-h-[40rem]">
                             <div className="text-sm font-semibold text-fg mb-2">Structure trades ({mlTrades.length})</div>
                             {mlTrades.length === 0 ? <div className="text-xs text-fg-5">No completed structure round-trips yet.</div> : (
                               <div className="flex-1 min-h-0 overflow-auto">
@@ -3100,7 +3141,6 @@ function istStr(v, opts = {}) {
 const istDateTime = (v) => istStr(v, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); // "21 Jul 13:42"
 const istTimeSec = (v) => istStr(v, { hour: '2-digit', minute: '2-digit', second: '2-digit' });               // "13:42:27"
 const istTime = (v) => istStr(v, { hour: '2-digit', minute: '2-digit' });                                     // "13:42"
-const istDate = (v) => istStr(v, { day: '2-digit', month: 'short' });                                         // "21 Jul"
 const istDateTimeSec = (v) => istStr(v, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' }); // "21 Jul 13:42:27"
 function fmtClock(iso) { return istDateTime(iso); }
 

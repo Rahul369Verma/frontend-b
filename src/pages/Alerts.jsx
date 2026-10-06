@@ -28,6 +28,7 @@ import { useChartTheme, istDateTime } from '../components/viz/tokens';
 import QueryInput from '../components/screener/QueryInput.jsx';
 import { useConfirm } from '../components/confirmContext.js';
 import { toast } from '../components/toastStore.js';
+import { pollInterval } from '../hooks/usePolling.js';
 import {
     ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Cell,
 } from 'recharts';
@@ -1253,8 +1254,10 @@ export default function Alerts() {
     // Poll faster while an ingest is running so its progress is live.
     useEffect(() => {
         const ms = status?.ingest?.running || status?.reference?.job?.running ? 2000 : 30000;
-        const id = setInterval(loadStatus, ms);
-        return () => clearInterval(id);
+        // pollInterval: pauses in hidden tabs, and skips a tick while the last
+        // /status read is still running (loadStatus is async).
+        const stop = pollInterval(loadStatus, ms);
+        return () => stop();
     }, [status?.ingest?.running, status?.reference?.job?.running, loadStatus]);
 
     const cov = status?.coverage;
