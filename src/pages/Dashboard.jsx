@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import DeploymentsPanel from '../components/DeploymentsPanel';
 import DirectionConfidencePanel from '../components/risk/DirectionConfidencePanel';
+import TradeDetailsModal from '../components/TradeDetailsModal';
 import CollapsibleCard from '../components/CollapsibleCard';
 import { StatRow, StatTile, PageHeader, Chip, ModeChip, Spinner } from '../components/viz/primitives';
 import { Play, Square, Activity, DollarSign, TrendingUp, AlertTriangle, Shield, ShoppingCart, List, Database, ChevronDown, ChevronRight, LayoutDashboard } from 'lucide-react';
@@ -32,6 +33,8 @@ export default function Dashboard() {
   const [tradesTotal, setTradesTotal] = useState(0);
   const [tradesSearch, setTradesSearch] = useState("");
   const [tradesLimit, setTradesLimit] = useState(10);
+  // Trade History → Details modal (full doc + direction-gate verdict for that trade)
+  const [detailTradeId, setDetailTradeId] = useState(null);
   // Trade History fold state (persisted). Default OPEN.
   const [tradesExpanded, setTradesExpanded] = useState(() => {
     try { const v = localStorage.getItem('dash:tradesOpen'); return v === null ? true : v === '1'; }
@@ -1618,6 +1621,7 @@ export default function Dashboard() {
                 <table className="w-full text-left border-collapse text-sm">
                     <thead className="sticky top-0 z-10 bg-surface">
                         <tr className="text-fg-4 border-b border-line">
+                            <th className="p-3"><span className="sr-only">Details</span></th>
                             <th className="p-3">Trade ID</th>
                             <th className="p-3">Entry Time</th>
                             <th className="p-3">Exit Time</th>
@@ -1637,6 +1641,14 @@ export default function Dashboard() {
                                 {/* Trade ID — same ObjectId for ENTRY + EXIT (the
                                     same doc is updated, not duplicated). Click to
                                     copy the full hex for searching everywhere. */}
+                                <td className="p-3">
+                                    <button type="button"
+                                        onClick={() => setDetailTradeId(String(trade.trade_id || trade._id))}
+                                        className="px-2 py-0.5 rounded border border-line-2 text-2xs text-fg-3 hover:text-fg hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                                        title="All details, incl. the direction-gate verdict and CE/PE confidence at entry">
+                                        Details
+                                    </button>
+                                </td>
                                 <td className="p-3">
                                     <TradeIdBadge id={trade.trade_id || trade._id} label="" />
                                 </td>
@@ -1699,6 +1711,8 @@ export default function Dashboard() {
             </div>
           )}
           
+          <TradeDetailsModal tradeId={detailTradeId} onClose={() => setDetailTradeId(null)} />
+
           {/* Pagination Controls */}
           {tradesTotal > 0 && (
               <div className="flex justify-between items-center mt-4 border-t border-line-0 pt-4">
