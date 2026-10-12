@@ -26,6 +26,7 @@ import { pnlTone } from '../components/viz/tokens';
 import { spotMove, pfText, pfValue } from '../components/multileg/builderFormat';
 import SavedStrategiesPanel from '../components/multileg/SavedStrategiesPanel';
 import EngineJournal from '../components/multileg/EngineJournal';
+import RegimePanel from '../components/multileg/RegimePanel';
 
 
 // Static fallback — replaced by /api/config/instruments (same source as Backtest).
@@ -127,6 +128,18 @@ const guardWords = (why) => {
 // trades — reject it before dividing (Number(null) is 0).
 const tradeRom = (t) => (t.marginEst != null && Number(t.marginEst) > 0 && Number.isFinite(Number(t.netPnl))
     ? (Number(t.netPnl) / Number(t.marginEst)) * 100 : null);
+// Round-trips table: rows per page, and what each sortable column sorts by.
+// Absent is NOT zero — a trade with no margin or no MAE sorts last, not as ₹0.
+const numOrNull = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+const RES_PAGE = 50;
+const RES_SORTS = {
+    exit: (t) => new Date(t.exitAt).getTime(), entry: (t) => new Date(t.entryAt).getTime(),
+    name: (t) => String(t.name || '').toLowerCase(), credit: (t) => numOrNull(t.origCredit),
+    margin: (t) => (t.marginEst != null && Number(t.marginEst) > 0 ? Number(t.marginEst) : null),
+    gross: (t) => numOrNull(t.grossPnl), chg: (t) => numOrNull(t.charges), net: (t) => numOrNull(t.netPnl),
+    rom: (t) => tradeRom(t), mae: (t) => numOrNull(t.maeRupees), mfe: (t) => numOrNull(t.mfeRupees),
+    hold: (t) => (t.entryAt && t.exitAt ? new Date(t.exitAt) - new Date(t.entryAt) : null),
+};
 
 export default function MultiLeg() {
     // Five recharts charts live on this page and every one of them needs
@@ -241,6 +254,16 @@ export default function MultiLeg() {
     const [resTrades, setResTrades] = useState([]);
     const [resLoading, setResLoading] = useState(false);
     const [resFilter, setResFilter] = useState({ mode: 'all', deploymentId: 'all', template: 'all', symbol: 'all' });
+    // ONE time window for the whole Results page — tiles, charts, breakdowns,
+    // round-trips and Day by day. It used to live inside the Analytics panel
+    // alone, so "30d" scoped the tiles while the table under them still listed
+    // every trade. `since` is fixed when the window is picked (by exit time,
+    // the same rule the analytics endpoint applies).
+    const [resWindow, setResWindow] = useState({ days: 'all', since: null });
+    const pickResWindow = (d) => setResWindow({ days: d, since: d === 'all' ? null : Date.now() - Number(d) * 864e5 });
+    // Round-trips table: sort, search, exit-reason filter and paging. Page is
+    // clamped on render, so a narrower filter can never leave it past the end.
+    const [resTable, setResTable] = useState({ sort: 'exit', dir: 'desc', q: '', reason: 'all', page: 0 });
     const [resTradeOpen, setResTradeOpen] = useState(() => new Set()); // expanded trades (drill-down to legs) — a Set so "Expand all" can open every row
     const [ivCalib, setIvCalib] = useState(null);      // chain-IV calibration result
     const [ivCalibBusy, setIvCalibBusy] = useState(false);
@@ -766,9 +789,31 @@ export default function MultiLeg() {
             (resFilter.mode === 'all' || t.trade_mode === resFilter.mode) &&
             (resFilter.deploymentId === 'all' || String(t.deploymentId) === resFilter.deploymentId) &&
             (resFilter.template === 'all' || t.template === resFilter.template) &&
-            (resFilter.symbol === 'all' || t.symbol === resFilter.symbol)
+            (resFilter.symbol === 'all' || t.symbol === resFilter.symbol) &&
+            (resWindow.since == null || (t.exitAt != null && new Date(t.exitAt).getTime() >= resWindow.since))
         );
-    }, [resTrades, resFilter]);
+    }, [resTrades, resFilter, resWindow]);
+    const resTableRows = useMemo(() => {
+        const q = resTable.q.trim().toLowerCase();
+        const tplName = (k) => templates.find(x => x.key === k)?.name || k || '';
+        const get = RES_SORTS[resTable.sort] || RES_SORTS.exit;
+        const sign = resTable.dir === 'asc' ? 1 : -1;
+        return resFiltered
+            .filter(t => (resTable.reason === 'all' || t.exitReason === resTable.reason)
+                && (!q || [t.name, tplName(t.template), shortSym(t.symbol), t.exitReason].some(v => String(v || '').toLowerCase().includes(q))))
+            .sort((a, b) => {
+                const x = get(a), y = get(b);
+                if (x == null && y == null) return 0;
+                if (x == null) return 1;            // missing values sink, either direction
+                if (y == null) return -1;
+                return (typeof x === 'string' ? x.localeCompare(y) : x - y) * sign;
+            });
+    }, [resFiltered, resTable.q, resTable.reason, resTable.sort, resTable.dir, templates]);
+    const resPages = Math.max(1, Math.ceil(resTableRows.length / RES_PAGE));
+    const resPage = Math.min(resTable.page, resPages - 1);
+    const resPageRows = resTableRows.slice(resPage * RES_PAGE, (resPage + 1) * RES_PAGE);
+    const resExitReasons = useMemo(() => [...new Set(resFiltered.map(t => t.exitReason).filter(Boolean))].sort(), [resFiltered]);
+    const sortResBy = (k) => setResTable(t => ({ ...t, page: 0, sort: k, dir: t.sort === k ? (t.dir === 'desc' ? 'asc' : 'desc') : (k === 'name' ? 'asc' : 'desc') }));
     // Day-by-day P&L curves over EXACTLY the round-trips listed below. A
     // quarantined trade is excluded here as it is from every other total (it was
     // booked on a price that never existed) — and COUNTED, so the curves never
@@ -853,15 +898,83 @@ export default function MultiLeg() {
     };
     const deploySaved = (s, tradeMode) => (tradeMode === 'PAPER' ? doDeploy(s, 'PAPER') : openPreview(s, 'LIVE'));
 
+    // Live results per SAVED strategy: every deployment created from it (each
+    // deployment records its source `strategyId`), with the engine's running
+    // totals. Answers "how is this recipe doing for real?" without leaving the
+    // Deploy tab; each deployment links to its own Results for every trade.
+    const liveByStrategy = useMemo(() => {
+        const m = new Map();
+        for (const d of (mlDeps.deployments || [])) {
+            if (!d || !d.strategyId) continue;
+            const k = String(d.strategyId);
+            const e = m.get(k) || { deployments: [], trades: 0, net: 0, open: 0 };
+            e.deployments.push(d);
+            e.trades += Number(d.totals?.trades) || 0;
+            e.net += Number(d.totals?.netPnl) || 0;
+            if (['OPEN', 'ENTERING', 'EXITING'].includes(d.position?.state)) e.open++;
+            m.set(k, e);
+        }
+        return m;
+    }, [mlDeps]);
+
     // Expanded Details of one saved strategy. Rendered inside an `@container`
     // (table row or card), so its grids reflow on the space they actually get.
     const renderSavedDetails = (s) => {
         const m = s.backtest?.metrics;
         const opt = s.optimizer || null;
-        if (!m) return <div className="text-2xs text-fg-5">No backtest snapshot saved with this strategy. Load it → run a backtest → re-save to attach results.</div>;
+        const deps = liveByStrategy.get(String(s._id))?.deployments || [];
+        const liveSection = deps.length ? (
+            <div className="space-y-1.5">
+                <div className="text-2xs text-fg-4">
+                    Deployed from this strategy — live results
+                    <span className="text-fg-5"> (engine running totals; a deployment's name opens every trade it booked)</span>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-2xs text-fg-3">
+                        <thead><tr className="text-fg-5 text-left">
+                            <th className="py-1 pr-3 font-semibold">Deployment</th><th className="pr-3 font-semibold">Book</th>
+                            <th className="pr-3 font-semibold">Status</th><th className="pr-3 font-semibold">Now</th>
+                            <th className="pr-3 text-right font-semibold">Trades</th><th className="pr-3 text-right font-semibold">Booked net</th>
+                            <th className="pr-3 text-right font-semibold">Today</th><th className="text-right font-semibold">Open MTM</th>
+                        </tr></thead>
+                        <tbody>
+                            {deps.map(d => {
+                                const open = ['OPEN', 'ENTERING', 'EXITING'].includes(d.position?.state);
+                                return (
+                                    <tr key={d._id} className="border-t border-line-0">
+                                        <td className="py-1 pr-3">
+                                            <Link to={{ search: `?tab=results&deployment=${encodeURIComponent(String(d._id))}` }} onClick={scrollPageToTop}
+                                                className="text-primary-ink hover:underline">{d.name}</Link>
+                                        </td>
+                                        <td className={`pr-3 ${d.trade_mode === 'LIVE' ? 'text-danger font-semibold' : 'text-fg-4'}`}>{d.trade_mode}</td>
+                                        <td className="pr-3 text-fg-4">{d.status}</td>
+                                        <td className={`pr-3 ${open ? 'text-warning' : 'text-fg-5'}`}>{d.position?.state || 'IDLE'}</td>
+                                        <td className="pr-3 text-right tabular-nums">{d.totals?.trades || 0}</td>
+                                        <td className={`pr-3 text-right tabular-nums font-semibold ${pnlTone(d.totals?.netPnl)}`}>₹{fmt(d.totals?.netPnl)}</td>
+                                        <td className={`pr-3 text-right tabular-nums ${pnlTone(d.daily?.pnlToday)}`}>₹{fmt(d.daily?.pnlToday)}</td>
+                                        <td className={`text-right tabular-nums ${pnlTone(open ? d.position?.lastMtmNetRupees : null)}`}>
+                                            {open && d.position?.lastMtmNetRupees != null ? `₹${fmt(d.position.lastMtmNetRupees)}` : '—'}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        ) : (
+            <div className="text-2xs text-fg-5">Not deployed yet — ▶ Paper starts a paper runner from this recipe; its live results then show here.</div>
+        );
+        if (!m) return (
+            <div className="space-y-3">
+                {liveSection}
+                <div className="text-2xs text-fg-5">No backtest snapshot saved with this strategy. Load it → run a backtest → re-save to attach results.</div>
+            </div>
+        );
         const pf = pfValue(m);
         return (
             <div className="space-y-3">
+                {liveSection}
                 {opt && (
                     <div className="space-y-1.5">
                         <div className="text-2xs text-fg-4 leading-relaxed">
@@ -2000,12 +2113,15 @@ export default function MultiLeg() {
             {/* ═══════════════ DEPLOY TAB ═══════════════ */}
             {mode === 'deploy' && (
                 <>
+                    {/* Market regime & structure fit — pure-maths read, SHADOW verdicts per structure */}
+                    <RegimePanel />
+
                     <SavedStrategiesPanel
                         list={savedList} templates={templates}
                         deployLots={deployLots} onDeployLots={setDeployLots} pending={pending}
                         openId={savedDetail} onToggle={setSavedDetail}
                         onLoad={loadSaved} onDeploy={deploySaved} onDelete={deleteSaved}
-                        renderDetails={renderSavedDetails} />
+                        renderDetails={renderSavedDetails} live={liveByStrategy} />
 
                     {/* ── Summary cards (live-engine dashboard parity) ───────────── */}
                     {mlStatus && (() => {
@@ -2816,9 +2932,9 @@ export default function MultiLeg() {
                                 )}
                             </div>
                         </div>
-                        <div>
+                        <div className="min-w-0 max-w-full">
                             <div className="text-3xs text-fg-5 mb-0.5">Structure</div>
-                            <select value={resFilter.template} onChange={e => setResFilter(f => ({ ...f, template: e.target.value }))} className="bg-slate-800 border border-line rounded p-1 text-xs text-fg-2">
+                            <select value={resFilter.template} onChange={e => setResFilter(f => ({ ...f, template: e.target.value }))} className="bg-slate-800 border border-line rounded p-1 text-xs text-fg-2 max-w-full">
                                 <option value="all">All structures</option>
                                 {[...new Set(resTrades.map(t => t.template))].filter(Boolean).map(k => <option key={k} value={k}>{templates.find(t => t.key === k)?.name || k}</option>)}
                             </select>
@@ -2829,6 +2945,18 @@ export default function MultiLeg() {
                                 <option value="all">All symbols</option>
                                 {[...new Set(resTrades.map(t => t.symbol))].filter(Boolean).map(s => <option key={s} value={s}>{shortSym(s)}</option>)}
                             </select>
+                        </div>
+                        <div>
+                            <div className="text-3xs text-fg-5 mb-0.5" id="res-window-label">Window (by exit)</div>
+                            <div className="flex items-center gap-1" role="group" aria-labelledby="res-window-label">
+                                {[[30, '30d'], [90, '90d'], ['all', 'All']].map(([v, label]) => (
+                                    <button key={String(v)} type="button" onClick={() => pickResWindow(v)} aria-pressed={resWindow.days === v}
+                                        title={v === 'all' ? 'Every booked round-trip' : `Round-trips that exited in the last ${v} days — applies to the whole page`}
+                                        className={`px-2 py-1 rounded border text-xs ${resWindow.days === v
+                                            ? 'border-primary bg-primary/15 text-primary-ink'
+                                            : 'border-line bg-slate-800 text-fg-4 hover:text-fg'}`}>{label}</button>
+                                ))}
+                            </div>
                         </div>
                         <button onClick={refreshResults} className="ml-auto px-2 py-1 rounded border border-line bg-slate-800 text-xs text-fg-3 hover:text-fg flex items-center gap-1">
                             <RefreshCw className={`w-3 h-3 ${resLoading ? 'animate-spin' : ''}`} /> Refresh
@@ -2854,48 +2982,74 @@ export default function MultiLeg() {
                                 server and not here. */}
                             <ResultsAnalytics
                                 tradeMode={resFilter.mode}
+                                days={resWindow.days}
                                 deploymentId={resFilter.deploymentId}
                                 symbol={resFilter.symbol}
                                 templateFilter={resFilter.template}
                                 templates={templates} />
-
-                            {/* How each day went, minute by minute — built from the
-                                round-trips' own recorded paths, same filter as the table. */}
-                            <div className="bg-surface rounded-xl border border-line p-4">
-                                <DayEquityCurves days={resDayCurves.days} excluded={resDayCurves.excluded} markBasis="net-of-estimated-costs"
-                                    emptyText="No booked round-trip in this filter to draw." />
-                            </div>
 
                             {/* Trades table */}
                             <div className="bg-surface rounded-xl border border-line p-4 overflow-x-auto">
                                 <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
                                     <div className="text-sm font-semibold text-fg">Structure round-trips ({resFiltered.length})</div>
                                     {(() => {
-                                        const allOpen = resFiltered.every(t => resTradeOpen.has(resTradeId(t)));
-                                        const anyOpen = resFiltered.some(t => resTradeOpen.has(resTradeId(t)));
+                                        const allOpen = resPageRows.length > 0 && resPageRows.every(t => resTradeOpen.has(resTradeId(t)));
+                                        const anyOpen = resPageRows.some(t => resTradeOpen.has(resTradeId(t)));
                                         const btn = 'px-2 py-0.5 rounded border border-line bg-slate-800 text-3xs text-fg-3 hover:text-fg disabled:opacity-40';
                                         return (
                                             <div className="flex items-center gap-1">
-                                                <button className={btn} disabled={allOpen} title="Open the legs, path chart and details of every round-trip below"
-                                                    onClick={() => setResTradeOpen(new Set(resFiltered.map(resTradeId)))}>Expand all</button>
+                                                <button className={btn} disabled={allOpen} title="Open the legs, path chart and details of every round-trip on this page"
+                                                    onClick={() => setResTradeOpen(new Set(resPageRows.map(resTradeId)))}>Expand page</button>
                                                 <button className={btn} disabled={!anyOpen} onClick={() => setResTradeOpen(new Set())}>Collapse all</button>
                                             </div>
                                         );
                                     })()}
+                                </div>
+                                {/* find / filter / page — 350+ rows is not a list anyone reads top to bottom */}
+                                <div className="flex flex-wrap items-center gap-2 mb-2">
+                                    <input type="search" value={resTable.q} onChange={e => setResTable(t => ({ ...t, q: e.target.value, page: 0 }))}
+                                        placeholder="Search deployment, structure, symbol, reason…" aria-label="Search round-trips"
+                                        className="h-8 w-64 max-w-full bg-slate-800 border border-line rounded-md px-2 text-xs text-fg-2 placeholder:text-fg-5" />
+                                    <label className="flex items-center gap-1 text-2xs text-fg-4">Exit reason
+                                        <select value={resTable.reason} onChange={e => setResTable(t => ({ ...t, reason: e.target.value, page: 0 }))}
+                                            className="h-8 bg-slate-800 border border-line rounded-md px-1 text-xs text-fg-2">
+                                            <option value="all">All</option>
+                                            {resExitReasons.map(r => <option key={r} value={r}>{r}</option>)}
+                                        </select>
+                                    </label>
+                                    <span className="text-2xs text-fg-5">
+                                        {resTableRows.length === resFiltered.length ? `${resTableRows.length} round-trips` : `${resTableRows.length} of ${resFiltered.length} match`} · click a column to sort
+                                    </span>
                                 </div>
                                 <table className="w-full text-2xs text-fg-3">
                                     <thead><tr className="text-fg-5 text-left">
                                         {/* Deployment is the SAME key the Deployment breakdown above
                                             groups on — without it a row here could not be matched to
                                             its line up there (Structure is only the template). */}
-                                        <th></th><th>Entry → Exit</th><th>Deployment</th><th>Structure</th><th>Sym</th><th>Mode</th><th>Reason</th>
-                                        <th className="text-right">Credit/u</th><th className="text-right">IVP@in</th>
-                                        <th className="text-right" title="₹ blocked when the structure was opened. ~ = estimated (heuristic), no ~ = the broker's SPAN figure">Margin ₹</th>
-                                        <th className="text-right">Gross ₹</th><th className="text-right">Chg</th><th className="text-right">Net ₹</th>
-                                        <th className="text-right" title="Net P&L ÷ margin at entry — the return on the capital this structure tied up">Net ÷ margin</th>
+                                        {(() => {
+                                            const th = (k, label, { right = false, title } = {}) => (
+                                                <th className={right ? 'text-right' : ''} title={title}
+                                                    aria-sort={resTable.sort === k ? (resTable.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                                                    <button type="button" onClick={() => sortResBy(k)} className={`hover:text-fg-2 ${resTable.sort === k ? 'text-fg-2' : ''}`}>
+                                                        {label}{resTable.sort === k ? (resTable.dir === 'desc' ? ' ▾' : ' ▴') : ''}
+                                                    </button>
+                                                </th>
+                                            );
+                                            return (
+                                                <>
+                                                    <th></th>{th('exit', 'Entry → Exit')}{th('name', 'Deployment')}<th>Structure</th><th>Sym</th><th>Mode</th><th>Reason</th>
+                                                    {th('credit', 'Credit/u', { right: true })}<th className="text-right">IVP@in</th>
+                                                    {th('margin', 'Margin ₹', { right: true, title: "₹ blocked when the structure was opened. ~ = estimated (heuristic), no ~ = the broker's SPAN figure" })}
+                                                    {th('gross', 'Gross ₹', { right: true })}{th('chg', 'Chg', { right: true })}{th('net', 'Net ₹', { right: true })}
+                                                    {th('rom', 'Net ÷ margin', { right: true, title: 'Net P&L ÷ margin at entry — the return on the capital this structure tied up' })}
+                                                    {th('mae', 'Worst ₹', { right: true, title: 'MAE — the worst recorded mark while open (net of estimated costs)' })}
+                                                    {th('mfe', 'Best ₹', { right: true, title: 'MFE — the best recorded mark while open (net of estimated costs)' })}
+                                                </>
+                                            );
+                                        })()}
                                     </tr></thead>
                                     <tbody>
-                                        {[...resFiltered].sort((a, b) => new Date(b.exitAt) - new Date(a.exitAt)).map((t, _i) => {
+                                        {resPageRows.map((t) => {
                                             const tid = resTradeId(t);
                                             const openT = resTradeOpen.has(tid);
                                             const allLegs = [...(t.legs || []), ...(t.closedLegs || [])];
@@ -2938,10 +3092,16 @@ export default function MultiLeg() {
                                                 <td className={`text-right ${t.quarantined || rom == null ? 'text-fg-5' : rom > 0 ? 'text-success' : rom < 0 ? 'text-danger' : 'text-fg-4'}`}>
                                                     {rom == null ? '—' : `${fmt(rom, 2)}%`}
                                                 </td>
+                                                <td className={`text-right ${numOrNull(t.maeRupees) < 0 ? 'text-danger' : 'text-fg-5'}`}>
+                                                    {numOrNull(t.maeRupees) == null ? '—' : `₹${fmt(t.maeRupees)}`}
+                                                </td>
+                                                <td className={`text-right ${numOrNull(t.mfeRupees) > 0 ? 'text-success' : 'text-fg-5'}`}>
+                                                    {numOrNull(t.mfeRupees) == null ? '—' : `₹${fmt(t.mfeRupees)}`}
+                                                </td>
                                             </tr>
                                             {openT && (
-                                                <tr className="bg-slate-900/60"><td colSpan={14} className="p-2">
-                                                    <div className="text-3xs text-fg-4 mb-1">Held {t.holdDays != null ? `${t.holdDays}d` : fmtDur(t.entryAt)} · spot {fmt(t.entrySpot)} → {fmt(t.exitSpot)} · net credit at entry ₹{fmt(t.origCredit, 1)}/u{t.lots ? ` · ${t.lots} lot(s)` : ''}</div>
+                                                <tr className="bg-slate-900/60"><td colSpan={16} className="p-2">
+                                                    <div className="text-3xs text-fg-4 mb-1">Held {t.exitAt ? fmtSpan(t.entryAt, t.exitAt) : fmtDur(t.entryAt)} · spot {fmt(t.entrySpot)} → {fmt(t.exitSpot)} · net credit at entry ₹{fmt(t.origCredit, 1)}/u{t.lots ? ` · ${t.lots} lot(s)` : ''}</div>
                                                     {/* What it DID while open — MAE/MFE and the gave-back number.
                                                         Renders its own explanation for pre-feature trades. */}
                                                     <div className="mb-2"><TradePathChart trade={t} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} /></div>
@@ -2966,6 +3126,29 @@ export default function MultiLeg() {
                                         })}
                                     </tbody>
                                 </table>
+                                {resPages > 1 && (
+                                    <div className="flex flex-wrap items-center justify-between gap-2 mt-2 text-2xs text-fg-4">
+                                        <span>Showing {resPage * RES_PAGE + 1}–{Math.min((resPage + 1) * RES_PAGE, resTableRows.length)} of {resTableRows.length}</span>
+                                        <div className="flex items-center gap-1">
+                                            <button type="button" disabled={resPage === 0} onClick={() => setResTable(t => ({ ...t, page: Math.max(0, resPage - 1) }))}
+                                                className="px-2 py-0.5 rounded border border-line bg-slate-800 hover:text-fg disabled:opacity-40">‹ Prev</button>
+                                            <span className="px-1">Page {resPage + 1} of {resPages}</span>
+                                            <button type="button" disabled={resPage >= resPages - 1} onClick={() => setResTable(t => ({ ...t, page: Math.min(resPages - 1, resPage + 1) }))}
+                                                className="px-2 py-0.5 rounded border border-line bg-slate-800 hover:text-fg disabled:opacity-40">Next ›</button>
+                                        </div>
+                                    </div>
+                                )}
+                                {resTableRows.length === 0 && (
+                                    <div className="text-2xs text-fg-5 py-3 text-center">No round-trip matches the search / exit-reason filter.</div>
+                                )}
+                            </div>
+
+                            {/* How each day went, minute by minute — LAST, after the round-trips (it is the
+                                longest section and split the breakdowns from the trades). Built from the
+                                round-trips' own recorded paths, same filter as the table. */}
+                            <div className="bg-surface rounded-xl border border-line p-4">
+                                <DayEquityCurves days={resDayCurves.days} excluded={resDayCurves.excluded} markBasis="net-of-estimated-costs"
+                                    emptyText="No booked round-trip in this filter to draw." />
                             </div>
                         </>
                     )}
@@ -3215,6 +3398,19 @@ function fmtDur(iso) {
     if (!iso) return '';
     const ms = Date.now() - new Date(iso).getTime();
     if (isNaN(ms) || ms < 0) return '';
+    const m = Math.floor(ms / 60000);
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ${m % 60}m`;
+    return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
+/** Elapsed time BETWEEN two instants, same shape as fmtDur. A closed trade's
+ *  "Held" was fmtDur(entryAt) — time from entry until NOW — so it grew every day
+ *  after the exit (a 1h 54m trade read "3d 21h" three days later). */
+function fmtSpan(fromIso, toIso) {
+    const ms = new Date(toIso).getTime() - new Date(fromIso).getTime();
+    if (!Number.isFinite(ms) || ms < 0) return '';
     const m = Math.floor(ms / 60000);
     if (m < 60) return `${m}m`;
     const h = Math.floor(m / 60);
@@ -3500,6 +3696,7 @@ function MarketRead({ symbol, presets, onApplyPreset }) {
                         </div>
                     )}
                     <div className="text-4xs text-fg-5">A read, not a guarantee — momentum can flip and OI is a snapshot. Confirm with a backtest before deploying.</div>
+                    {data.validated === false && <div className="text-3xs text-warning" role="note">⚠ {data.caveat}</div>}
                 </div>
             )}
         </div>

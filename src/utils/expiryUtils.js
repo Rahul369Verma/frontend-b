@@ -11,14 +11,12 @@ export const getExpiryDayOfWeek = (symbol) => {
         return INSTRUMENT_CONFIG[sym].expiryDay;
     }
 
-    if (sym.includes('MIDCP')) return 1; // Mon
-    if (sym.includes('FIN')) return 2;   // Tue
-    if (sym.includes('BANKNIFTY')) return 3; // Wed (legacy fallback)
-    if (sym.includes('NIFTY')) return 2;     // Tue
-    if (sym.includes('SENSEX')) return 4;    // Thu
-    if (sym.includes('BANKEX')) return 1;    // Mon
-
-    return 4; // Default Thu
+    // Unconfigured symbols: NSE equity derivatives expire on TUESDAY and BSE's on
+    // THURSDAY (since Sep-2025). The old per-index fallbacks (MIDCP Monday,
+    // BANKNIFTY Wednesday, BANKEX Monday) were the pre-2025 weekly rules — and
+    // "includes('FIN')" also caught BAJFINANCE.
+    if (sym.startsWith('BSE:') || sym.includes('SENSEX') || sym.includes('BANKEX')) return 4; // Thu
+    return 2; // Tue
 };
 
 /**

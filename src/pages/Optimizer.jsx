@@ -9,6 +9,13 @@ import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 import { pollInterval } from '../hooks/usePolling.js';
 import { API_ORIGIN } from '../config/api.js';
 import { pnlTone } from '../components/viz/tokens';
+import IndexChips from '../components/optimizer/IndexChips';
+import DataCheckPanel from '../components/optimizer/DataCheckPanel';
+import ProgressGrid from '../components/optimizer/ProgressGrid';
+import CrossIndexResults from '../components/optimizer/CrossIndexResults';
+import RecentRuns from '../components/optimizer/RecentRuns';
+import { useConfirm } from '../components/confirmContext.js';
+import { INDEX_SYMBOLS, PRESETS, plannedBacktests, defaultK, nameOf } from '../components/optimizer/crossIndex';
 
 
 
@@ -49,7 +56,12 @@ const NOISE_PARAM_KEYS = new Set([
   'minTrades', 'minWinRate', 'maxDrawdown', 'minSharpeRatio',
   'min_trades', 'min_win_rate', 'max_drawdown', 'min_sharpe_ratio', 'stop_on_match',
   'use_ai_prediction', 'DISABLE_RANDOMIZATION', 'signal',
+  // multi-index run orchestration
+  'symbols', 'preset', 'budget', 'seed', 'cross_index', 'minSlU', 'optimizer_workers', 'optimizer_block', 'jobId', 'iterations',
 ]);
+// The aligned spot archive's coverage (backend data_archives/SPOT) and the default multi-index window.
+const SPOT_ARCHIVE_FROM = '2025-06-02', SPOT_ARCHIVE_TO = '2026-02-19';
+const MULTI_DEFAULT_WINDOW = { start_date: '2025-06-16', end_date: '2026-02-19' };
 
 const prettify = (key) =>
   String(key).split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
@@ -67,10 +79,10 @@ const fmtPF = (v) => {
 };
 
 export default function Optimizer() {
-  // Stable, collision-free ids for the two switches' visible labels.
-  const stopMatchLabelId = useId();
+  // Stable, collision-free id for the OOS switch's visible label.
   const oosLabelId = useId();
   const navigate = useNavigate();
+  const confirm = useConfirm();
   const {
     optimizerParams: config,
     setOptimizerParams: setConfig,
@@ -97,8 +109,18 @@ export default function Optimizer() {
   const [progress, setProgress] = useState({ current: 0, total: 0, matches: 0 });
   // Wall-clock tick (1s) so the ETA counts down smoothly BETWEEN backend ticks.
   const [nowTs, setNowTs] = useState(() => Date.now());
-  const [stopOnMatch, setStopOnMatch] = useState(false);
   const [stopping, setStopping] = useState(false);
+  // Multi-index run state: the live strategy × index grid (from /status), a 409
+  // conflict (another run in progress → offer Attach), the data check, Recent runs.
+  const [cells, setCells] = useState(null);
+  const [conflictJobId, setConflictJobId] = useState(null);
+  const [refusal, setRefusal] = useState(null);   // 503 reasons
+  const [dataCheckResult, setDataCheckResult] = useState(null);
+  const [recentRuns, setRecentRuns] = useState(null);
+  const [pausing, setPausing] = useState(false);
+  const [resumingJobId, setResumingJobId] = useState(null);
+  // A paused (or crashed) run shown on the page: offers Resume.
+  const [pausedJobId, setPausedJobId] = useState(null);
   // Ranking mode: ON (default) = "deflated" anti-data-mining ranking (penalize
   // IS→OOS degradation + the best-of-N selection bias). OFF = raw robust score.
   // Both keys are precomputed by the backend, so this just re-sorts — no re-run.
@@ -133,6 +155,11 @@ export default function Optimizer() {
   const selectedStrategies = Array.isArray(config.strategies) && config.strategies.length
     ? config.strategies
     : (config.strategy ? [config.strategy] : []);
+  // One symbol = today's page; two or more indexes = a multi-index run.
+  const symbols = (Array.isArray(config.symbols) && config.symbols.length ? config.symbols : [config.symbol]).filter(Boolean);
+  const isMulti = symbols.length > 1;
+  const preset = PRESETS[config.preset] ? config.preset : 'quick';
+  const budget = config.budget && Number(config.budget.d1) > 0 ? config.budget : PRESETS[preset];
 
   const catalogMap = useMemo(() => {
     const m = {};
@@ -165,6 +192,8 @@ export default function Optimizer() {
     const socket = io(API_ORIGIN, { withCredentials: true });
 
     socket.on('optimization_progress', (data) => {
+      // Only OUR run's progress (a second tab's run must not take this page over).
+      if (data && data.jobId && jobIdRef.current && data.jobId !== jobIdRef.current) return;
       setProgress(data);
       lastSocketTsRef.current = Date.now();
       // Live progress is arriving but THIS tab isn't tracking a job (e.g. the
@@ -226,7 +255,11 @@ export default function Optimizer() {
   const applyResultData = (data, persist = true) => {
     setResults(data);
     if (persist) {
-      try { localStorage.setItem(OPT_RESULT_KEY, JSON.stringify(data)); } catch { /* quota/private mode */ }
+      // A multi-index result is large and saved on the server: keep only a pointer.
+      const stored = data && data.type === 'multi_index_optimization_result'
+        ? { type: 'multi_index_ref', jobId: data.jobId, summary: { symbols: data.symbols, winner: data.sharedWinner && data.sharedWinner.label } }
+        : data;
+      try { localStorage.setItem(OPT_RESULT_KEY, JSON.stringify(stored)); } catch { /* quota/private mode */ }
     }
     const groups = Array.isArray(data.strategies) ? data.strategies : null;
     if (groups && groups.length) {
@@ -261,7 +294,11 @@ export default function Optimizer() {
     if (!saved) return;
     try {
       const parsed = JSON.parse(saved);
-      if (parsed && (parsed.strategies || parsed.best_parameters)) applyResultData(parsed, false);
+      if (parsed && parsed.type === 'multi_index_ref' && parsed.jobId) {
+        fetch(`${API_ORIGIN}/api/engine/optimizer/jobs/${encodeURIComponent(parsed.jobId)}`)
+          .then(r => r.json()).then(d => { if (d && d.result && d.result.type) applyResultData({ ...d.result, jobId: d.result.jobId || parsed.jobId }, false); })
+          .catch(() => { /* saved run unavailable */ });
+      } else if (parsed && (parsed.strategies || parsed.best_parameters)) applyResultData(parsed, false);
     } catch { /* corrupt → ignore */ }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -275,14 +312,91 @@ export default function Optimizer() {
     if (pollTimerRef.current) { clearTimeout(pollTimerRef.current); pollTimerRef.current = null; }
   };
 
-  const finishJob = (state, payload) => {
+  const finishJob = (state, payload, jobId = null) => {
     stopPolling();
     setRunning(false);
     setStopping(false);
+    setPausing(false);
     jobIdRef.current = null;
     try { localStorage.removeItem(OPT_JOB_KEY); } catch { /* ignore */ }
-    if (state === 'done' && payload) applyResultData(payload);
+    if (state === 'done' && payload) { setPausedJobId(null); applyResultData(payload); }
+    else if (state === 'paused' || state === 'interrupted') {
+      // Resumable: keep its partial result on screen and offer Resume.
+      setPausedJobId(jobId);
+      if (payload && payload.type) applyResultData({ ...payload, jobId: payload.jobId || jobId }, false);
+    }
     else if (state === 'error') setError(payload || 'Optimization failed');
+    loadRecentRuns();
+  };
+
+  const loadRecentRuns = () => {
+    fetch(`${API_ORIGIN}/api/engine/optimizer/jobs?limit=20`)
+      .then(r => r.json()).then(d => setRecentRuns(d && Array.isArray(d.jobs) ? d : { jobs: [] }))
+      .catch(() => setRecentRuns({ jobs: [], warning: 'Recent runs unavailable.' }));
+  };
+  React.useEffect(() => { loadRecentRuns(); }, []);
+
+  const openRecentRun = (jobId) => {
+    fetch(`${API_ORIGIN}/api/engine/optimizer/jobs/${encodeURIComponent(jobId)}`)
+      .then(r => r.json()).then(d => {
+        if (d && d.result && d.result.type) {
+          setPausedJobId(d.status === 'paused' ? jobId : null);
+          applyResultData({ ...d.result, jobId: d.result.jobId || jobId });
+        } else setError(d.error || 'That run has no saved result.');
+      })
+      .catch(e => setError(`Could not load the run: ${e.message}`));
+  };
+
+  // Resume a paused / stopped / crashed run from its checkpoint, then follow it.
+  const resumeJob = async (jobId) => {
+    setResumingJobId(jobId);
+    setError(null);
+    try {
+      const r = await fetch(`${API_ORIGIN}/api/engine/optimizer/jobs/${encodeURIComponent(jobId)}/resume`, { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 409 && d.activeJobId) { setConflictJobId(d.activeJobId); return; }
+      if (!r.ok) { setError(d.error || `Resume failed (HTTP ${r.status})`); return; }
+      setPausedJobId(null);
+      setResults(null);
+      attachToJob(jobId);
+    } catch (e) {
+      setError(`Resume failed: ${e.message}`);
+    } finally { setResumingJobId(null); }
+  };
+  const deleteJob = async (jobId) => {
+    const ok = await confirm('Delete this optimizer run? Its results and checkpoint are removed permanently.');
+    if (!ok) return;
+    const r = await fetch(`${API_ORIGIN}/api/engine/optimizer/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }).catch(() => null);
+    const d = r ? await r.json().catch(() => ({})) : {};
+    if (!r || !r.ok) setError(d.error || 'Delete failed');
+    if (pausedJobId === jobId) setPausedJobId(null);
+    loadRecentRuns();
+  };
+  const clearFinishedJobs = async () => {
+    const ok = await confirm('Delete every finished run (done, stopped, error)? Paused and interrupted runs are kept so they can still resume.');
+    if (!ok) return;
+    await fetch(`${API_ORIGIN}/api/engine/optimizer/jobs`, { method: 'DELETE' }).catch(() => null);
+    loadRecentRuns();
+  };
+  // Pause: stop handing out work; finished backtests are checkpointed and the run resumes from here.
+  const pauseOptimization = async () => {
+    if (!jobIdRef.current || pausing) return;
+    setPausing(true);
+    try {
+      const r = await fetch(`${API_ORIGIN}/api/engine/optimizer/pause`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId: jobIdRef.current }) });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); console.warn('Pause request:', d.error || r.statusText); setPausing(false); }
+    } catch (e) { console.error('Failed to send pause request:', e); setPausing(false); }
+  };
+
+  // Rejoin a run started elsewhere (offered after a 409).
+  const attachToJob = (jobId) => {
+    const token = ++runTokenRef.current;
+    stopPolling();
+    setConflictJobId(null);
+    setError(null);
+    try { localStorage.setItem(OPT_JOB_KEY, jobId); } catch { /* ignore */ }
+    setRunning(true);
+    pollJob(jobId, token);
   };
 
   const pollJob = (jobId, token) => {
@@ -299,9 +413,12 @@ export default function Optimizer() {
           setRunning(true);
           jobIdRef.current = jobId;
           if (d.progress) setProgress(p => ({ ...p, ...d.progress }));
+          if (d.cells) setCells(d.cells);
           pollTimerRef.current = setTimeout(tick, 2000); // socket also streams live progress
         } else if (d.status === 'done') {
           finishJob('done', d.result);
+        } else if (d.status === 'paused' || d.status === 'interrupted') {
+          finishJob(d.status, d.result || null, jobId);
         } else if (d.status === 'error') {
           finishJob('error', d.error);
         } else {
@@ -334,15 +451,20 @@ export default function Optimizer() {
     setRunning(true);
     setStopping(false);
     setError(null);
+    setConflictJobId(null);
+    setRefusal(null);
+    setCells(null);
     setResults(null);
     setSelectedResult(null);
     setExpandedStrategy(null);
     setProgress({
       current: 0,
-      total: (Number(config.iterations) || 0) * selectedStrategies.length,
+      total: isMulti ? plannedBacktests(budget, selectedStrategies.length, symbols.length) : (Number(config.iterations) || 0) * selectedStrategies.length,
       matches: 0,
       totalStrategies: selectedStrategies.length,
+      totalSymbols: symbols.length,
       strategyIndex: 0,
+      jobId,
     });
 
     // Fire the run but DON'T await it for the result — the poller drives
@@ -366,18 +488,34 @@ export default function Optimizer() {
         min_win_rate: config.minWinRate,
         max_drawdown: config.maxDrawdown || 20,
         min_sharpe_ratio: config.minSharpeRatio,
-        stop_on_match: stopOnMatch,
-        futures_expiry: config.futures_expiry,
-        oos_enabled: !!config.oos_enabled,
+        futures_expiry: isMulti ? undefined : config.futures_expiry,
+        oos_enabled: isMulti ? true : !!config.oos_enabled,
         oos_fraction: config.oos_fraction ?? 0.3,
+        // Multi-index: the indexes and the search budget (preset or advanced d1/s2/d2).
+        symbols,
+        // Several indexes: a preset (or advanced d1/s2/d2). One index: the Iterations field only.
+        ...(isMulti
+          ? { preset, budget: config.budget && Number(config.budget.d1) > 0 ? config.budget : undefined, iterations: undefined }
+          : { preset: undefined, budget: undefined, crossK: undefined }),
       })
     }).then(async (response) => {
       if (token !== runTokenRef.current) return;
-      // Surface only IMMEDIATE failures (validation 400 / run 500). A normal
-      // completion is picked up by the poller from /status.
+      // Surface only IMMEDIATE failures (validation 400 / run 500 / 409 / 503).
+      // A normal completion is picked up by the poller from /status.
       if (!response.ok) {
         const d = await response.json().catch(() => ({}));
+        if (response.status === 409 && d.activeJobId) {
+          stopPolling(); setRunning(false); jobIdRef.current = null;
+          try { localStorage.removeItem(OPT_JOB_KEY); } catch { /* ignore */ }
+          setConflictJobId(d.activeJobId);
+          return;
+        }
+        if (response.status === 503) setRefusal(Array.isArray(d.reasons) ? d.reasons : []);
         finishJob('error', d.error || `Request failed (${response.status})`);
+      } else {
+        // 200 can still carry a refusal ({error}) — show it, don't swallow it.
+        const d = await response.clone().json().catch(() => null);
+        if (d && d.error && !d.type) finishJob('error', d.error);
       }
     }).catch(() => {
       // Connection dropped on a long run — ignore; the poller keeps tracking it.
@@ -447,6 +585,7 @@ export default function Optimizer() {
   const TEST_OMIT_KEYS = new Set([
     // optimizer orchestration
     'jobId', 'strategies', 'iterations', 'stop_on_match', 'isOptimizer', 'DISABLE_RANDOMIZATION',
+    'symbols', 'preset', 'budget', 'seed', 'cross_index', 'minSlU', 'optimizer_workers', 'optimizer_block',
     'minTrades', 'minWinRate', 'maxDrawdown', 'minSharpeRatio',
     'min_trades', 'min_win_rate', 'max_drawdown', 'min_sharpe_ratio', 'signal',
     // run-context (set explicitly + normalized below)
@@ -454,6 +593,45 @@ export default function Optimizer() {
     'capital', 'lot_size', 'lots', 'dataSource', 'backtest_mode', 'futures_expiry',
     'slippage_percent', 'brokerage_per_order', 'use_ai_prediction',
   ]);
+
+  // Navigate to the Backtester with exactly these params (shared by both result views).
+  const goTest = (newBacktestParams, strat) => {
+    setBacktestParams(newBacktestParams);
+    navigate('/backtest', {
+      state: {
+        symbol: newBacktestParams.symbol,
+        strategy: strat,
+        resolution: newBacktestParams.resolution,
+        dataSource: newBacktestParams.dataSource,
+        backtest_mode: newBacktestParams.backtest_mode,
+        params: newBacktestParams,
+      },
+    });
+  };
+  // Multi-index "Save": one saved-strategy doc per index (never the global defaults).
+  const saveSettings = async (bodies) => {
+    for (const b of bodies) {
+      const r = await fetch(`${API_ORIGIN}/api/config/strategies/saved`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `HTTP ${r.status}`); }
+    }
+  };
+
+  // Chips: switching to several indexes moves the form to the multi-index rules
+  // (aligned spot source, OOS on, a window the archive covers).
+  const setSymbols = (next) => {
+    const list = next.length ? next : [config.symbol];
+    setConfig(c => {
+      const multiNow = list.length > 1;
+      const out = { ...c, symbols: list, symbol: list[0], lot_size: instrumentConfig[list[0]]?.lotSize || c.lot_size };
+      if (multiNow) {
+        if (!['ARCHIVE_SPOT', 'SPOT'].includes(c.dataSource)) out.dataSource = 'ARCHIVE_SPOT';
+        out.oos_enabled = true;
+        out.backtest_mode = 'Simulated Premium';
+        if ((out.dataSource === 'ARCHIVE_SPOT') && (!c.start_date || !c.end_date || c.start_date < SPOT_ARCHIVE_FROM || c.end_date > SPOT_ARCHIVE_TO)) Object.assign(out, MULTI_DEFAULT_WINDOW);
+      }
+      return out;
+    });
+  };
 
   const handleTestClick = (result, strategyId) => {
     // The per-row strategy MUST win (a multi-strategy result row may not be the
@@ -712,10 +890,21 @@ export default function Optimizer() {
                 </div>
               )}
               <p className="text-2xs text-fg-5 mt-1">
-                Each selected strategy is optimized separately ({config.iterations || 0} iterations each) on this symbol, then ranked to find the best.
+                {isMulti
+                  ? `Every selected strategy is tried on all ${symbols.length} indexes with the same settings, then ranked by how many indexes it holds up on.`
+                  : `Each selected strategy is optimized separately (${config.iterations || 0} iterations each) on this symbol, then ranked to find the best.`}
               </p>
             </div>
 
+            <IndexChips
+              selected={symbols.filter(s => INDEX_SYMBOLS.includes(s))}
+              onChange={setSymbols}
+              badges={dataCheckResult ? Object.fromEntries(Object.entries(dataCheckResult.symbols || {}).map(([sym, v]) => [sym, {
+                ok: !!v.eligible, text: v.eligible ? `✓ ${v.days}d` : `⚠ ${v.days ?? 0}d`, title: v.eligible ? `${v.days} sessions, data OK` : (v.reasons || []).join('; '),
+              }])) : {}}
+            />
+
+            {!isMulti && (
             <div>
               <label htmlFor="optimizer-symbol-1" className="block text-sm font-medium text-fg-4 mb-1">Symbol</label>
               <select id="optimizer-symbol-1"
@@ -725,7 +914,7 @@ export default function Optimizer() {
                   const newSymbol = e.target.value;
                   const result = instrumentConfig[newSymbol];
                   const newLotSize = result ? result.lotSize : 30;
-                  setConfig({ ...config, symbol: newSymbol, lot_size: newLotSize });
+                  setConfig({ ...config, symbol: newSymbol, symbols: [newSymbol], lot_size: newLotSize });
                 }}
               >
                 {Object.keys(instrumentConfig).length === 0 && <option>Loading...</option>}
@@ -747,7 +936,17 @@ export default function Optimizer() {
                 </optgroup>
               </select>
             </div>
+            )}
 
+            {isMulti ? (
+              <div>
+                <span className="block text-sm font-medium text-fg-4 mb-1">Lot Size</span>
+                <p className="text-2xs text-fg-3">
+                  {symbols.map(s => `${nameOf(s)} ${dataCheckResult?.symbols?.[s]?.lotSize ?? instrumentConfig[s]?.lotSize ?? '—'}`).join(' · ')}
+                </p>
+                <p className="text-2xs text-fg-5">Each index uses its exchange lot (as of the start date) — not editable here.</p>
+              </div>
+            ) : (
             <div>
               <label htmlFor="optimizer-lot-size-2" className="block text-sm font-medium text-fg-4 mb-1">Lot Size</label>
               <input id="optimizer-lot-size-2"
@@ -757,6 +956,7 @@ export default function Optimizer() {
                 onChange={e => setConfig({ ...config, lot_size: e.target.value === '' ? '' : parseInt(e.target.value) })}
               />
             </div>
+            )}
 
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -778,8 +978,9 @@ export default function Optimizer() {
                   value={config.backtest_mode || 'Simulated Premium'}
                   onChange={e => setConfig({ ...config, backtest_mode: e.target.value })}>
                   <option value="Simulated Premium">Simulated Premium (Fast & Approx - 0.5 Delta)</option>
-                  <option value="Real Option Data">Real Option Data (Slow & Accurate)</option>
+                  {!isMulti && <option value="Real Option Data">Real Option Data (Slow & Accurate)</option>}
                 </select>
+                {isMulti && <p className="text-3xs text-fg-5 mt-1">Real Option Data isn't offered for several indexes: it fetches option history for every trade on every index.</p>}
                 {config.backtest_mode === 'Real Option Data' && (
                   <div className="text-3xs text-warning mt-1 flex items-center gap-1">
                     <AlertTriangle className="w-3 h-3" />
@@ -792,15 +993,17 @@ export default function Optimizer() {
                 <select id="optimizer-data-source-6" className="w-full bg-slate-900 border border-blue-900 rounded p-2 text-fg"
                   value={config.dataSource || 'AUTO'}
                   onChange={e => setConfig({ ...config, dataSource: e.target.value })}>
-                  <option value="AUTO">Auto (Smart Switch)</option>
+                  {!isMulti && <option value="AUTO">Auto (Smart Switch)</option>}
                   <option value="SPOT">Spot Data (API)</option>
-                  <option value="FUT">Current Month Future</option>
-                  <option value="ARCHIVE">📂 Local Archive (Fast)</option>
-                  <option value="SPOT_ARCHIVE">🔁 Spot API + Archive Options</option>
+                  {!isMulti && <option value="FUT">Current Month Future</option>}
+                  {!isMulti && <option value="ARCHIVE">📂 Local Archive (Fast)</option>}
+                  <option value="ARCHIVE_SPOT">📂 Local archive – spot, all indexes aligned</option>
+                  {!isMulti && <option value="SPOT_ARCHIVE">🔁 Spot API + Archive Options</option>}
                 </select>
+                {isMulti && <p className="text-3xs text-fg-5 mt-1">Several indexes need one clean price basis: the aligned spot archive ({SPOT_ARCHIVE_FROM} → {SPOT_ARCHIVE_TO}) or the broker's spot data.</p>}
               </div>
 
-              {(config.dataSource === 'FUT' || config.backtest_mode === 'Real Option Data') && (
+              {!isMulti && (config.dataSource === 'FUT' || config.backtest_mode === 'Real Option Data') && (
                 <div>
                   <label className="block text-sm font-medium text-purple-400 mb-1">
                     {config.backtest_mode === 'Real Option Data' ? 'Options Expiry Date' : 'Futures Expiry Date'}
@@ -845,6 +1048,37 @@ export default function Optimizer() {
                 onChange={e => setConfig({ ...config, capital: e.target.value === '' ? '' : parseInt(e.target.value) })} />
             </div>
 
+            {isMulti ? (
+              <fieldset>
+                <legend className="block text-sm font-medium text-fg-4 mb-1">Search depth</legend>
+                <div role="radiogroup" aria-label="Search depth" className="grid grid-cols-3 gap-1">
+                  {Object.entries(PRESETS).map(([key, p]) => (
+                    <button key={key} type="button" role="radio" aria-checked={preset === key && !(config.budget && Number(config.budget.d1) > 0)}
+                      onClick={() => setConfig({ ...config, preset: key, budget: null })}
+                      className={`text-xs py-1.5 rounded border ${preset === key && !(config.budget && Number(config.budget.d1) > 0) ? 'bg-primary/15 border-primary/50 text-primary-ink' : 'border-line text-fg-3'}`}>
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-2xs text-fg-5 mt-1">
+                  {budget.d1} settings per strategy on every index, then {budget.d2} more for the best {Math.min(budget.s2, selectedStrategies.length || budget.s2)} —
+                  about {plannedBacktests(budget, selectedStrategies.length, symbols.length).toLocaleString('en-IN')} backtests in all.
+                </p>
+                <details className="mt-1">
+                  <summary className="text-2xs text-fg-4 cursor-pointer">Advanced</summary>
+                  <div className="grid grid-cols-3 gap-2 mt-1">
+                    {[['d1', 'Screening settings'], ['s2', 'Strategies kept'], ['d2', 'Extra settings']].map(([k, lbl]) => (
+                      <div key={k}>
+                        <label htmlFor={`optimizer-budget-${k}`} className="block text-3xs text-fg-5">{lbl}</label>
+                        <input id={`optimizer-budget-${k}`} type="number" min="0" className="w-full bg-slate-900 border border-line rounded p-1 text-fg text-xs"
+                          value={budget[k]}
+                          onChange={e => setConfig({ ...config, budget: { ...budget, [k]: Math.max(0, parseInt(e.target.value) || 0) } })} />
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              </fieldset>
+            ) : (
             <div>
               <label htmlFor="optimizer-iterations-per-strategy-9" className="block text-sm font-medium text-fg-4 mb-1">Iterations per Strategy</label>
               <input id="optimizer-iterations-per-strategy-9" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg"
@@ -856,6 +1090,7 @@ export default function Optimizer() {
                 </p>
               )}
             </div>
+            )}
 
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -896,61 +1131,37 @@ export default function Optimizer() {
               </div>
             </div>
 
-            {/* The knob keeps `bg-white` (a knob is white in light UIs too) but needs the
-                same gray-300 hairline the four <input peer> switches elsewhere in the app
-                carry: on a light theme the face alone is 1.3-1.8:1 against the track, and
-                it is the RING that delineates it (4.4-6.3:1). Dark themes are the mirror —
-                the face carries it and the ring is a subtle inner edge. */}
-            {/* A SWITCH, NOT A DIV. This was a <div onClick> — invisible to
-                keyboard and to screen readers, so the setting simply could not be
-                changed without a mouse and was never announced as on or off. A
-                real <button role="switch"> gets Tab, Space/Enter and state for
-                free; the label is clickable too, which doubles the hit area. */}
-            {/* A <label> around a role="switch" button is not a label/control pair:
-                a label must point at a form control. `aria-labelledby` on the
-                switch, naming the visible text, is the pattern that actually
-                announces "Stop on First Match, switch, on". */}
-            <div className="flex items-center gap-3 p-3 bg-slate-800 rounded-lg border border-line">
-              <button
-                type="button"
-                role="switch"
-                aria-checked={stopOnMatch}
-                aria-labelledby={stopMatchLabelId}
-                onClick={() => setStopOnMatch(!stopOnMatch)}
-                className={`w-10 h-6 shrink-0 rounded-full p-1 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${stopOnMatch ? 'bg-success' : 'bg-slate-600'}`}
-              >
-                <span className={`block w-4 h-4 bg-white border border-gray-300 rounded-full transition-transform ${stopOnMatch ? 'translate-x-4' : 'translate-x-0'}`} />
-              </button>
-              <span id={stopMatchLabelId} className="text-sm font-medium text-fg-3">Stop on First Match (per strategy)</span>
-            </div>
-
+            {/* Switch recipe (knob ring, role="switch", aria-labelledby) is documented on the OOS switch below. */}
             {/* ── Out-of-sample (walk-forward) validation ─────────────── */}
             <div className="p-3 bg-slate-800 rounded-lg border border-line space-y-2">
               <div className="flex items-center gap-3">
                 <button
                   type="button"
                   role="switch"
-                  aria-checked={config.oos_enabled}
+                  aria-checked={isMulti ? true : !!config.oos_enabled}
                   aria-labelledby={oosLabelId}
-                  onClick={() => setConfig({ ...config, oos_enabled: !config.oos_enabled })}
-                  className={`w-10 h-6 shrink-0 rounded-full p-1 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${config.oos_enabled ? 'bg-success' : 'bg-slate-600'}`}
+                  aria-disabled={isMulti ? true : undefined}
+                  onClick={() => { if (!isMulti) setConfig({ ...config, oos_enabled: !config.oos_enabled }); }}
+                  className={`w-10 h-6 shrink-0 rounded-full p-1 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${(isMulti || config.oos_enabled) ? 'bg-success' : 'bg-slate-600'} ${isMulti ? 'cursor-not-allowed' : ''}`}
                 >
-                  {/* Same knob recipe as the Stop-on-First-Match switch above. */}
-                  <span className={`block w-4 h-4 bg-white border border-gray-300 rounded-full transition-transform ${config.oos_enabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                  {/* The knob keeps `bg-white` but carries a gray-300 hairline: on light themes the
+                      ring, not the face, delineates it. A real <button role="switch"> (keyboard +
+                      announced state), named by aria-labelledby — a <label> can't point at a button. */}
+                  <span className={`block w-4 h-4 bg-white border border-gray-300 rounded-full transition-transform ${(isMulti || config.oos_enabled) ? 'translate-x-4' : 'translate-x-0'}`} />
                 </button>
-                <span id={oosLabelId} className="text-sm font-medium text-fg-3">Out-of-Sample Validation 🛡️</span>
+                <span id={oosLabelId} className="text-sm font-medium text-fg-3">Out-of-Sample Validation 🛡️{isMulti && <span className="text-2xs text-fg-5 font-normal"> — on, required to judge across indexes</span>}</span>
               </div>
               <p className="text-2xs text-fg-5">
                 Optimizes on the earlier part of the range and <span className="text-fg-3">validates on a held-out tail</span> it never saw — so overfit sets (great in-sample, bad out-of-sample) are flagged, not picked.
               </p>
-              {config.oos_enabled && (
+              {(isMulti || config.oos_enabled) && (
                 <div className="flex items-center gap-2">
                   <label htmlFor="optimizer-test-held-out-16" className="text-xs text-fg-4">Test (held-out) %</label>
-                  <input id="optimizer-test-held-out-16" type="number" min="10" max="60" step="5"
+                  <input id="optimizer-test-held-out-16" type="number" min={isMulti ? 20 : 10} max="60" step="5"
                     className="w-20 bg-slate-900 border border-line rounded p-1 text-fg text-sm"
                     value={Math.round((config.oos_fraction ?? 0.3) * 100)}
                     onChange={e => {
-                      const pct = Math.min(60, Math.max(10, parseInt(e.target.value) || 30));
+                      const pct = Math.min(60, Math.max(isMulti ? 20 : 10, parseInt(e.target.value) || 30));
                       setConfig({ ...config, oos_fraction: pct / 100 });
                     }} />
                   <span className="text-2xs text-fg-5">
@@ -960,15 +1171,27 @@ export default function Optimizer() {
               )}
             </div>
 
+            {isMulti && (
+              <DataCheckPanel symbols={symbols} dataSource={config.dataSource || 'ARCHIVE_SPOT'} start={config.start_date} end={config.end_date}
+                oosFraction={config.oos_fraction ?? 0.3} onResult={setDataCheckResult} />
+            )}
+
             <button onClick={startOptimization} disabled={running || selectedStrategies.length === 0}
               className="w-full bg-primary hover:bg-blue-600 text-on-primary font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-              {running ? 'Optimizing...' : <><Play className="w-4 h-4" /> Optimize {selectedStrategies.length || 0} Strateg{selectedStrategies.length === 1 ? 'y' : 'ies'}</>}
+              {running ? 'Optimizing...' : <><Play className="w-4 h-4" /> Optimize {selectedStrategies.length || 0} Strateg{selectedStrategies.length === 1 ? 'y' : 'ies'}{isMulti ? ` on ${symbols.length} indexes` : ''}</>}
             </button>
 
+            {conflictJobId && (
+              <div className="p-3 bg-amber-500/10 border border-amber-500/40 rounded text-warning text-sm space-y-2" role="alert">
+                <p>A run is already in progress — only one optimizer run at a time.</p>
+                <button type="button" onClick={() => attachToJob(conflictJobId)} className="text-xs bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 px-3 py-1 rounded">Attach to the running job</button>
+              </div>
+            )}
+
             {error && (
-              <div className="p-3 bg-red-500/10 border border-red-500/50 rounded text-danger text-sm flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4" />
-                {error}
+              <div className="p-3 bg-red-500/10 border border-red-500/50 rounded text-danger text-sm" role="alert">
+                <span className="flex items-center gap-2"><AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />{error}</span>
+                {refusal && refusal.length > 0 && <ul className="mt-1 text-2xs list-disc pl-6">{refusal.map((r, i) => <li key={i}>{r}</li>)}</ul>}
               </div>
             )}
           </div>
@@ -976,7 +1199,12 @@ export default function Optimizer() {
         )}
 
         <div className={`${configCollapsed ? '' : 'lg:col-span-2'} bg-surface p-6 rounded-xl border border-line min-h-[400px]`}>
-          {running ? (
+          {running && (isMulti || (progress.totalSymbols || 0) > 1) ? (
+            <ProgressGrid progress={progress} cells={cells} symbols={symbols.length > 1 ? symbols : (Object.keys(cells || {}).map(k => k.split('::')[0]).filter((v, i, a) => a.indexOf(v) === i))}
+              strategies={selectedStrategies} labelFor={labelFor} etaLabel={overallEtaLabel} onStop={stopOptimization} stopping={stopping}
+              onPause={pauseOptimization} pausing={pausing} resumedFrom={progress.resumedFrom}
+              kDefault={defaultK(symbols.length)} />
+          ) : running ? (
             <div className="h-full flex flex-col items-center justify-center space-y-6">
               <div className="relative w-32 h-32">
                 {/* Progress ring. The groove was `stroke="#1e293b"` (neutral-800) — the card's
@@ -1015,23 +1243,63 @@ export default function Optimizer() {
                   </p>
                 )}
                 <p className="text-fg-4">Overall {progress.current} of {progress.total}</p>
-                <p className="text-success font-medium">Found {progress.matches} matches in current strategy</p>
+                <p className="text-success font-medium">Found {progress.matches} sets that pass the filters{progress.strategyLabel ? ' in the current strategy' : ' so far'}</p>
               </div>
 
-              <button
-                onClick={stopOptimization}
-                disabled={stopping}
-                className="mt-2 bg-red-600/90 hover:bg-red-600 text-white font-semibold py-2 px-5 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                <Square className="w-4 h-4" />
-                {stopping ? 'Stopping — collecting results…' : 'Stop & Keep Results'}
-              </button>
+              {progress.resumedFrom > 0 && <p className="text-2xs text-fg-4">♻️ Resumed from a checkpoint — {progress.resumedFrom} backtests were already done.</p>}
+              <div className="flex flex-wrap gap-2 justify-center">
+                <button
+                  type="button"
+                  onClick={pauseOptimization}
+                  disabled={pausing || stopping}
+                  className="mt-2 bg-slate-700 hover:bg-slate-600 text-fg font-semibold py-2 px-5 rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {pausing ? 'Pausing — saving checkpoint…' : 'Pause'}
+                </button>
+                <button
+                  onClick={stopOptimization}
+                  disabled={stopping || pausing}
+                  className="mt-2 bg-red-600/90 hover:bg-red-600 text-white font-semibold py-2 px-5 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <Square className="w-4 h-4" />
+                  {stopping ? 'Stopping — collecting results…' : 'Stop & Keep Results'}
+                </button>
+              </div>
               <p className="text-2xs text-fg-5 max-w-xs text-center">
-                Safely halts after the current iteration and shows the best parameters found so far — nothing computed is lost.
+                Pause keeps a checkpoint and continues later from exactly here. Stop shows the best found so far (it can still be continued from Recent runs).
               </p>
+            </div>
+          ) : !results && pausedJobId ? (
+            <div className="h-full flex flex-col items-center justify-center gap-3 text-center">
+              <p className="text-lg font-bold text-fg">Run paused</p>
+              <p className="text-sm text-fg-4">Finished backtests are saved. Resume continues from the checkpoint.</p>
+              <button type="button" onClick={() => resumeJob(pausedJobId)} disabled={resumingJobId === pausedJobId}
+                className="bg-primary hover:bg-blue-600 text-on-primary font-semibold py-2 px-5 rounded-lg disabled:opacity-60">
+                {resumingJobId === pausedJobId ? 'Resuming…' : 'Resume'}
+              </button>
+            </div>
+          ) : results && results.type === 'multi_index_optimization_result' ? (
+            <div className="space-y-3">
+              {pausedJobId && (
+                <div className="p-3 rounded border bg-amber-500/10 border-amber-500/40 text-warning text-sm flex flex-wrap items-center gap-3" role="status">
+                  <span>Paused — these are partial results. Resume continues from the checkpoint.</span>
+                  <button type="button" onClick={() => resumeJob(pausedJobId)} disabled={resumingJobId === pausedJobId} className="text-xs bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 px-3 py-1 rounded">
+                    {resumingJobId === pausedJobId ? 'Resuming…' : 'Resume'}
+                  </button>
+                </div>
+              )}
+              <CrossIndexResults result={results} onTest={goTest} onSave={saveSettings} onClear={clearResults} noise={NOISE_PARAM_KEYS} />
             </div>
           ) : results ? (
             <div className="space-y-6">
+              {pausedJobId && (
+                <div className="p-3 rounded border bg-amber-500/10 border-amber-500/40 text-warning text-sm flex flex-wrap items-center gap-3" role="status">
+                  <span>Paused — these are partial results. Resume continues from the checkpoint.</span>
+                  <button type="button" onClick={() => resumeJob(pausedJobId)} disabled={resumingJobId === pausedJobId} className="text-xs bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 px-3 py-1 rounded">
+                    {resumingJobId === pausedJobId ? 'Resuming…' : 'Resume'}
+                  </button>
+                </div>
+              )}
               <div className="flex justify-between items-start gap-3">
                 <div>
                   <h2 className="text-xl font-bold flex items-center gap-2">
@@ -1055,6 +1323,11 @@ export default function Optimizer() {
                         {rc.backtest_mode && <span>· {rc.backtest_mode}</span>}
                         {rc.oos_enabled && rc.oos_split_date && (
                           <span className="text-success">· 🛡️ OOS: train→{rc.oos_split_date}, test after ({Math.round((rc.oos_fraction ?? 0.3) * 100)}%)</span>
+                        )}
+                        {Array.isArray(rc.warnings) && rc.warnings.length > 0 && (
+                          <ul className="w-full mt-1 space-y-0.5 text-warning" aria-label="Data warnings for this run">
+                            {rc.warnings.map((w, i) => <li key={i} className="flex gap-1"><AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" aria-hidden="true" /><span>{w}</span></li>)}
+                          </ul>
                         )}
                       </div>
                     );
@@ -1361,12 +1634,23 @@ export default function Optimizer() {
               )}
             </div>
           ) : (
-            <div className="h-full flex items-center justify-center text-fg-5">
-              Select one or more strategies and run optimization to see the best parameters.
+            <div className="h-full flex flex-col gap-6">
+              <p className="text-fg-5 text-center pt-8">Select one or more strategies and run optimization to see the best parameters.</p>
+              <RecentRuns runs={recentRuns} onOpen={openRecentRun} onResume={resumeJob} onDelete={deleteJob}
+                onClearFinished={clearFinishedJobs} onAttach={attachToJob} busyJobId={resumingJobId} />
             </div>
           )}
         </div>
       </div>
+      {(results || running) && recentRuns && (
+        <details className="bg-surface p-4 rounded-xl border border-line">
+          <summary className="text-sm text-fg-3 cursor-pointer">Recent runs ({(recentRuns.jobs || []).length})</summary>
+          <div className="mt-3">
+            <RecentRuns runs={recentRuns} onOpen={openRecentRun} onResume={resumeJob} onDelete={deleteJob}
+              onClearFinished={clearFinishedJobs} onAttach={attachToJob} busyJobId={resumingJobId} />
+          </div>
+        </details>
+      )}
     </div>
   );
 }

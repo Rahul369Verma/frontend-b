@@ -68,8 +68,9 @@ describe('MultiLeg results — day by day', () => {
     it('a round-trip row still opens its path chart', async () => {
         render(<MemoryRouter initialEntries={['/multi-leg?tab=results']}><MultiLeg /></MemoryRouter>);
         await screen.findByRole('button', { name: /Mon 28 Sep 2026/ });
-        const rows = screen.getAllByText('TP');
-        fireEvent.click(rows[0].closest('tr'));
+        // a table CELL reading TP — the Exit-reason filter's <option>TP</option> is not a row
+        const cell = screen.getAllByText('TP').find(el => el.tagName === 'TD');
+        fireEvent.click(cell.closest('tr'));
         expect(await screen.findByText(/net of estimated costs/)).toBeTruthy();
         expect(screen.getByText('gross (pre-cost)')).toBeTruthy();
     });

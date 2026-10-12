@@ -28,7 +28,8 @@ import { useChartTheme, istDateTime } from '../components/viz/tokens';
 import QueryInput from '../components/screener/QueryInput.jsx';
 import { useConfirm } from '../components/confirmContext.js';
 import { toast } from '../components/toastStore.js';
-import { pollInterval } from '../hooks/usePolling.js';
+import { pollInterval, usePolling } from '../hooks/usePolling.js';
+import useRemWidth from '../hooks/useRemWidth.js';
 import {
     ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Cell,
 } from 'recharts';
@@ -67,8 +68,12 @@ function FieldValue({ meta, v }) {
     return meta?.signed ? <span className={signTone(v)}>{t}</span> : t;
 }
 
-const EVIDENCE_TONE = { beat: 'good', lagged: 'warning', unconfirmed: 'info', none: 'neutral', untested: 'muted' };
-const EVIDENCE_LABEL = { beat: 'beat · both years', lagged: 'lagged · both years', unconfirmed: '1 year only', none: 'no reliable edge', untested: 'not testable yet' };
+const EVIDENCE_TONE = { beat: 'good', lagged: 'warning', unconfirmed: 'info', none: 'neutral', untested: 'muted', short: 'good', weak: 'info', movers: 'info' };
+const EVIDENCE_LABEL = { beat: 'beat · both years', lagged: 'lagged · both years', unconfirmed: '1 year only', none: 'no reliable edge', untested: 'not testable yet', short: 'works as a short · unseen years', weak: 'weak evidence', movers: 'bigger moves · both periods' };
+/** Which way a starting point is meant to be traded, and for how long. */
+const SIDE_LABEL = { short: 'Sell / short', long: 'Buy', either: 'Either way' };
+const SIDE_TONE = { short: 'critical', long: 'good', either: 'info' };
+const holdText = (hold) => (!hold?.length ? null : hold[0] === 1 ? 'intraday' : `hold ${hold[0]} days`);
 const BASIS_OPTS = [{ v: 'auto', label: 'Auto', hint: 'Live prices while the market is open, last close otherwise' }, { v: 'off', label: 'EOD' }, { v: 'on', label: 'Live' }];
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const LABEL_FIELD = { symbol: 'Symbol', name: 'Name', close: 'Close', change_pct: 'Chg %', turnover_cr: 'Turnover ₹cr', industry: 'Industry', series: 'Series', is_fno: 'F&O', corp_action_sessions_ago: 'Split/bonus' };
@@ -439,18 +444,25 @@ function MonthBars({ months }) {
  * entry next open, exit after the chosen horizon. Pure arithmetic over the
  * replay's trade records, so changing stake / cost / direction is instant.
  */
-function simulate(trades, { stake, costPct, direction }) {
+function simulate(trades, { stake, costPct, direction, horizon = null, sessions = null }) {
     const sgn = direction === 'short' ? -1 : 1;
-    const t = trades.map(([d, x, r, b]) => ({ d, x, net: sgn * r - costPct, bnet: sgn * b - costPct }));
+    const t = trades.map(([d, x, r, b, , e]) => ({ d, x, e: e || null, net: sgn * r - costPct, bnet: sgn * b - costPct }));
     if (!t.length) return null;
     const total = t.reduce((a, v) => a + (stake * v.net) / 100, 0);
     const bench = t.reduce((a, v) => a + (stake * v.bnet) / 100, 0);
-    // Capital actually needed = most positions open at once × stake.
+    // Capital actually needed = most positions held on one day × stake. A position is
+    // held from its ENTRY (the open after the signal) through its exit close, both days
+    // counted: same date, entries before exits. (Counting from the signal day, as older
+    // results without an entry date must, overstated it — 12 positions instead of 9 on a
+    // real screen.)
     const ev = [];
-    for (const v of t) { ev.push([v.d, 1]); ev.push([v.x, -1]); }
-    ev.sort((p, q) => (p[0] < q[0] ? -1 : p[0] > q[0] ? 1 : q[1] - p[1] > 0 ? 1 : -1));   // same date: exit (-1) before entry
+    const withEntry = t.every(v => v.e);
+    for (const v of t) { ev.push([withEntry ? v.e : v.d, 1]); ev.push([v.x, -1]); }
+    ev.sort((p, q) => (p[0] < q[0] ? -1 : p[0] > q[0] ? 1 : (withEntry ? q[1] - p[1] : p[1] - q[1])));
     let open = 0, peak = 0;
     for (const [, k] of ev) { open += k; if (open > peak) peak = open; }
+    // On an average day far fewer are open: the rest of that capital sits idle (and could earn interest meanwhile).
+    const avgOpen = horizon && sessions ? (t.length * horizon) / sessions : null;
     // Realised P&L by exit date → curve + drawdown.
     const byExit = new Map();
     for (const v of t) { const e = byExit.get(v.x) || { p: 0, b: 0 }; e.p += (stake * v.net) / 100; e.b += (stake * v.bnet) / 100; byExit.set(v.x, e); }
@@ -465,18 +477,19 @@ function simulate(trades, { stake, costPct, direction }) {
     const capital = peak * stake;
     return {
         n: t.length, wins: t.filter(v => v.net > 0).length, avgNet: t.reduce((a, v) => a + v.net, 0) / t.length,
-        total, bench, capital, peak, maxDD: dd, first, last,
+        total, bench, capital, peak, avgOpen, maxDD: dd, first, last,
         onCapitalPct: capital ? (total / capital) * 100 : null, perYearPct: capital ? ((total / capital) * 100) / years : null,
         curve: curve.length > 160 ? curve.filter((_, i) => i % Math.ceil(curve.length / 160) === 0 || i === curve.length - 1) : curve,
     };
 }
 
-function TradeSim({ b, mode, horizon }) {
+function TradeSim({ b, mode, horizon, sessions, side }) {
     const ct = useChartTheme();
     const [stake, setStake] = useState(50000);
-    const [costPct, setCostPct] = useState(0.5);
-    const [direction, setDirection] = useState('long');
-    const sim = useMemo(() => simulate(b.trades || [], { stake: Number(stake) || 0, costPct: Number(costPct) || 0, direction }), [b.trades, stake, costPct, direction]);
+    // Intraday (sell the same day) costs far less than delivery: ~0.1% + slippage vs ~0.25-0.5%.
+    const [costPct, setCostPct] = useState(horizon === 1 ? 0.15 : 0.5);
+    const [direction, setDirection] = useState(side === 'short' ? 'short' : 'long');
+    const sim = useMemo(() => simulate(b.trades || [], { stake: Number(stake) || 0, costPct: Number(costPct) || 0, direction, horizon, sessions }), [b.trades, stake, costPct, direction, horizon, sessions]);
     const benchLabel = mode === 'market' ? 'NIFTY on an average day' : 'the average stock, same days';
     const inp = 'bg-surface-2 border border-line rounded px-2 py-1 text-xs text-fg-2';
     return (
@@ -488,7 +501,7 @@ function TradeSim({ b, mode, horizon }) {
                     <input type="number" min="0" step="0.05" value={costPct} onChange={(e) => setCostPct(e.target.value)} className={`${inp} w-20`} />
                 </label>
                 <div className="flex flex-col gap-1 text-3xs text-fg-5" title="Short: selling first. Overnight shorts in the cash market are not allowed for retail in India — this is only realistic through stock futures or puts, i.e. F&O stocks.">Direction
-                    <Segmented options={[{ v: 'long', label: 'Buy' }, { v: 'short', label: 'Short (F&O only)' }]} value={direction} onChange={setDirection} />
+                    <Segmented options={[{ v: 'long', label: 'Buy' }, { v: 'short', label: 'Short (intraday: any EQ stock · overnight: F&O only)' }]} value={direction} onChange={setDirection} />
                 </div>
             </div>
             {!sim ? <Placeholder>No completed trades at this horizon yet.</Placeholder> : (
@@ -498,9 +511,9 @@ function TradeSim({ b, mode, horizon }) {
                             hint={`${sim.n} trades · vs ₹${fmt(Math.round(sim.bench), 0)} for ${benchLabel}`} />
                         <StatTile label="Average trade after costs" value={fmtPct(sim.avgNet)} tone={sim.avgNet > 0 ? 'positive' : sim.avgNet < 0 ? 'negative' : 'neutral'}
                             hint={`${fmt((sim.wins / sim.n) * 100, 0)}% of trades made money`} />
-                        <StatTile label="Capital needed" value={`₹${fmt(Math.round(sim.capital), 0)}`} hint={`up to ${sim.peak} positions open at once`} />
+                        <StatTile label="Capital needed" value={`₹${fmt(Math.round(sim.capital), 0)}`} hint={`up to ${sim.peak} positions at once${isNum(sim.avgOpen) ? ` · ${fmt(sim.avgOpen, 1)} on an average day` : ''}`} />
                         <StatTile label="Return on that capital" value={isNum(sim.onCapitalPct) ? fmtPct(sim.onCapitalPct, 1) : '—'} tone={sim.total > 0 ? 'positive' : 'negative'}
-                            hint={`≈ ${isNum(sim.perYearPct) ? fmtPct(sim.perYearPct, 1) : '—'} a year · worst dip ₹${fmt(Math.round(sim.maxDD), 0)}`} />
+                            hint={`≈ ${isNum(sim.perYearPct) ? fmtPct(sim.perYearPct, 1) : '—'} a year · worst dip ₹${fmt(Math.round(sim.maxDD), 0)}${isNum(sim.avgOpen) && sim.peak ? ` · idle ${Math.round((1 - sim.avgOpen / sim.peak) * 100)}% of the time, its interest not counted` : ''}`} />
                     </StatRow>
                     <figure>
                         <figcaption className="text-2xs text-fg-3 mb-1">Cumulative profit after costs, by exit date (₹)</figcaption>
@@ -543,7 +556,7 @@ function HowToRead({ mode }) {
     );
 }
 
-function ReplayResult({ job }) {
+function ReplayResult({ job, side = 'long' }) {
     const [h, setH] = useState(null);
     const r = job?.result;
     const horizons = r ? r.horizons : [];
@@ -561,7 +574,7 @@ function ReplayResult({ job }) {
     }
     if (job.status === 'error') return <EmptyState icon={AlertTriangle} title="Replay failed">{job.error}</EmptyState>;
     const b = r.byHorizon[hz];
-    const verdictTone = /^(beat|NIFTY did better)/.test(b.verdict) ? 'good' : /^(LAGGED|NIFTY did WORSE)/.test(b.verdict) ? 'warning' : 'neutral';
+    const verdictTone = VERDICT_TONE(b.verdict, side);
     const ex = r.excluded || {};
     const market = r.mode === 'market';
     const lateStart = r.evaluableFrom && r.evaluableFrom > r.from;
@@ -578,6 +591,8 @@ function ReplayResult({ job }) {
                 <Chip tone={verdictTone}>{b.verdict}</Chip>
                 {r.maxPerDay ? <Chip tone="muted">top {r.maxPerDay}/day by {r.sortBy || '—'}</Chip> : null}
             </div>
+            {side === 'short' && <div className="text-2xs text-fg-3"><Chip tone="critical">meant to be shorted</Chip> For this screen a NEGATIVE excess is the edge: the stocks fell more than the average stock. The simulation below is set to Short.</div>}
+            {side === 'either' && <div className="text-2xs text-fg-3"><Chip tone="info">direction-neutral</Chip> This list is about how much these stocks move, not which way — the buy/short numbers below are not its point.</div>}
             <StatRow cols={4}>
                 <div title="Average of (signal's return − benchmark's return over the same days). Positive = the alert picked better-than-average stocks."><StatTile label="Mean excess / signal" value={fmtPct(b.meanExcessPct)} tone={b.meanExcessPct > 0 ? 'positive' : b.meanExcessPct < 0 ? 'negative' : 'neutral'} hint={`median ${fmtPct(b.medianExcessPct)} · raw ${fmtPct(b.meanRawPct)}`} /></div>
                 <div title="Signals averaged within each day first, then across days. The t-statistic tests this number."><StatTile label="Mean excess / day" value={fmtPct(b.meanExcessByDayPct)} tone={b.meanExcessByDayPct > 0 ? 'positive' : b.meanExcessByDayPct < 0 ? 'negative' : 'neutral'} hint={`t = ${fmt(b.tStatByDay)} over ${fmt(b.days, 0)} days`} /></div>
@@ -594,7 +609,7 @@ function ReplayResult({ job }) {
                     <MonthBars months={b.byMonth} />
                 </figure>
             )}
-            <TradeSim b={b} mode={r.mode} horizon={hz} />
+            <TradeSim key={side} b={b} mode={r.mode} horizon={hz} sessions={r.sessions} side={side} />
             <div className="text-3xs text-fg-5">
                 {r.from} → {r.to} · {r.conventions}{job.timing?.totalMs ? ` · computed in ${fmt(job.timing.totalMs / 1000, 0)} s${job.timing.threads > 1 ? ` on ${job.timing.threads} threads` : ''}` : ''}. Excluded: {fmt(ex.incomplete, 0)} windows still open (signal too recent), {fmt(ex.corpAction || 0, 0)} crossed a split/bonus, {fmt(ex.noNextOpen, 0)} no next open, {fmt(ex.noExitClose, 0)} no exit close{ex.overDailyCap ? `, ${fmt(ex.overDailyCap, 0)} over the daily cap` : ''}{ex.unknownCondition ? `, ${fmt(ex.unknownCondition, 0)} sessions the condition could not be evaluated` : ''}.
             </div>
@@ -611,6 +626,203 @@ function ReplayResult({ job }) {
     );
 }
 
+/** "Sell after" text → up to 6 holding periods of 1-120 sessions, sorted ('5, 10, 20' → [5, 10, 20]). */
+const parseHorizonsText = (text) => [...new Set(String(text || '').split(/[\s,]+/).map(Number).filter(h => Number.isInteger(h) && h >= 1 && h <= 120))].sort((a, b) => a - b).slice(0, 6);
+
+/**
+ * A replay job, polled until it finishes — guarded (no pile-up on a slow link)
+ * and paused in a hidden tab (usePolling). A reply for a job that was closed or
+ * replaced meanwhile is dropped.
+ */
+function useReplayJob(api) {
+    const [job, setJob] = useState(null);
+    const idRef = useRef(null);
+    idRef.current = job?.id || null;
+    const runningId = job?.status === 'running' ? job.id : null;
+    usePolling(async () => {
+        const id = runningId;
+        if (!id) return;
+        try { const j = await api.get(`/replay/${id}`); if (idRef.current === id) setJob(j); }
+        catch (e) { if (idRef.current === id) setJob(j => ({ ...(j || {}), status: 'error', error: errText(e) })); }
+    }, runningId ? 1200 : null, { immediate: false });
+    return [job, setJob];
+}
+
+/** Start a batch replay; a refusal (another replay running, nothing runnable) is a toast, not a stray job. */
+async function startBatchReplay(api, { items, sessions, horizons }, setJob) {
+    try {
+        const r = await api.post('/replay/batch', { items, sessions, horizons: horizons.length ? horizons : [5, 10, 20] });
+        setJob({ id: r.jobId, status: 'running', progress: {}, params: { items, horizons } });
+        if (r.notRunnable) toast.warning(`${r.notRunnable} of ${r.items} did not compile — listed with the reason in the results`);
+    } catch (e) {
+        const d = e?.response?.data;
+        toast.error(d?.error || errText(e));
+    }
+}
+
+/** Verdict colour, read for the side the screen trades: for a short, lagging the universe is the edge. */
+const VERDICT_TONE = (v, side = 'long') => {
+    const better = /^(beat|NIFTY did better)/.test(v || ''), worse = /^(LAGGED|NIFTY did WORSE)/.test(v || '');
+    if (side === 'short') return worse ? 'good' : better ? 'warning' : 'neutral';
+    if (side === 'either') return 'neutral';
+    return better ? 'good' : worse ? 'warning' : 'neutral';
+};
+const BATCH_SORTS = [
+    { v: 't', label: 'Strongest t' }, { v: 'mean', label: 'Avg excess' }, { v: 'n', label: 'Most signals' }, { v: 'picked', label: 'As picked' },
+];
+const WIDE_REM = 62, MEDIUM_REM = 42;
+
+/**
+ * Several screens replayed together: one row per screen, the same columns a
+ * single replay reports, and the full single-replay view for any row on click.
+ */
+function BatchReplayResult({ job, api }) {
+    const [h, setH] = useState(null);
+    const [sort, setSort] = useState('t');
+    const [open, setOpen] = useState(null);   // { key, loading } | { key, item } | { key, error } | { key, replay: true }
+    // A large batch keeps summaries only; one screen's full view is then a replay of it alone.
+    const [alone, setAlone] = useReplayJob(api);
+    const ref = useRef(null);
+    const rem = useRemWidth(ref);
+    const layout = rem == null || rem >= WIDE_REM ? 'wide' : rem >= MEDIUM_REM ? 'medium' : 'cards';
+    const horizons = job?.params?.horizons || [];
+    const hz = h ?? (horizons.includes(10) ? 10 : horizons[0]);
+    const rows = useMemo(() => {
+        const items = job?.result?.items || [];
+        const out = items.map((it, i) => {
+            const b = it.result?.byHorizon?.[hz] || null;
+            const months = (b?.byMonth || []).filter(m => m.n >= 5);
+            return { ...it, _key: it.key, picked: i, b, months: months.length, posMonths: months.filter(m => m.meanExcessPct > 0).length };
+        });
+        const val = { t: (r) => r.b?.tStatByDay, mean: (r) => r.b?.meanExcessPct, n: (r) => r.b?.n, picked: (r) => -r.picked }[sort];
+        // Screens that did not run, and missing numbers, always sink.
+        return out.sort((a, b) => {
+            if (!!a.error !== !!b.error) return a.error ? 1 : -1;
+            const x = val(a), y = val(b);
+            if (!isNum(x) && !isNum(y)) return a.picked - b.picked;
+            if (!isNum(x)) return 1;
+            if (!isNum(y)) return -1;
+            return y - x;
+        });
+    }, [job, hz, sort]);
+
+    if (!job) return null;
+    if (job.status === 'running') {
+        const p = job.progress || {};
+        const pctDone = p.total ? Math.round((p.done / p.total) * 100) : 0;
+        const n = (job.params?.items || []).length;
+        return (
+            <div className="space-y-2" aria-live="polite">
+                <Spinner label={`Testing ${n} screen${n === 1 ? '' : 's'} together… ${p.done || 0} / ${p.total || '?'} sessions${job.threads > 1 ? ` on ${job.threads} threads` : ''}`} />
+                <div className="h-1.5 rounded bg-card-2 overflow-hidden"><div className="h-full bg-primary transition-all" style={{ width: `${pctDone}%` }} /></div>
+            </div>
+        );
+    }
+    if (job.status === 'error') return <EmptyState icon={AlertTriangle} title="Replay failed">{job.error}</EmptyState>;
+
+    const ran = rows.filter(r => !r.error);
+    const anyResult = ran.find(r => r.result)?.result;
+    const lucky = Math.round(ran.length / 20);
+    const toggle = async (r) => {
+        if (open?.key === r.key) { setOpen(null); return; }
+        if (r.error) { setOpen({ key: r.key, error: r.error }); return; }
+        if (r.result?.detail === 'summary') {
+            setOpen({ key: r.key, replay: true });
+            try {
+                const d = await api.post('/replay', { query: r.query, universe: r.universe, minTurnoverCr: r.minTurnoverCr, sortBy: r.sortBy, sortDir: r.sortDir, maxPerDay: r.maxPerDay, newOnly: r.newOnly, sessions: job.params?.sessions, horizons: job.params?.horizons });
+                setAlone({ id: d.jobId, status: 'running', progress: {} });
+            } catch (e) { setOpen({ key: r.key, error: e?.response?.data?.error || errText(e) }); }
+            return;
+        }
+        setOpen({ key: r.key, loading: true });
+        try {
+            const d = await api.get(`/replay/${job.id}`, { item: r.key });
+            setOpen(o => (o?.key === r.key ? { key: r.key, item: d.item } : o));
+        } catch (e) { setOpen(o => (o?.key === r.key ? { key: r.key, error: errText(e) } : o)); }
+    };
+    const nameCell = (r) => (
+        <span className="inline-flex items-center gap-1.5 whitespace-normal">
+            <span className="text-fg-2 font-medium">{r.name}</span>
+            {r.result?.mode === 'market' && <Chip tone="info" title="Reads only market-wide fields: tested on NIFTY 50">NIFTY</Chip>}
+            {r.side && r.side !== 'long' && <Chip tone={SIDE_TONE[r.side]} title={r.side === 'short' ? 'Meant to be shorted: lagging the universe is its edge' : 'Direction-neutral'}>{SIDE_LABEL[r.side]}</Chip>}
+            {r.error && <Chip tone="critical">not run</Chip>}
+        </span>
+    );
+    const num = (v, dp = 0) => (isNum(v) ? fmt(v, dp) : '—');
+    const pct = (v) => <span className={signTone(v)}>{fmtPct(v)}</span>;
+    const cols = [
+        { key: 'name', header: 'Screen', render: nameCell },
+        { key: 'n', header: 'Signals', align: 'right', render: (r) => (r.error ? '—' : num(r.b?.n)) },
+        ...(layout === 'wide' ? [{ key: 'days', header: 'Days', align: 'right', render: (r) => num(r.b?.days) }] : []),
+        { key: 'mean', header: `Avg excess +${hz}`, align: 'right', render: (r) => pct(r.b?.meanExcessPct) },
+        ...(layout === 'wide' ? [{ key: 'day', header: 'Per day', align: 'right', render: (r) => pct(r.b?.meanExcessByDayPct) }] : []),
+        { key: 't', header: 't', align: 'right', render: (r) => num(r.b?.tStatByDay, 2) },
+        ...(layout === 'wide' ? [
+            { key: 'beat', header: 'Beat %', align: 'right', render: (r) => (isNum(r.b?.beatBenchmarkPct) ? `${fmt(r.b.beatBenchmarkPct, 1)}%` : '—') },
+            { key: 'months', header: 'Months +', align: 'right', render: (r) => (r.months ? `${r.posMonths}/${r.months}` : '—') },
+        ] : []),
+        { key: 'verdict', header: 'Verdict', render: (r) => (r.error ? <span className="text-danger whitespace-normal">{r.error}</span> : <span className="whitespace-normal"><Chip tone={VERDICT_TONE(r.b?.verdict, r.side)}>{r.b?.verdict || '—'}</Chip></span>) },
+    ];
+
+    return (
+        <div ref={ref} className="space-y-3">
+            <div className="text-2xs text-fg-4">
+                {anyResult ? `${anyResult.from} → ${anyResult.to} · ${fmt(anyResult.sessions, 0)} sessions` : ''}
+                {job.timing?.totalMs ? ` · ${ran.length} screen${ran.length === 1 ? '' : 's'} in ${fmt(job.timing.totalMs / 1000, 0)} s${job.timing.threads > 1 ? ` on ${job.timing.threads} threads` : ''}` : ''}
+                {' '}· each screen keeps its own universe, turnover floor and sort; its numbers are the ones it gets tested alone.
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+                <Segmented options={horizons.map(x => ({ v: x, label: `${x} sessions` }))} value={hz} onChange={setH} />
+                <span className="text-3xs text-fg-5 ml-2">Sort</span>
+                <Segmented options={BATCH_SORTS} value={sort} onChange={setSort} />
+            </div>
+            {ran.length >= 2 && (
+                <div className="text-2xs text-warning flex gap-1.5"><AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-px" aria-hidden="true" />
+                    <span>{ran.length} screens on the same history: about 1 in 20 clears |t| ≥ 2 by luck alone{lucky ? `, so expect ~${lucky} such "winner${lucky === 1 ? '' : 's'}" here even if none works` : ''}. Treat the top row as a lead — re-test it after more history, or on an earlier window, before trusting it.</span>
+                </div>
+            )}
+            {layout === 'cards' ? (
+                <ul className={`space-y-2 ${rows.length > 20 ? 'max-h-[40rem] overflow-auto pr-1' : ''}`}>
+                    {rows.map(r => (
+                        <li key={r.key}>
+                            <button type="button" onClick={() => toggle(r)} aria-expanded={open?.key === r.key}
+                                className={`w-full text-left rounded border px-3 py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${open?.key === r.key ? 'border-primary bg-primary/10' : 'border-line hover:bg-card-2'}`}>
+                                <div className="flex flex-wrap items-center justify-between gap-2">{nameCell(r)}{!r.error && <Chip tone={VERDICT_TONE(r.b?.verdict, r.side)}>{r.b?.verdict || '—'}</Chip>}</div>
+                                <div className="text-2xs text-fg-4 mt-1 flex flex-wrap gap-x-3">
+                                    {r.error ? <span className="text-danger">{r.error}</span> : <>
+                                        <span>{num(r.b?.n)} signals</span><span>avg {pct(r.b?.meanExcessPct)}</span><span>t {num(r.b?.tStatByDay, 2)}</span>
+                                        {r.months ? <span>{r.posMonths}/{r.months} months +</span> : null}
+                                    </>}
+                                </div>
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            ) : (
+                <DataTable dense columns={cols} rows={rows} onRowClick={toggle} selectedKey={open?.key ?? null} maxHeight={rows.length > 20 ? 640 : undefined} />
+            )}
+            <div className="text-3xs text-fg-5">Click a screen for its full result — months, recent signals and the cost simulation.</div>
+            {open && (
+                <div className="rounded border border-line p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-fg-2">{rows.find(r => r.key === open.key)?.name}</span>
+                        <button type="button" onClick={() => setOpen(null)} aria-label="Close details" className="text-fg-5 hover:text-fg p-1"><X className="w-4 h-4" aria-hidden="true" /></button>
+                    </div>
+                    {open.loading && <Spinner label="Loading…" />}
+                    {open.error && <div className="text-2xs text-danger">{open.error}</div>}
+                    {open.replay && (
+                        <>
+                            <div className="text-3xs text-fg-5">A batch of more than 30 keeps each screen's exact summary but not its trade list, so the full view (months, recent signals, cost simulation) replays this one screen alone over the same sessions.</div>
+                            {alone && <ReplayResult job={alone} side={rows.find(x => x.key === open.key)?.side} />}
+                        </>
+                    )}
+                    {open.item?.result && <ReplayResult job={{ status: 'done', result: open.item.result, timing: job.timing }} side={open.item.side} />}
+                </div>
+            )}
+        </div>
+    );
+}
+
 // ── screener tab ─────────────────────────────────────────────────────────
 function ScreenerTab({ api, fields, presets, universes, draft, setDraft, onSaveAlert, limits }) {
     const maxReplay = limits?.maxReplaySessions || 450;
@@ -618,12 +830,15 @@ function ScreenerTab({ api, fields, presets, universes, draft, setDraft, onSaveA
     const [qErr, setQErr] = useState(null);
     const [running, setRunning] = useState(false);
     const [picked, setPicked] = useState(null);
-    const [replay, setReplay] = useState(null);
+    const [replay, setReplay] = useReplayJob(api);
+    const [replaySide, setReplaySide] = useState('long');
+    const [batch, setBatch] = useReplayJob(api);
+    const maxBatch = limits?.maxBatch || 30;
     const [replaySessions, setReplaySessions] = useState(200);
     const [maxPerDay, setMaxPerDay] = useState(0);
     // "Sell after N sessions" — up to 6 holding periods, 1-120 sessions each.
     const [horizonsText, setHorizonsText] = useState('5, 10, 20');
-    const horizons = useMemo(() => [...new Set(horizonsText.split(/[\s,]+/).map(Number).filter(h => Number.isInteger(h) && h >= 1 && h <= 120))].sort((a, b) => a - b).slice(0, 6), [horizonsText]);
+    const horizons = useMemo(() => parseHorizonsText(horizonsText), [horizonsText]);
     const presetCats = useMemo(() => ['All', ...[...new Set(presets.map(p => p.category).filter(Boolean))]], [presets]);
     const [presetCat, setPresetCat] = useState('All');
     const [showRef, setShowRef] = useState(false);
@@ -660,6 +875,7 @@ function ScreenerTab({ api, fields, presets, universes, draft, setDraft, onSaveA
         try {
             const r = await api.post('/replay', { query: draft.query, universe: draft.universe, minTurnoverCr: Number(draft.minTurnoverCr) || 0, sessions: replaySessions, maxPerDay, horizons: horizons.length ? horizons : [5, 10, 20], sortBy: draft.sortBy || null, sortDir: draft.sortDir });
             setReplay({ id: r.jobId, status: 'running', progress: {} });
+            setReplaySide(preset?.side || 'long');   // the side of the screen THIS replay is for
         } catch (e) {
             const d = e?.response?.data;
             if (d?.kind === 'query') setQErr(d);
@@ -667,44 +883,112 @@ function ScreenerTab({ api, fields, presets, universes, draft, setDraft, onSaveA
             else toast.error(errText(e));
         }
     };
-    useEffect(() => {
-        if (!replay || replay.status !== 'running') return undefined;
-        const id = setInterval(async () => {
-            try { const j = await api.get(`/replay/${replay.id}`); setReplay(j); } catch (e) { setReplay({ status: 'error', error: errText(e) }); }
-        }, 1200);
-        return () => clearInterval(id);
-    }, [replay, api]);
+    // The starting points in view, replayed together (one pass over the stored history).
+    const shownPresets = presets.filter(p => presetCat === 'All' || p.category === presetCat);
+    // Starting points ticked for "Test on history" — kept while you switch categories.
+    const [ticked, setTicked] = useState(() => new Set());
+    const tickedPresets = presets.filter(p => ticked.has(p.id));
+    const toggleTick = (id) => setTicked(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+    const allShownTicked = shownPresets.length > 0 && shownPresets.every(p => ticked.has(p.id));
+    const tickShown = () => setTicked(prev => { const n = new Set(prev); for (const p of shownPresets) { if (allShownTicked) n.delete(p.id); else n.add(p.id); } return n; });
+    const batchRef = useRef(null);
+    const startBatch = async () => {
+        const items = tickedPresets.map(p => ({ key: p.id, presetId: p.id }));   // the server looks up each one's settings
+        await startBatchReplay(api, { items, sessions: replaySessions, horizons }, setBatch);
+        // The results open right under the starting points — bring them into view.
+        setTimeout(() => batchRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }), 50);
+    };
+    const tooMany = tickedPresets.length > maxBatch;
 
     const cols = useMemo(() => (res ? resultColumns(res, fieldsByName) : []), [res, fieldsByName]);
     const rows = useMemo(() => (Array.isArray(res?.rows) ? res.rows.map(r => ({ ...r, _key: r.symbol })) : []), [res]);
 
     return (
         <div className="space-y-4">
-            <Card title="Starting points" subtitle="Ideas, not edges — each carries what a replay over stored history actually measured. Click one to load it into the editor.">
-                <div className="flex flex-wrap gap-1 mb-3" role="group" aria-label="Starting-point categories">
-                    {presetCats.map(c => {
-                        const on = presetCat === c;
-                        const n = c === 'All' ? presets.length : presets.filter(p => p.category === c).length;
-                        return (
-                            <button key={c} type="button" onClick={() => setPresetCat(c)} aria-pressed={on}
-                                className={`px-2 py-1 rounded border text-2xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${on ? 'border-primary/40 bg-primary/15 text-primary-ink' : 'border-line-2 bg-card-2 text-fg-5 hover:text-fg-3'}`}>
-                                {c} <span className="tabular-nums opacity-70">{n}</span>
-                            </button>
-                        );
-                    })}
+            <Card title="Starting points" subtitle="Ideas, not edges — each carries what a replay over stored history actually measured. Click one to load it into the editor; tick “Test” on several to compare them on history.">
+                <div className="rounded border border-line bg-surface-2 px-3 py-2 mb-3 space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-2"><FlaskConical className="w-3.5 h-3.5" aria-hidden="true" /> Compare on history</span>
+                        <span className={`text-2xs ${tooMany ? 'text-danger' : 'text-fg-4'}`}>{tickedPresets.length} ticked{tooMany ? ` — at most ${maxBatch} at once` : ''}</span>
+                        {tickedPresets.length > 0 && <button type="button" onClick={() => setTicked(new Set())} className="text-2xs text-fg-4 underline hover:text-fg-2">clear</button>}
+                        <span className="inline-flex items-center gap-1.5">
+                            <label className="text-3xs text-fg-5" htmlFor="sp-sessions">Sessions</label>
+                            <input id="sp-sessions" type="number" min="20" max={maxReplay} value={replaySessions} onChange={(e) => setReplaySessions(Math.min(maxReplay, Number(e.target.value) || 200))}
+                                title={`How many past sessions to replay — up to ${maxReplay} (≈${Math.round(maxReplay / 250)} years), as far back as the stored history allows`}
+                                className="w-20 bg-surface-2 border border-line rounded px-1.5 py-1 text-xs text-fg-2" />
+                        </span>
+                        <span className="inline-flex items-center gap-1.5">
+                            <label className="text-3xs text-fg-5" htmlFor="sp-horizons" title="Sessions to hold after each signal before selling — up to 6 values between 1 and 120. 1 = intraday: in at the next open, out at that day's close">Sell after</label>
+                            <input id="sp-horizons" value={horizonsText} onChange={(e) => setHorizonsText(e.target.value)} aria-invalid={!horizons.length} placeholder="5, 10, 20"
+                                className={`w-24 bg-surface-2 border rounded px-1.5 py-1 text-xs text-fg-2 ${horizons.length ? 'border-line' : 'border-danger'}`} />
+                        </span>
+                        <button type="button" onClick={startBatch} disabled={!tickedPresets.length || tooMany || batch?.status === 'running' || !horizons.length}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-primary text-on-primary text-xs font-medium disabled:opacity-50">
+                            <FlaskConical className="w-3.5 h-3.5" aria-hidden="true" /> {batch?.status === 'running' ? 'Testing…' : tickedPresets.length > 1 ? `Test ${tickedPresets.length} together` : 'Test ticked on history'}
+                        </button>
+                    </div>
+                    {tickedPresets.length > 0 ? (
+                        <div className="flex flex-wrap gap-1" aria-label="Ticked starting points">
+                            {tickedPresets.map(p => (
+                                <button key={p.id} type="button" onClick={() => toggleTick(p.id)} title="Remove from the comparison"
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-primary/40 bg-primary/10 text-3xs text-primary-ink hover:bg-primary/20">
+                                    {p.name} <X className="w-3 h-3" aria-hidden="true" /><span className="sr-only">remove</span>
+                                </button>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="text-3xs text-fg-5">1. Tick <b>Test</b> on the starting points you want to compare (any category — or “Tick all shown”). 2. Set sessions and when to sell. 3. Press <b>Test together</b>: one row per starting point appears just below this card.</p>
+                    )}
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <div className="flex flex-wrap gap-1" role="group" aria-label="Starting-point categories">
+                        {presetCats.map(c => {
+                            const on = presetCat === c;
+                            const n = c === 'All' ? presets.length : presets.filter(p => p.category === c).length;
+                            return (
+                                <button key={c} type="button" onClick={() => setPresetCat(c)} aria-pressed={on}
+                                    className={`px-2 py-1 rounded border text-2xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${on ? 'border-primary/40 bg-primary/15 text-primary-ink' : 'border-line-2 bg-card-2 text-fg-5 hover:text-fg-3'}`}>
+                                    {c} <span className="tabular-nums opacity-70">{n}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                    <button type="button" onClick={tickShown} disabled={!shownPresets.length}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-line text-2xs text-fg-3 hover:bg-card-2 disabled:opacity-50">
+                        {allShownTicked ? `Untick all ${shownPresets.length} shown` : `Tick all ${shownPresets.length} shown`}
+                    </button>
                 </div>
                 <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                    {presets.filter(p => presetCat === 'All' || p.category === presetCat).map(p => (
-                        <button key={p.id} type="button"
-                            onClick={() => { setDraft(d => ({ ...d, query: p.query, universe: p.universe, minTurnoverCr: p.minTurnoverCr, sortBy: p.sortBy, sortDir: p.sortDir, presetId: p.id, name: p.name, times: p.times })); setQErr(null); }}
-                            className={`text-left rounded border px-3 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${draft.presetId === p.id ? 'border-primary bg-primary/10' : 'border-line hover:bg-card-2'}`}>
-                            <div className="flex items-start justify-between gap-2">
-                                <span className="text-xs font-medium text-fg-2">{p.name}</span>
-                                <Chip tone={EVIDENCE_TONE[p.evidence?.status] || 'muted'}>{EVIDENCE_LABEL[p.evidence?.status] || 'untested'}</Chip>
+                    {shownPresets.map(p => {
+                        const on = ticked.has(p.id);
+                        return (
+                            <div key={p.id} className={`rounded border transition-colors ${draft.presetId === p.id ? 'border-primary bg-primary/10' : on ? 'border-primary/50' : 'border-line'}`}>
+                                <button type="button"
+                                    onClick={() => {
+                                        setDraft(d => ({ ...d, query: p.query, universe: p.universe, minTurnoverCr: p.minTurnoverCr, sortBy: p.sortBy, sortDir: p.sortDir, presetId: p.id, name: p.name, times: p.times }));
+                                        if (p.hold?.length) setHorizonsText(p.hold.join(', '));   // test it over the holding period it was researched for
+                                        setQErr(null);
+                                    }}
+                                    title="Load into the query editor"
+                                    className="w-full text-left rounded-t px-3 pt-2 pb-1 hover:bg-card-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+                                    <div className="flex items-start justify-between gap-2">
+                                        <span className="text-xs font-medium text-fg-2">{p.name}</span>
+                                        <Chip tone={EVIDENCE_TONE[p.evidence?.status] || 'muted'}>{EVIDENCE_LABEL[p.evidence?.status] || 'untested'}</Chip>
+                                    </div>
+                                    {p.side && (
+                                        <div className="flex flex-wrap gap-1 mt-1">
+                                            <Chip tone={SIDE_TONE[p.side]}>{SIDE_LABEL[p.side]}</Chip>
+                                            {holdText(p.hold) && <Chip tone="muted">{holdText(p.hold)}</Chip>}
+                                        </div>
+                                    )}
+                                    <div className="text-3xs text-fg-5 mt-1 line-clamp-2">{p.why}</div>
+                                </button>
+                                <label className={`flex items-center gap-1.5 px-3 pb-2 pt-1 text-2xs cursor-pointer ${on ? 'text-primary-ink' : 'text-fg-4'}`}>
+                                    <input type="checkbox" checked={on} onChange={() => toggleTick(p.id)} aria-label={`Test ${p.name} on history`} /> Test
+                                </label>
                             </div>
-                            <div className="text-3xs text-fg-5 mt-1 line-clamp-2">{p.why}</div>
-                        </button>
-                    ))}
+                        );
+                    })}
                 </div>
                 {preset && (
                     <div className="mt-3 rounded border border-line bg-surface-2 p-2.5 text-2xs space-y-1">
@@ -713,6 +997,15 @@ function ScreenerTab({ api, fields, presets, universes, draft, setDraft, onSaveA
                     </div>
                 )}
             </Card>
+
+            {batch && (
+                <div ref={batchRef} className="scroll-mt-4">
+                    <Card title="Starting points tested together" subtitle="New matches only, replayed over stored history — one row per starting point. Click a row for its full result."
+                        right={<button type="button" onClick={() => setBatch(null)} aria-label="Close comparison" className="text-fg-5 hover:text-fg p-1"><X className="w-4 h-4" aria-hidden="true" /></button>}>
+                        <BatchReplayResult job={batch} api={api} />
+                    </Card>
+                </div>
+            )}
 
             <div className="grid gap-4 xl:grid-cols-[1fr_22rem]">
                 <Card title="Query" subtitle="A condition over catalog fields, evaluated against every stock in the universe.">
@@ -760,7 +1053,7 @@ function ScreenerTab({ api, fields, presets, universes, draft, setDraft, onSaveA
                                 <input id="replay-sessions" type="number" min="20" max={maxReplay} value={replaySessions} onChange={(e) => setReplaySessions(Math.min(maxReplay, Number(e.target.value) || 200))}
                                     title={`Up to ${maxReplay} sessions (≈${Math.round(maxReplay / 250)} years) — as far back as the stored history allows. A longer backfill on the Data tab adds history.${limits?.replayThreads > 1 ? ` Runs on up to ${limits.replayThreads} CPU threads.` : ''}`}
                                     className="w-20 bg-surface-2 border border-line rounded px-1.5 py-1 text-xs text-fg-2" />
-                                <label className="text-3xs text-fg-5" htmlFor="replay-horizons" title="Sessions to hold after each signal before selling — up to 6 values between 1 and 120, e.g. 3, 10, 40">Sell after</label>
+                                <label className="text-3xs text-fg-5" htmlFor="replay-horizons" title="Sessions to hold after each signal before selling — up to 6 values between 1 and 120, e.g. 3, 10, 40. 1 = intraday: in at the next open, out at that day's close">Sell after</label>
                                 <input id="replay-horizons" value={horizonsText} onChange={(e) => setHorizonsText(e.target.value)} aria-invalid={!horizons.length}
                                     className={`w-24 bg-surface-2 border rounded px-1.5 py-1 text-xs text-fg-2 ${horizons.length ? 'border-line' : 'border-danger'}`} placeholder="5, 10, 20" />
                                 <label className="text-3xs text-fg-5" htmlFor="replay-cap" title="If you can only act on a few signals a day: keep the top N by the sort field. 0 = take every signal.">Max/day</label>
@@ -785,10 +1078,9 @@ function ScreenerTab({ api, fields, presets, universes, draft, setDraft, onSaveA
             {replay && (
                 <Card title="Would this have caught anything?" subtitle="New matches only (what an alert notifies), replayed over stored history."
                     right={<button type="button" onClick={() => setReplay(null)} aria-label="Close replay" className="text-fg-5 hover:text-fg p-1"><X className="w-4 h-4" aria-hidden="true" /></button>}>
-                    <ReplayResult job={replay} />
+                    <ReplayResult job={replay} side={replaySide} />
                 </Card>
             )}
-
             {res && res.marketOnly && (
                 <Card title="Market condition" subtitle="This query reads only market-wide fields (NIFTY, FII/DII, VIX…), so every stock shares the same values — it is a yes/no condition, not a stock list. Saved as an alert, it messages you when the condition turns true.">
                     <div className="space-y-3">
@@ -940,12 +1232,29 @@ function RunHistory({ alert, onClose, api, fieldsByName }) {
     );
 }
 
-function AlertsTab({ api, universes, editing, setEditing, onChanged, fields = [] }) {
+function AlertsTab({ api, universes, editing, setEditing, onChanged, fields = [], limits }) {
     const fieldsByName = useMemo(() => new Map(fields.map(f => [f.name, f])), [fields]);
     const confirm = useConfirm();
     const [alerts, setAlerts] = useState(null);
     const [busy, setBusy] = useState({});
     const [history, setHistory] = useState(null);
+    // Several alerts tested on history together (one pass; each keeps its own settings).
+    const maxBatch = limits?.maxBatch || 30;
+    const maxReplay = limits?.maxReplaySessions || 450;
+    const [picked, setPicked] = useState(() => new Set());
+    const [bSessions, setBSessions] = useState(250);
+    const [bHorizonsText, setBHorizonsText] = useState('5, 10, 20');
+    const bHorizons = useMemo(() => parseHorizonsText(bHorizonsText), [bHorizonsText]);
+    const [batch, setBatch] = useReplayJob(api);
+    const allRef = useRef(null);
+    const pickedAlerts = (alerts || []).filter(a => picked.has(a._id));   // a deleted alert drops out on its own
+    const allPicked = !!alerts?.length && pickedAlerts.length === alerts.length;
+    useEffect(() => { if (allRef.current) allRef.current.indeterminate = pickedAlerts.length > 0 && !allPicked; });
+    const togglePick = (id) => setPicked(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+    const testPicked = () => startBatchReplay(api, {
+        items: pickedAlerts.map(a => ({ key: a._id, alertId: a._id })),   // the server looks up each one's settings
+        sessions: bSessions, horizons: bHorizons,
+    }, setBatch);
     const load = useCallback(async () => {
         try { const r = await api.get('/alerts'); setAlerts(Array.isArray(r?.alerts) ? r.alerts : []); } catch (e) { toast.error(errText(e)); setAlerts([]); }
         onChanged?.();   // the tab badge and header read /status; refresh it now, not on the next 30 s poll
@@ -979,6 +1288,39 @@ function AlertsTab({ api, universes, editing, setEditing, onChanged, fields = []
             {!alerts && <Spinner />}
             {alerts && !alerts.length && <EmptyState icon={BellRing} title="No alerts yet">Build a screen on the Screener tab (or pick a starting point) and use “Save as alert”.</EmptyState>}
             {alerts && alerts.length > 0 && (
+                <div className="rounded border border-line bg-card px-3 py-2 space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-2"><FlaskConical className="w-3.5 h-3.5" aria-hidden="true" /> Test alerts on history</span>
+                        <label className="inline-flex items-center gap-1.5 text-2xs text-fg-4 cursor-pointer">
+                            <input ref={allRef} type="checkbox" checked={allPicked} onChange={() => setPicked(allPicked ? new Set() : new Set(alerts.map(a => a._id)))} /> All {alerts.length}
+                        </label>
+                        <span className={`text-2xs ${pickedAlerts.length > maxBatch ? 'text-danger' : 'text-fg-5'}`}>{pickedAlerts.length} selected{pickedAlerts.length > maxBatch ? ` — at most ${maxBatch} at once` : ''}</span>
+                        <span className="inline-flex items-center gap-1.5">
+                            <label className="text-3xs text-fg-5" htmlFor="batch-sessions">Sessions</label>
+                            <input id="batch-sessions" type="number" min="20" max={maxReplay} value={bSessions} onChange={(e) => setBSessions(Math.min(maxReplay, Number(e.target.value) || 250))}
+                                title={`Up to ${maxReplay} sessions (≈${Math.round(maxReplay / 250)} years), as far back as the stored history allows`}
+                                className="w-20 bg-surface-2 border border-line rounded px-1.5 py-1 text-xs text-fg-2" />
+                        </span>
+                        <span className="inline-flex items-center gap-1.5">
+                            <label className="text-3xs text-fg-5" htmlFor="batch-horizons" title="Sessions to hold after each signal before selling — up to 6 values between 1 and 120">Sell after</label>
+                            <input id="batch-horizons" value={bHorizonsText} onChange={(e) => setBHorizonsText(e.target.value)} aria-invalid={!bHorizons.length} placeholder="5, 10, 20"
+                                className={`w-24 bg-surface-2 border rounded px-1.5 py-1 text-xs text-fg-2 ${bHorizons.length ? 'border-line' : 'border-danger'}`} />
+                        </span>
+                        <button type="button" onClick={testPicked} disabled={!pickedAlerts.length || pickedAlerts.length > maxBatch || !bHorizons.length || batch?.status === 'running'}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-line text-xs text-fg-3 hover:bg-card-2 disabled:opacity-50">
+                            <FlaskConical className="w-3.5 h-3.5" aria-hidden="true" /> {pickedAlerts.length > 1 ? `Test ${pickedAlerts.length} together` : 'Test on history'}
+                        </button>
+                    </div>
+                    <p className="text-3xs text-fg-5">Tick the alerts to compare (“Test” on each card). They are replayed in ONE pass over the stored history — far faster than one at a time — each with its own universe, turnover floor and sort: new matches only (what the alert notifies), bought at the next open, sold after each holding period, compared with the average stock.</p>
+                </div>
+            )}
+            {batch && (
+                <Card title="Alerts tested together" subtitle="One row per alert — the numbers each gets when tested alone."
+                    right={<button type="button" onClick={() => setBatch(null)} aria-label="Close comparison" className="text-fg-5 hover:text-fg p-1"><X className="w-4 h-4" aria-hidden="true" /></button>}>
+                    <BatchReplayResult job={batch} api={api} />
+                </Card>
+            )}
+            {alerts && alerts.length > 0 && (
                 <div className="grid gap-3 lg:grid-cols-2">
                     {alerts.map(a => (
                         <Card key={a._id} title={<span className="flex items-center gap-2">{a.name}{!a.enabled && <Chip tone="muted">paused</Chip>}</span>}
@@ -999,7 +1341,10 @@ function AlertsTab({ api, universes, editing, setEditing, onChanged, fields = []
                                     <Chip tone="muted">{a.notifyTelegram ? (a.notifyOn === 'new' ? `Telegram on new · ${a.cooldownDays}d cooldown` : 'Telegram every run') : 'no Telegram'}</Chip>
                                 </div>
                                 {a.lastStatus === 'error' && <div className="text-2xs text-danger">{a.lastError}</div>}
-                                <div className="flex flex-wrap gap-2 pt-1">
+                                <div className="flex flex-wrap items-center gap-2 pt-1">
+                                    <label className="inline-flex items-center gap-1.5 px-1.5 py-1 rounded border border-line-2 text-2xs text-fg-4 cursor-pointer" title="Include in “Test alerts on history”">
+                                        <input type="checkbox" checked={picked.has(a._id)} onChange={() => togglePick(a._id)} aria-label={`Include ${a.name} in the history test`} /> Test
+                                    </label>
                                     <button type="button" onClick={() => runNow(a)} disabled={busy[a._id]} className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-line text-2xs text-fg-3 hover:bg-card-2 disabled:opacity-50">
                                         {busy[a._id] ? <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" /> : <Play className="w-3 h-3" aria-hidden="true" />} Run now
                                     </button>
@@ -1285,7 +1630,7 @@ export default function Alerts() {
                 <ScreenerTab api={api} fields={fields} presets={presets} universes={universes} draft={draft} setDraft={setDraft} limits={status?.scanner?.limits}
                     onSaveAlert={(d) => { setEditing(blankAlert(d)); setTab('alerts'); }} />
             )}
-            {tab === 'alerts' && <AlertsTab api={api} universes={universes} editing={editing} setEditing={setEditing} onChanged={loadStatus} fields={fields} />}
+            {tab === 'alerts' && <AlertsTab api={api} universes={universes} editing={editing} setEditing={setEditing} onChanged={loadStatus} fields={fields} limits={status?.scanner?.limits} />}
             {tab === 'data' && <DataTab api={api} status={status} reload={loadStatus} />}
         </div>
     );

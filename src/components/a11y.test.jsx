@@ -17,14 +17,16 @@ const read = (p) => fs.readFileSync(path.join(SRC, p), 'utf8');
 describe('interactive controls are keyboard-operable', () => {
     it('Optimizer toggles are real switches, not clickable divs', () => {
         const s = read('pages/Optimizer.jsx');
-        // Two settings switches. As <div onClick> they took no focus and were
-        // never announced as on/off.
+        // The settings switch (out-of-sample validation). As a <div onClick> it took
+        // no focus and was never announced as on/off. (A second switch, "Stop on
+        // First Match", was removed 2026-10-11: the pooled optimizer has no meaning
+        // for it under a task queue.)
         // Count ATTRIBUTES, not prose: the surrounding comments mention
-        // role="switch" too, and matching those made this assert 4 instead of 2.
-        expect((s.match(/^\s*role="switch"$/gm) || []).length).toBe(2);
-        expect((s.match(/^\s*aria-checked=/gm) || []).length).toBe(2);
-        // named by their visible text, not a duplicated string
-        expect((s.match(/aria-labelledby=/g) || []).length).toBe(2);
+        // role="switch" too.
+        expect((s.match(/^\s*role="switch"$/gm) || []).length).toBe(1);
+        expect((s.match(/^\s*aria-checked=/gm) || []).length).toBe(1);
+        // named by its visible text, not a duplicated string
+        expect((s.match(/aria-labelledby=\{oosLabelId\}/g) || []).length).toBe(1);
         expect(s).not.toMatch(/rounded-full p-1 cursor-pointer[^>]*\n\s*onClick/);
     });
 

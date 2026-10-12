@@ -91,3 +91,24 @@ describe('VixBreakdownPanel', () => {
         expect(container.textContent).toMatch(/Significance: too few units/);
     });
 });
+
+describe('pricing provenance', () => {
+    const base = { source: { daily: 'fyers' }, breakdown: { bands: [] }, simIv: { model: 'vix', vix: 3, fallback: 0, fixed: 0 } };
+    it('names the pricing model and where every contract fact came from', () => {
+        render(<VixBreakdownPanel data={base} pricing={{
+            expirySource: { exchange: 160, rule: 4 }, lotSource: { printed: 150, derived: 14, configured: 0 },
+            skipped: { noContract: 2 }, notes: ['before the evidence (2022-01-07): weekday rule'],
+            evidence: { coverage: { NSE: { from: '2022-01-07', to: '2026-10-09', ageDays: 1 } } },
+        }} />);
+        expect(screen.getByText(/India VIX at entry and exit, × index ratio/)).toBeTruthy();
+        expect(screen.getByText(/160 from exchange listings · 4 from a weekday rule/)).toBeTruthy();
+        expect(screen.getByText(/14 derived from turnover/)).toBeTruthy();
+        expect(screen.getByText(/2 signals not traded: no listed contract/)).toBeTruthy();
+        expect(screen.getByText(/1 pricing note/)).toBeTruthy();
+        expect(screen.getByText(/NSE evidence 2022-01-07 → 2026-10-09/)).toBeTruthy();
+    });
+    it('says plainly when exits do not move with VIX', () => {
+        render(<VixBreakdownPanel data={{ ...base, simIv: { model: 'vix_entry', vix: 1, fallback: 0, fixed: 0 } }} />);
+        expect(screen.getByText(/India VIX at entry only \(no vega\)/)).toBeTruthy();
+    });
+});

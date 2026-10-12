@@ -5,10 +5,12 @@ import PriceChart from '../components/charts/PriceChart';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useGlobalState } from '../context/GlobalContext';
 import CollapsibleCard from '../components/CollapsibleCard';
-import { PageHeader, Spinner } from '../components/viz/primitives';
+import { PageHeader, Spinner, Chip } from '../components/viz/primitives';
 import { FlaskConical as BacktestIcon } from 'lucide-react';
 import AttributionPanel from '../components/viz/AttributionPanel';
 import VixBreakdownPanel from '../components/viz/VixBreakdownPanel';
+import DirectionGateBacktestPanel, { DirectionGateControls } from '../components/viz/DirectionGateBacktestPanel';
+import { GATE_DEFAULTS, gateParams, DECISION_TONE, pct0 as gatePct } from '../components/viz/directionGateFormat.js';
 import { useChartTheme } from '../theme/chartTheme.js';
 
 
@@ -859,7 +861,7 @@ export default function Backtest() {
 
   const handleSaveDefault = async () => {
     if (!params.strategy) return toast.info("Please select a strategy first.");
-    const ok = await confirm(`Are you sure you want to update GLOBAL DEFAULTS for ${params.strategy}? This will affect all new backtests.`);
+    const ok = await confirm(`Are you sure you want to update GLOBAL DEFAULTS for ${params.strategy}? This will affect all new backtests. Defaults apply to every index — settings tuned for one index belong in "Save Config" instead.`);
     if (!ok) return;
 
     // Filter out system params
@@ -1019,6 +1021,11 @@ export default function Backtest() {
     }
   };
 
+  // Live engine's direction-confidence gate, tested in this backtest. Separate from the
+  // strategy params on purpose: a strategy change must not reset it, and it must never be
+  // saved into a config or a live deployment (the live gate is a global setting).
+  const [dirGate, setDirGate] = useState(GATE_DEFAULTS);
+
   const runBacktest = async () => {
     setLoading(true);
     setResult(null);
@@ -1038,7 +1045,7 @@ export default function Backtest() {
     backtestAbortRef.current = aborter;
 
     try {
-      const cleanParams = preparePayload(params);
+      const cleanParams = { ...preparePayload(params), ...gateParams(dirGate) };   // gate OFF adds nothing
       const res = await axios.post(`${API_URL}/engine/backtest/run`, cleanParams, { signal: aborter.signal });
       if (res.data.cancelled) {
         // Server confirmed clean cancel — no error, just bail.
@@ -1736,6 +1743,7 @@ export default function Backtest() {
                         <option value="SPOT">Spot Data (API)</option>
                         <option value="FUT">Current Month Future</option>
                         <option value="ARCHIVE">📂 Local Archive (Fast)</option>
+                        <option value="ARCHIVE_SPOT">📂 Local archive – spot, all indexes aligned</option>
                         <option value="SPOT_ARCHIVE">🔁 Spot API + Archive Options</option>
                     </select>
                 </div>
@@ -3118,7 +3126,7 @@ export default function Backtest() {
             <button
                 onClick={handleSaveDefault}
                 className="bg-gray-700 hover:bg-gray-600 text-xs py-2 rounded text-fg-3 border border-line-2"
-                title="Update Global Strategy Defaults with these values"
+                title="Update Global Strategy Defaults with these values. Defaults apply to every index."
             >
                 💾 Save as Default
             </button>
@@ -3163,6 +3171,8 @@ export default function Backtest() {
                 </button>
             )}
           </div>
+
+          <DirectionGateControls value={dirGate} onChange={setDirGate} />
           
           {result ? (
             <div className="space-y-8">
@@ -3212,7 +3222,27 @@ export default function Backtest() {
                     which VIX days this strategy makes money on
                   </span>}
                 >
-                  <VixBreakdownPanel data={result.vix} />
+                  <VixBreakdownPanel data={result.vix} pricing={result.pricing} />
+                </CollapsibleCard>
+              )}
+
+              {/* The live engine's CE/PE direction-confidence gate, run on this backtest's own trades */}
+              {result.directionGate && (
+                <CollapsibleCard
+                  title="Direction confidence gate (live engine)"
+                  icon={Activity}
+                  storageKey="backtest:dirgate"
+                  defaultOpen
+                  bodyClassName="px-4 pb-4 pt-0"
+                  summary={<span className="text-xs text-fg-5">
+                    {result.directionGate.mode === 'enforce' && result.directionGate.comparison && !result.directionGate.comparison.skipped
+                      ? result.directionGate.comparison.verdict
+                      : `${result.directionGate.mode} · ${result.directionGate.decisions} signals decided`}
+                    {result.directionGate.suggestion?.ok && result.directionGate.suggestion.recommendation &&
+                      ` · suggestion: ${result.directionGate.suggestion.recommendation.action === 'USE' ? 'use tuned settings' : 'turn the gate off'}`}
+                  </span>}
+                >
+                  <DirectionGateBacktestPanel data={result.directionGate} onApply={(g) => setDirGate(prev => ({ ...prev, ...g }))} />
                 </CollapsibleCard>
               )}
 
@@ -3541,6 +3571,7 @@ export default function Backtest() {
                         </th>
                         <th className="px-4 py-3 bg-slate-800">P&L</th>
                         <th className="px-4 py-3 bg-slate-800">Reason</th>
+                        {result.trades.some(t => t.dir_gate) && <th className="px-4 py-3 bg-slate-800" title="Direction-confidence gate verdict at entry (confidence of this trade's side)">Gate</th>}
                         {showAiSim && aiSimData && <>
                           <th className="px-4 py-3 bg-green-900/20 text-success/80 border-l border-green-700/30" title="AI-suggested stop-loss index level">AI SL</th>
                           <th className="px-4 py-3 bg-green-900/20 text-success/80" title="AI-suggested take-profit index level">AI TP</th>
@@ -3680,6 +3711,11 @@ export default function Backtest() {
                             {Number(trade.pnl).toFixed(2)}
                           </td>
                           <td className="px-4 py-3 text-fg-4 text-xs">{trade.reason}</td>
+                          {result.trades.some(t => t.dir_gate) && (
+                            <td className="px-4 py-3 text-xs whitespace-nowrap" title={trade.dir_gate?.reason || ''}>
+                              {trade.dir_gate ? <><Chip tone={DECISION_TONE[trade.dir_gate.decision] || 'muted'}>{trade.dir_gate.decision}</Chip> <span className="text-fg-5">{gatePct(trade.dir_gate.confidence)}</span></> : '—'}
+                            </td>
+                          )}
                           {showAiSim && aiSimData && (() => {
                             const sim = aiSimData.trades[idx];
                             const isReject = trade.ai_decision === 'REJECT';

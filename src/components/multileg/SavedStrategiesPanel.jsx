@@ -36,6 +36,7 @@ const SORTS = [
     { key: 'winRate', label: 'Win%', dir: 'desc', get: (r) => num(r.m.winRate) },
     { key: 'roi', label: 'ROI/margin', dir: 'desc', get: (r) => num(r.m.roiOnMarginPct) },
     { key: 'trades', label: 'Trades', dir: 'desc', get: (r) => num(r.m.n) },
+    { key: 'liveNet', label: 'Live net (deployed)', dir: 'desc', get: (r) => (r.live ? r.live.net : null) },
     { key: 'name', label: 'Name', dir: 'asc', get: (r) => String(r.s.name || '').toLowerCase() },
 ];
 const SORT_BY_KEY = Object.fromEntries(SORTS.map(s => [s.key, s]));
@@ -89,6 +90,12 @@ function Meta({ r }) {
             <span>{r.entry}</span>
             {opt?.rank != null && (
                 <Chip tone="info" className="ml-0.5" title={`Saved from Auto-optimize job ${opt.jobId}${opt.from ? ` (${opt.from} → ${opt.to})` : ''}`}>Auto #{opt.rank}</Chip>
+            )}
+            {r.live && (
+                <Chip tone="good" className="ml-0.5"
+                    title={`${r.live.deployments.length} deployment(s) from this strategy: ${r.live.trades} booked trade(s), net ₹${fmt(r.live.net)} (engine running totals)${r.live.open ? `; ${r.live.open} open now` : ''}. Details lists them.`}>
+                    ▶ {r.live.deployments.length} deployed · {r.live.trades} trades · <span className={pnlTone(r.live.net)}>₹{fmt(r.live.net)}</span>
+                </Chip>
             )}
         </div>
     );
@@ -274,7 +281,7 @@ function StrategyCard({ r, open, onToggle, renderDetails, actionProps }) {
 
 export default function SavedStrategiesPanel({
     list, templates, deployLots, onDeployLots, pending,
-    openId, onToggle, onLoad, onDeploy, onDelete, renderDetails,
+    openId, onToggle, onLoad, onDeploy, onDelete, renderDetails, live = null,
 }) {
     const ref = useRef(null);
     const rem = useRemWidth(ref);
@@ -287,6 +294,7 @@ export default function SavedStrategiesPanel({
             s, i,
             m: s.backtest?.metrics || {},
             opt: s.optimizer || null,
+            live: (live && live.get(String(s._id))) || null,
             tplName: templates.find(t => t.key === s.template)?.name || s.template,
             sym: shortSym(s.symbol),
             entry: s.entry_mode === 'signal' ? `signal: ${s.signal_strategy}${(s.params || {}).use_signal_exit ? ' +exit' : ''}` : 'time entry',
@@ -304,7 +312,7 @@ export default function SavedStrategiesPanel({
             if (x === y) return a.i - b.i;
             return (typeof x === 'string' ? x.localeCompare(y) : (x < y ? -1 : 1)) * sign;
         });
-    }, [list, templates, query, sort]);
+    }, [list, templates, query, sort, live]);
 
     const onSort = (key) => setSort(prev => (prev.key === key
         ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }

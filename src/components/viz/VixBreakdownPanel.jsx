@@ -14,7 +14,53 @@ import { inr, pnlTone, monthYear } from './tokens';
  */
 const dash = <span className="text-fg-5">—</span>;
 
-export default function VixBreakdownPanel({ data }) {
+// How each simulated premium was priced (backend src/domain/pricing/volatility.js).
+const IV_MODEL = {
+    vix: { label: 'India VIX at entry and exit, × index ratio', tone: 'good' },
+    vix_entry: { label: 'India VIX at entry only (no vega)', tone: 'warning' },
+    fixed: { label: 'fixed 15% IV', tone: 'warning' },
+};
+
+/**
+ * Where every contract fact behind the premiums came from: exchange listings
+ * vs a weekday rule, printed vs derived lots, signals skipped for want of a
+ * contract, and every note the pricing raised. Nothing about how a premium
+ * was built is left to be assumed.
+ */
+function PricingProvenance({ pricing }) {
+    if (!pricing || !pricing.expirySource) return null;
+    const ex = pricing.expirySource;
+    const lots = pricing.lotSource || {};
+    const skipped = pricing.skipped?.noContract || 0;
+    const notes = Array.isArray(pricing.notes) ? pricing.notes : [];
+    const cov = pricing.evidence?.coverage || {};
+    return (
+        <div className="text-2xs text-fg-5 space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+                <Chip tone={ex.rule ? 'warning' : 'good'} title="Expiry, monthly/weekly cycle and settlement instant of each contract">
+                    contracts: {ex.exchange || 0} from exchange listings{ex.rule ? ` · ${ex.rule} from a weekday rule` : ''}
+                </Chip>
+                <Chip tone={lots.configured ? 'warning' : 'good'} title="Lot size of the contract on the trade date">
+                    lots: {(lots.printed || 0) + (lots.derived || 0)} exchange{lots.derived ? ` (${lots.derived} derived from turnover)` : ''}{lots.configured ? ` · ${lots.configured} configured` : ''}
+                </Chip>
+                {skipped > 0 && <Chip tone="critical">{skipped} signal{skipped === 1 ? '' : 's'} not traded: no listed contract</Chip>}
+                {Object.entries(cov).map(([x, c]) => (
+                    <span key={x}>{x} evidence {c.from} → {c.to}{c.ageDays != null ? ` (${c.ageDays}d old)` : ''}</span>
+                ))}
+            </div>
+            {notes.length > 0 && (
+                <details>
+                    <summary className="cursor-pointer">{notes.length} pricing note{notes.length === 1 ? '' : 's'}</summary>
+                    <ul className="list-disc pl-5 mt-1 space-y-0.5">{notes.map((n) => <li key={n}>{n}</li>)}</ul>
+                </details>
+            )}
+        </div>
+    );
+}
+
+export { PricingProvenance };
+
+export default function VixBreakdownPanel({ data, pricing = null }) {
     if (!data) return null;
     const { breakdown, gate, source, sessions, simIv, nullTest } = data;
     const bands = breakdown?.bands || [];
@@ -67,12 +113,14 @@ export default function VixBreakdownPanel({ data }) {
                     VIX source: {srcLabel}
                 </Chip>
                 {simIv && simIv.model && (
-                    <Chip tone={simIv.model === 'vix' ? 'good' : 'warning'}>
-                        premiums priced at: {simIv.model === 'vix' ? 'India VIX at entry' : 'fixed 15% IV'}
+                    <Chip tone={(IV_MODEL[simIv.model] || IV_MODEL.fixed).tone}>
+                        premiums priced at: {(IV_MODEL[simIv.model] || { label: simIv.model }).label}
                     </Chip>
                 )}
                 {sessions && <span>{sessions.total} sessions in range{sessions.unmeasured ? ` · ${sessions.unmeasured} without a VIX value` : ''}</span>}
             </div>
+
+            <PricingProvenance pricing={pricing} />
 
             {simIv && simIv.model === 'fixed' && (simIv.fixed > 0) && (
                 <p className="text-xs text-warning">

@@ -64,24 +64,27 @@ export const INSTRUMENT_CONFIG = {
     "BSE:BANKEX-INDEX": {
         underlying: "BANKEX",
         exchange: "BSE",
-        lotSize: 15,      // SEBI Nov 2024 Revision
+        lotSize: 30,       // BSE lists 30 since Feb-2025 (was 15)
         strikeStep: 100,
-        expiryDay: 1,      // Monday
-        expiryType: "WEEKLY",
+        expiryDay: 4,      // Thursday — last of the month; the Monday weekly series no longer exists
+        expiryType: "MONTHLY",
         min_sl_range: [15, 40],
         marginPct: 0.18
     },
-    // Stocks (Option Buying List - Top Liquid)
-    "NSE:RELIANCE-EQ": { underlying: "RELIANCE", exchange: "NSE", lotSize: 500, strikeStep: 20, expiryType: "MONTHLY", min_sl_range: [1, 5], marginPct: 0.22 },
-    "NSE:HDFCBANK-EQ": { underlying: "HDFCBANK", exchange: "NSE", lotSize: 550, strikeStep: 10, expiryType: "MONTHLY", min_sl_range: [1, 5], marginPct: 0.22 },
-    "NSE:ICICIBANK-EQ": { underlying: "ICICIBANK", exchange: "NSE", lotSize: 700, strikeStep: 10, expiryType: "MONTHLY", min_sl_range: [1, 5], marginPct: 0.22 },
-    "NSE:SBIN-EQ": { underlying: "SBIN", exchange: "NSE", lotSize: 750, strikeStep: 5, expiryType: "MONTHLY", min_sl_range: [0.5, 3], marginPct: 0.22 },
-    "NSE:INFY-EQ": { underlying: "INFY", exchange: "NSE", lotSize: 400, strikeStep: 20, expiryType: "MONTHLY", min_sl_range: [1, 5], marginPct: 0.22 },
-    "NSE:TCS-EQ": { underlying: "TCS", exchange: "NSE", lotSize: 175, strikeStep: 50, expiryType: "MONTHLY", min_sl_range: [2, 8], marginPct: 0.22 },
-    "NSE:TMPV-EQ": { underlying: "TMPV", exchange: "NSE", lotSize: 800, strikeStep: 10, expiryType: "MONTHLY", marginPct: 0.22 },
-    "NSE:MARUTI-EQ": { underlying: "MARUTI", exchange: "NSE", lotSize: 50, strikeStep: 100, expiryType: "MONTHLY", marginPct: 0.22 },
-
-    "NSE:BAJFINANCE-EQ": { underlying: "BAJFINANCE", exchange: "NSE", lotSize: 125, strikeStep: 50, expiryType: "MONTHLY", marginPct: 0.22 },
+    // Stocks (Option Buying List - Top Liquid). NSE stock options expire on the
+    // LAST TUESDAY (expiryDay 2). Lots/steps are the exchange's — mirrored from
+    // backend/logic/constants.js, which tests/engine/marketFacts.test.js pins to
+    // the exchange evidence (and pins THIS file to the backend's).
+    "NSE:RELIANCE-EQ": { underlying: "RELIANCE", exchange: "NSE", lotSize: 500, strikeStep: 10, expiryDay: 2, expiryType: "MONTHLY", min_sl_range: [1, 5], marginPct: 0.22 },
+    "NSE:HDFCBANK-EQ": { underlying: "HDFCBANK", exchange: "NSE", lotSize: 650, strikeStep: 10, expiryDay: 2, expiryType: "MONTHLY", min_sl_range: [1, 5], marginPct: 0.22 },
+    "NSE:ICICIBANK-EQ": { underlying: "ICICIBANK", exchange: "NSE", lotSize: 700, strikeStep: 10, expiryDay: 2, expiryType: "MONTHLY", min_sl_range: [1, 5], marginPct: 0.22 },
+    "NSE:SBIN-EQ": { underlying: "SBIN", exchange: "NSE", lotSize: 750, strikeStep: 10, expiryDay: 2, expiryType: "MONTHLY", min_sl_range: [0.5, 3], marginPct: 0.22 },
+    "NSE:INFY-EQ": { underlying: "INFY", exchange: "NSE", lotSize: 400, strikeStep: 20, expiryDay: 2, expiryType: "MONTHLY", min_sl_range: [1, 5], marginPct: 0.22 },
+    "NSE:TCS-EQ": { underlying: "TCS", exchange: "NSE", lotSize: 225, strikeStep: 20, expiryDay: 2, expiryType: "MONTHLY", min_sl_range: [2, 8], marginPct: 0.22 },
+    "NSE:TMPV-EQ": { underlying: "TMPV", exchange: "NSE", lotSize: 1600, strikeStep: 5, expiryDay: 2, expiryType: "MONTHLY", marginPct: 0.22 },
+    "NSE:MARUTI-EQ": { underlying: "MARUTI", exchange: "NSE", lotSize: 50, strikeStep: 100, expiryDay: 2, expiryType: "MONTHLY", marginPct: 0.22 },
+    "NSE:AXISBANK-EQ": { underlying: "AXISBANK", exchange: "NSE", lotSize: 625, strikeStep: 10, expiryDay: 2, expiryType: "MONTHLY", marginPct: 0.22 },
+    "NSE:BAJFINANCE-EQ": { underlying: "BAJFINANCE", exchange: "NSE", lotSize: 750, strikeStep: 10, expiryDay: 2, expiryType: "MONTHLY", marginPct: 0.22 },
     
     // MCX Commodities (Futures) — Precious Metals
     // lotSize = P&L multiplier per lot per ₹1 price move

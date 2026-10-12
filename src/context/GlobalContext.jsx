@@ -116,9 +116,11 @@ export function GlobalProvider({ children }) {
     minWinRate: 40,
     maxDrawdown: 100,
     minSharpeRatio: 0.4,
-    stop_on_match: false,
     oos_enabled: false,   // out-of-sample (walk-forward) validation
-    oos_fraction: 0.3     // held-out test portion (30%)
+    oos_fraction: 0.3,    // held-out test portion (30%)
+    symbols: [defaultSymbol], // one = single-index page; several indexes = a multi-index run
+    preset: 'quick',      // multi-index search depth (quick | standard | thorough)
+    crossK: null,         // "must hold up on at least K" — null = the server's recommended K
   });
   const [optimizerResult, setOptimizerResult] = useState(null);
 

@@ -19,15 +19,18 @@
  *     deficit that does not exist. That mistake has already produced one wrong
  *     conclusion in this project, so the arithmetic lives in exactly one place.
  *
- * The panel owns its own days window (30 / 90 / all) and inherits book,
- * deployment and symbol from the Results tab's filter row.
+ * The days window (30 / 90 / all) comes from the page when it passes `days`
+ * (Multi-Leg Results: one window for the whole page); otherwise the panel
+ * keeps its own toggle (Live Portfolio). Book, deployment and symbol come from
+ * the Results tab's filter row.
  */
 import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import axios from 'axios';
 import {
     ComposedChart, Bar, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Legend,
 } from 'recharts';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, ChevronRight, ChevronDown } from 'lucide-react';
 import ZoomableChart from '../charts/ZoomableChart';
 import PnlCalendar from '../charts/PnlCalendar.jsx';
 import { useChartTheme } from '../../theme/chartTheme.js';
@@ -35,6 +38,51 @@ import { API_URL } from '../../config/api.js';
 import { num, fmt, rup, shortDate } from './builderFormat';
 import { Tile } from './builderUi';
 import { rupeeTick } from '../viz/tokens';
+import { ROUTES } from '../../config/routes.js';
+import useLocalStorage from '../../hooks/useLocalStorage';
+import StrategyScorecard, { OpenNow } from './StrategyScorecard';
+import ExcursionsPanel from './ExcursionsPanel';
+import useScorecard from './useScorecard';
+
+// One deployment's own trades: the Results tab scoped to it. Works from the
+// Multi-Leg page and from Live Portfolio alike (MultiLeg reads ?deployment=).
+const deploymentHref = (id) => `${ROUTES.multiLeg}?tab=results&deployment=${encodeURIComponent(String(id))}`;
+const scrollMainTop = () => {
+    const main = typeof document !== 'undefined' && document.querySelector('main');
+    if (main) main.scrollTo({ top: 0, behavior: 'smooth' });
+};
+const shortSymbol = (s) => String(s || '').replace(/^(NSE|BSE):/, '').replace(/-INDEX$/, '');
+
+// The figure cells of a row — shared by a bucket and its per-strategy lines so
+// the two can never drift apart.
+function FigureCells({ r }) {
+    return (
+        <>
+            <td className="text-right">{fmt(r.trades)}</td>
+            <td className="text-right text-fg-4">{num(r.winRate) == null ? '—' : `${fmt(r.winRate)}%`}</td>
+            <td className={`text-right font-semibold ${num(r.net) > 0 ? 'text-success' : num(r.net) < 0 ? 'text-danger' : 'text-fg-4'}`}>{rup(r.net)}</td>
+            <td className={`text-right ${num(r.perTrade) > 0 ? 'text-success' : num(r.perTrade) < 0 ? 'text-danger' : 'text-fg-4'}`}>{rup(r.perTrade)}</td>
+            <td className="text-right text-fg-4" title={marginCoverage(r)}>
+                {num(r.avgMargin) == null ? '—' : rup(r.avgMargin)}
+                {num(r.marginN) != null && num(r.marginN) < num(r.trades) && <span className="text-4xs text-warning"> {r.marginN}/{r.trades}</span>}
+            </td>
+            <td className={`text-right ${tone(r.romPct)}`} title={marginCoverage(r)}>{num(r.romPct) == null ? '—' : `${fmt(r.romPct, 2)}%`}</td>
+            <td className={`text-right ${costPctOf(r) == null ? 'text-fg-5' : costPctOf(r) >= 100 ? 'text-danger font-semibold' : costPctOf(r) >= 50 ? 'text-warning' : 'text-fg-4'}`}
+                title={costPctOf(r) == null
+                    ? (num(r.gross) != null ? `Losing before costs: gross ${rup(r.gross)}, charges ${rup(r.charges)}` : '')
+                    : `${rup(r.charges)} of charges against ${rup(r.gross)} gross profit`}>
+                {costPctOf(r) == null ? '—' : `${costPctOf(r)}%`}
+            </td>
+        </>
+    );
+}
+
+// Charges as a share of GROSS profit. Undefined (—) when gross is not positive:
+// the row was losing before costs, and a percentage of a loss means nothing.
+function costPctOf(r) {
+    const g = num(r.gross), c = num(r.charges);
+    return g != null && c != null && g > 0 ? Math.round((c / g) * 100) : null;
+}
 
 const DAY_OPTS = [
     { v: 30, label: '30d' },
@@ -42,14 +90,16 @@ const DAY_OPTS = [
     { v: 'all', label: 'All' },
 ];
 
+// `help` is the header's hover text: what the number in this row IS.
 const COLS = [
-    { k: 'key', label: 'Key', align: 'left' },
-    { k: 'trades', label: 'Trades', align: 'right' },
-    { k: 'winRate', label: 'Win%', align: 'right' },
-    { k: 'net', label: 'Net ₹', align: 'right' },
-    { k: 'perTrade', label: 'Per trade ₹', align: 'right' },
-    { k: 'avgMargin', label: 'Avg margin ₹', align: 'right' },
-    { k: 'romPct', label: 'Per trade ÷ margin', align: 'right' },
+    { k: 'key', label: 'Key', align: 'left', help: 'The bucket this row groups trades by' },
+    { k: 'trades', label: 'Trades', align: 'right', help: 'Booked round-trips that fall in this row' },
+    { k: 'winRate', label: 'Win%', align: 'right', help: "Share of this row's trades that made money after charges (net > ₹0). A trade that ended at exactly ₹0 counts as not a win" },
+    { k: 'net', label: 'Net ₹', align: 'right', help: "Sum of this row's trades' net P&L, after charges" },
+    { k: 'perTrade', label: 'Per trade ₹', align: 'right', help: 'Net ÷ trades — the average result per trade, scratches included' },
+    { k: 'avgMargin', label: 'Avg margin ₹', align: 'right', help: 'Average ₹ blocked per structure at entry' },
+    { k: 'romPct', label: 'Per trade ÷ margin', align: 'right', help: 'Σ net ÷ Σ margin over trades that recorded a margin — return on the capital tied up' },
+    { k: 'costPct', label: 'Costs ÷ gross', align: 'right', help: 'Charges as a share of gross (pre-cost) profit. Over 100% means costs ate the whole edge; — means the row lost money before costs' },
 ];
 
 const tone = (v) => (num(v) > 0 ? 'text-success' : num(v) < 0 ? 'text-danger' : 'text-fg-4');
@@ -64,7 +114,7 @@ function Th({ col, sort, onSort }) {
     return (
         <th className={`${col.align === 'right' ? 'text-right' : 'text-left'} cursor-pointer select-none hover:text-fg-3 ${on ? 'text-fg-3' : ''}`}
             onClick={() => onSort(col.k)}
-            title={`Sort by ${col.label}`}>
+            title={`${col.help ? `${col.help}. ` : ''}Click to sort by ${col.label}.`}>
             {col.label}{on ? (sort.dir === 'desc' ? ' ▾' : ' ▴') : ''}
         </th>
     );
@@ -73,9 +123,13 @@ function Th({ col, sort, onSort }) {
 export default function ResultsAnalytics({
     tradeMode = 'all', deploymentId = 'all', symbol = 'all',
     templateFilter = 'all', templates = [],
+    // Controlled by the page when given (Multi-Leg Results scopes its whole page
+    // with one window); otherwise the panel keeps its own (Live Portfolio).
+    days: daysProp,
 }) {
     const ct = useChartTheme();
-    const [days, setDays] = useState('all');
+    const [ownDays, setDays] = useState('all');
+    const days = daysProp !== undefined ? daysProp : ownDays;
     const [nonce, setNonce] = useState(0);
     const [res, setRes] = useState({ key: null, data: null, err: null });
     const [tab, setTab] = useState(0);
@@ -90,21 +144,53 @@ export default function ResultsAnalytics({
         [deploymentId, tradeMode, symbol, days, templateFilter, nonce],
     );
 
-    useEffect(() => {
-        let dead = false;
-        const params = {};
-        if (deploymentId && deploymentId !== 'all') params.deploymentId = deploymentId;
-        if (tradeMode && tradeMode !== 'all') params.trade_mode = tradeMode;
-        if (symbol && symbol !== 'all') params.symbol = symbol;
-        if (days !== 'all') params.days = days;
+    const params = useMemo(() => {
+        const p = {};
+        if (deploymentId && deploymentId !== 'all') p.deploymentId = deploymentId;
+        if (tradeMode && tradeMode !== 'all') p.trade_mode = tradeMode;
+        if (symbol && symbol !== 'all') p.symbol = symbol;
+        if (days !== 'all') p.days = days;
         // the endpoint honours `template` now, so the Structure filter reaches
         // these figures instead of only the table below
-        if (templateFilter && templateFilter !== 'all') params.template = templateFilter;
+        if (templateFilter && templateFilter !== 'all') p.template = templateFilter;
+        return p;
+    }, [deploymentId, tradeMode, symbol, days, templateFilter]);
+
+    useEffect(() => {
+        let dead = false;
         axios.get(`${API_URL}/multileg/analytics`, { params })
             .then((r) => { if (!dead) setRes({ key: reqKey, data: r.data || null, err: null }); })
             .catch((e) => { if (!dead) setRes({ key: reqKey, data: null, err: e.response?.data?.error || e.message }); });
         return () => { dead = true; };
-    }, [reqKey, deploymentId, tradeMode, symbol, days, templateFilter]);
+    }, [reqKey, params]);
+
+    // ── Drill-down: a bucket opened to show the strategies in it ────────────
+    // Fetched per row on demand (`drill`/`key`) under the SAME filters — every
+    // row's split at once is ~14x the payload for rows nobody opens. Keyed to
+    // the request, so a filter change closes everything instead of showing the
+    // previous filter's strategies under the new figures.
+    const [drill, setDrill] = useState({ reqKey: null, open: {} });
+    const openRows = drill.reqKey === reqKey ? drill.open : {};
+    const toggleRow = (label, key) => {
+        const id = `${label}::${key}`;
+        if (openRows[id]) {
+            setDrill(d => { const o = { ...(d.reqKey === reqKey ? d.open : {}) }; delete o[id]; return { reqKey, open: o }; });
+            return;
+        }
+        setDrill(d => ({ reqKey, open: { ...(d.reqKey === reqKey ? d.open : {}), [id]: { loading: true } } }));
+        axios.get(`${API_URL}/multileg/analytics`, { params: { ...params, drill: label, key } })
+            .then((r) => setDrill(d => (d.reqKey !== reqKey || !d.open[id] ? d
+                : { reqKey, open: { ...d.open, [id]: { children: Array.isArray(r.data?.children) ? r.data.children : [] } } })))
+            .catch((e) => setDrill(d => (d.reqKey !== reqKey || !d.open[id] ? d
+                : { reqKey, open: { ...d.open, [id]: { err: e.response?.data?.error || e.message } } })));
+    };
+    // Inside one deployment's results there is nothing to split by deployment.
+    const canDrill = !deploymentId || deploymentId === 'all';
+
+    // Scorecard (Open now + Strategies) — same filters and window, refreshed
+    // with the rest of the panel.
+    const sc = useScorecard(params, nonce);
+    const [moreFigures, setMoreFigures] = useLocalStorage('multileg:results:moreFigures', false, { validate: (v) => typeof v === 'boolean' });
 
     const fresh = res.key === reqKey;
     const loading = !fresh;
@@ -143,7 +229,7 @@ export default function ResultsAnalytics({
     // 'all' means "span the whole data set", which <PnlCalendar> spells `null`.
     const calendarDays = days === 'all' ? null : (Number(days) || null);
     const rows = useMemo(() => {
-        const list = Array.isArray(active?.rows) ? [...active.rows] : [];
+        const list = Array.isArray(active?.rows) ? active.rows.map((r) => ({ ...r, costPct: costPctOf(r) })) : [];
         const dir = sort.dir === 'desc' ? -1 : 1;
         return list.sort((a, b) => {
             if (sort.k === 'key') return dir * String(a.key ?? '').localeCompare(String(b.key ?? ''));
@@ -166,190 +252,300 @@ export default function ResultsAnalytics({
 
     const chartTip = ct.tooltipStyle({ fontSize: ct.type['3xs'] });
 
+    const hasTrades = !!summary && summary.trades > 0;
+    const card = 'bg-surface rounded-xl border border-line p-4';
+    const costShare = num(summary?.grossPnl) > 0 ? Math.round((num(summary.charges) / num(summary.grossPnl)) * 100) : null;
+
     return (
-        <div className="bg-surface rounded-xl border border-line p-4 space-y-4">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="text-sm font-semibold text-fg">
-                    Analytics <span className="text-fg-5 font-normal text-2xs">— booked round-trips only, quarantined fills excluded</span>
-                </div>
-                <div className="flex items-center gap-1">
-                    {DAY_OPTS.map((o) => (
-                        <button key={String(o.v)} onClick={() => setDays(o.v)}
-                            className={`text-3xs px-2 py-0.5 rounded border ${days === o.v
-                                ? 'border-primary bg-primary/15 text-primary-ink'
-                                : 'border-line-2 bg-slate-800 text-fg-5 hover:text-fg-3'}`}>{o.label}</button>
-                    ))}
-                    <button onClick={() => setNonce((n) => n + 1)}
-                        className="ml-1 px-2 py-0.5 rounded border border-line-2 bg-slate-800 text-3xs text-fg-4 hover:text-fg flex items-center gap-1">
-                        <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} /> Refresh
-                    </button>
-                </div>
-            </div>
+        <div className="space-y-4">
+            {/* 0 ── what is open right now (booked figures below exclude it) */}
+            <OpenNow sc={sc} templates={templates} />
 
-            {templateFilter !== 'all' && (
-                <div className="text-3xs text-fg-5 border border-line-0 rounded px-2 py-1 bg-slate-800/30">
-                    Filtered to <span className="text-fg-3">{templates.find((t) => t.key === templateFilter)?.name || templateFilter}</span>.
-                    Every figure below covers only that structure.
-                </div>
-            )}
-
-            {err ? <div className="text-xs text-danger">Analytics failed: {err}</div>
-                : !summary ? <div className="text-xs text-fg-5">{loading ? 'Loading…' : 'No analytics available.'}</div>
-                : summary.trades === 0 ? (
-                    <div className="text-xs text-fg-5">
-                        No booked round-trips in this window{days !== 'all' ? ` (last ${days} days)` : ''}.
-                        {num(summary.excludedQuarantined) > 0 ? ` ${summary.excludedQuarantined} quarantined trade(s) were excluded.` : ''}
+            {/* 1 ── Summary: five headline figures, the cost of trading, the rest on demand */}
+            <section className={`${card} space-y-3`} aria-labelledby="ml-summary-h">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                    <h2 id="ml-summary-h" className="text-sm font-semibold text-fg">
+                        Summary <span className="text-fg-5 font-normal text-2xs">— booked round-trips only, quarantined fills excluded</span>
+                    </h2>
+                    <div className="flex items-center gap-1">
+                        {daysProp === undefined && DAY_OPTS.map((o) => (
+                            <button key={String(o.v)} onClick={() => setDays(o.v)} aria-pressed={days === o.v}
+                                className={`text-3xs px-2 py-0.5 rounded border ${days === o.v
+                                    ? 'border-primary bg-primary/15 text-primary-ink'
+                                    : 'border-line-2 bg-slate-800 text-fg-5 hover:text-fg-3'}`}>{o.label}</button>
+                        ))}
+                        <button onClick={() => setNonce((n) => n + 1)}
+                            className="ml-1 px-2 py-0.5 rounded border border-line-2 bg-slate-800 text-3xs text-fg-4 hover:text-fg flex items-center gap-1">
+                            <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} /> Refresh
+                        </button>
                     </div>
-                ) : (
-                    <>
-                        {/* 1 ── Summary tiles */}
-                        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3">
-                            <Tile label="Net P&L" value={rup(summary.netPnl)} good={num(summary.netPnl) > 0} bad={num(summary.netPnl) < 0} />
-                            <Tile label="Per trade" value={rup(summary.perTrade)}
-                                good={num(summary.perTrade) > 0} bad={num(summary.perTrade) < 0}
-                                title="Total net ÷ number of trades — the true mean, scratches included. Deliberately NOT winRate×avgWin + (1−winRate)×avgLoss, which counts every ₹0 scratch as an average loss." />
-                            <Tile label="Win rate" value={num(summary.winRate) == null ? '—' : `${fmt(summary.winRate)}%`}
-                                good={num(summary.winRate) >= 50} bad={num(summary.winRate) < 50} />
-                            <Tile label="Profit factor" value={summary.profitFactor == null ? '—' : fmt(summary.profitFactor, 2)}
-                                good={num(summary.profitFactor) >= 1.3} bad={num(summary.profitFactor) != null && num(summary.profitFactor) < 1}
-                                title={summary.profitFactor == null ? 'Undefined — there are no losing trades in this window.' : 'Gross wins ÷ gross losses.'} />
-                            <Tile label="Max drawdown" value={rup(summary.maxDrawdown)} bad={num(summary.maxDrawdown) < 0} />
-                            <Tile label="Per trade ÷ margin" value={num(summary.romPct) == null ? '—' : `${fmt(summary.romPct, 2)}%`}
-                                good={num(summary.romPct) > 0} bad={num(summary.romPct) < 0}
-                                title="Per-trade net ÷ per-trade margin (Σ net ÷ Σ margin, over the trades that recorded one) — the average return a structure made on the capital it tied up. Margins are the engine's estimate unless the broker's SPAN was available." />
-                            <Tile label="Avg margin" value={num(summary.avgMargin) == null ? '—' : rup(summary.avgMargin)}
-                                title={num(summary.marginN) ? `₹ blocked per structure at entry, averaged over ${summary.marginN} of ${summary.trades} trades — ${num(summary.marginSpanN) || 0} from the broker's SPAN, the rest estimated.` : 'No margin was recorded on these trades.'} />
-                            {/* Gross sits NEXT to charges deliberately. On this book the
-                                gross is Rs9,552 and the charges Rs16,483 — costs are 1.7x the
-                                trading profit, which is invisible if you only ever see net. */}
-                            <Tile label="Gross (pre-cost)" value={rup(summary.grossPnl)}
-                                good={num(summary.grossPnl) > 0} bad={num(summary.grossPnl) < 0}
-                                title="Profit before brokerage, STT, exchange and stamp charges. Compare it with the charges tile beside it — if charges are a large fraction of gross, the edge is being spent on costs." />
-                            <Tile label="Charges paid" value={rup(summary.charges)} bad
-                                title={num(summary.grossPnl) > 0
-                                    ? `${Math.round((num(summary.charges) / num(summary.grossPnl)) * 100)}% of gross profit`
-                                    : 'Round-trip costs across every trade in this window.'} />
-                            <Tile label="Avg hold" value={num(summary.avgHoldHours) != null ? `${fmt(summary.avgHoldHours, 1)} h` : '—'}
-                                title="Mean time a structure stayed open, in hours." />
-                            <Tile label="Best trade" value={rup(summary.bestTrade)} good={num(summary.bestTrade) > 0} />
-                            <Tile label="Worst trade" value={rup(summary.worstTrade)} bad={num(summary.worstTrade) < 0} />
-                            <Tile label="Trades" value={fmt(summary.trades)} />
-                            <Tile label="Trading days" value={fmt(summary.tradingDays)} />
-                            <Tile label="Avg win" value={rup(summary.avgWin)} good />
-                            <Tile label="Avg loss" value={rup(summary.avgLoss)} bad />
-                            <Tile label="Best day" value={rup(summary.bestDay)} good={num(summary.bestDay) > 0} />
-                            <Tile label="Worst day" value={rup(summary.worstDay)} bad={num(summary.worstDay) < 0} />
-                        </div>
+                </div>
 
-                        {num(summary.excludedQuarantined) > 0 && (
-                            <div className="text-2xs text-warning border border-amber-800/60 bg-amber-950/10 rounded px-2 py-1.5">
-                                ⚠ {summary.excludedQuarantined} quarantined trade{num(summary.excludedQuarantined) === 1 ? '' : 's'} excluded
-                                from every figure on this panel. They were booked on prices that never existed, so any P&L they
-                                carry is fiction. They are still listed in the trades table below, struck through, so the correction
-                                stays visible.
+                {templateFilter !== 'all' && (
+                    <div className="text-3xs text-fg-5 border border-line-0 rounded px-2 py-1 bg-slate-800/30">
+                        Filtered to <span className="text-fg-3">{templates.find((t) => t.key === templateFilter)?.name || templateFilter}</span>.
+                        Every figure below covers only that structure.
+                    </div>
+                )}
+
+                {err ? <div className="text-xs text-danger">Analytics failed: {err}</div>
+                    : !summary ? <div className="text-xs text-fg-5">{loading ? 'Loading…' : 'No analytics available.'}</div>
+                    : summary.trades === 0 ? (
+                        <div className="text-xs text-fg-5">
+                            No booked round-trips in this window{days !== 'all' ? ` (last ${days} days)` : ''}.
+                            {num(summary.excludedQuarantined) > 0 ? ` ${summary.excludedQuarantined} quarantined trade(s) were excluded.` : ''}
+                        </div>
+                    ) : (
+                        <>
+                            {/* the five that answer "is this book working?" */}
+                            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
+                                <HeroTile label="Net P&L" value={rup(summary.netPnl)} tone={num(summary.netPnl)} sub={`${fmt(summary.trades)} trades · ${fmt(summary.tradingDays)} exit days`} />
+                                <HeroTile label="Per trade" value={rup(summary.perTrade)} tone={num(summary.perTrade)}
+                                    title="Total net ÷ number of trades — the true mean, scratches included. Deliberately NOT winRate×avgWin + (1−winRate)×avgLoss, which counts every ₹0 scratch as an average loss." />
+                                <HeroTile label="Win rate" value={num(summary.winRate) == null ? '—' : `${fmt(summary.winRate)}%`}
+                                    sub={`avg win ${rup(summary.avgWin)} · avg loss ${rup(summary.avgLoss)}`} />
+                                <HeroTile label="Profit factor" value={summary.profitFactor == null ? '—' : fmt(summary.profitFactor, 2)}
+                                    tone={summary.profitFactor == null ? null : num(summary.profitFactor) - 1}
+                                    title={summary.profitFactor == null ? 'Undefined — there are no losing trades in this window.' : 'Gross wins ÷ gross losses. Above 1 makes money.'} />
+                                <HeroTile label="Max drawdown" value={rup(summary.maxDrawdown)} tone={num(summary.maxDrawdown) < 0 ? -1 : null}
+                                    title="Deepest fall of the equity curve from a previous peak, by exit day." />
                             </div>
-                        )}
 
-                        {/* 2 ── Daily P&L */}
-                        <div>
-                            <div className="text-2xs font-semibold text-fg-3 mb-1">Daily net P&L (₹, by exit day IST)</div>
-                            <ZoomableChart data={dailyRows} height={200}>
-                                <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
-                                    <XAxis dataKey="label" tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} minTickGap={26} />
-                                    <YAxis width={54} tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} tickFormatter={rupeeTick} />
-                                    {/* Returning null from a recharts formatter DROPS that item, which
-                                        is how the empty half of the up/down pair stays out of the
-                                        tooltip instead of printing "down —". */}
-                                    <Tooltip contentStyle={chartTip}
-                                        formatter={(v, n) => (num(v) == null ? null : [rup(v), n === 'up' || n === 'down' ? 'net' : n])}
-                                        labelFormatter={(l, p) => {
-                                            const d = p?.[0]?.payload;
-                                            return d ? `${d.date} · ${fmt(d.trades)} trade(s) · ${fmt(d.winRate)}% win` : String(l);
-                                        }} />
-                                    <ReferenceLine y={0} stroke={ct.axis} ifOverflow="extendDomain" />
-                                    <Bar name="up" dataKey="up" stackId="net" fill={ct.diverging.positive} isAnimationActive={false} />
-                                    <Bar name="down" dataKey="down" stackId="net" fill={ct.diverging.negative} isAnimationActive={false} />
-                                </ComposedChart>
-                            </ZoomableChart>
-                        </div>
+                            {/* the cost of trading, said out loud — net alone hides it */}
+                            <CostLine gross={num(summary.grossPnl)} charges={num(summary.charges)} share={costShare} />
 
-                        {/* 3 ── Equity + drawdown, one x-axis */}
-                        <div>
-                            <div className="text-2xs font-semibold text-fg-3 mb-1">
-                                Equity curve <span className="text-fg-5 font-normal">— cumulative net, with the drawdown from peak shaded beneath</span>
-                            </div>
-                            <ZoomableChart data={dailyRows} height={230}>
-                                <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
-                                    <XAxis dataKey="label" tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} minTickGap={26} />
-                                    <YAxis width={54} tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} tickFormatter={rupeeTick} />
-                                    <Tooltip contentStyle={chartTip} formatter={(v, n) => (num(v) == null ? null : [rup(v), n])}
-                                        labelFormatter={(l, p) => p?.[0]?.payload?.date || String(l)} />
-                                    <Legend wrapperStyle={{ fontSize: ct.type['5xs'] }} />
-                                    {/* baseValue={0}: drawdown is ≤ 0 and must hang from the
-                                        zero line, not from the axis floor — otherwise the
-                                        shading inverts on a book that never recovered. */}
-                                    <ReferenceLine y={0} stroke={ct.axis} ifOverflow="extendDomain" />
-                                    <Area type="monotone" name="drawdown" dataKey="drawdown" baseValue={0}
-                                        stroke={ct.status.critical} strokeOpacity={0.45} strokeWidth={1}
-                                        fill={ct.status.critical} fillOpacity={0.16} isAnimationActive={false} />
-                                    <Line type="monotone" name="equity" dataKey="equity" stroke={ct.mark.equity}
-                                        dot={false} strokeWidth={2} isAnimationActive={false} />
-                                </ComposedChart>
-                            </ZoomableChart>
-                        </div>
-
-                        {/* 4 ── Breakdowns + the day-grid calendar (last tab) */}
-                        {tabs.length > 0 && (
                             <div>
-                                <div className="flex flex-wrap gap-1 border-b border-line mb-1">
-                                    {tabs.map((b, i) => (
-                                        <button key={b.label || i} onClick={() => setTab(i)}
-                                            className={`text-2xs px-2.5 py-1 rounded-t border-b-2 ${i === tabIdx
-                                                ? 'border-primary text-primary-ink bg-primary/10'
-                                                : 'border-transparent text-fg-5 hover:text-fg-3'}`}>{b.label}</button>
-                                    ))}
-                                </div>
-                                {activeTab?.calendar ? (
-                                    <div className="pt-2">
-                                        <PnlCalendar daily={daily} rangeDays={calendarDays} title={null} />
-                                        <div className="text-3xs text-fg-5 mt-1">
-                                            One cell per calendar day, by exit day IST. Grey = no exits that day;
-                                            the darkest shade is a day past ±₹5,000.
-                                        </div>
-                                    </div>
-                                ) : rows.length === 0 ? (
-                                    <div className="text-3xs text-fg-5 py-2">Nothing to break down here.</div>
-                                ) : (
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full text-2xs text-fg-3">
-                                            <thead><tr className="text-fg-5">
-                                                {COLS.map((c) => <Th key={c.k} col={c} sort={sort} onSort={onSort} />)}
-                                            </tr></thead>
-                                            <tbody>
-                                                {rows.map((r, i) => (
-                                                    <tr key={`${r.key}-${i}`} className="border-t border-line-0">
-                                                        <td className="truncate max-w-[11rem]" title={String(r.key ?? '')}>{rowLabel(r.key)}</td>
-                                                        <td className="text-right">{fmt(r.trades)}</td>
-                                                        <td className="text-right text-fg-4">{num(r.winRate) == null ? '—' : `${fmt(r.winRate)}%`}</td>
-                                                        <td className={`text-right font-semibold ${num(r.net) > 0 ? 'text-success' : num(r.net) < 0 ? 'text-danger' : 'text-fg-4'}`}>{rup(r.net)}</td>
-                                                        <td className={`text-right ${num(r.perTrade) > 0 ? 'text-success' : num(r.perTrade) < 0 ? 'text-danger' : 'text-fg-4'}`}>{rup(r.perTrade)}</td>
-                                                        <td className="text-right text-fg-4" title={marginCoverage(r)}>
-                                                            {num(r.avgMargin) == null ? '—' : rup(r.avgMargin)}
-                                                            {num(r.marginN) != null && num(r.marginN) < num(r.trades) && <span className="text-4xs text-warning"> {r.marginN}/{r.trades}</span>}
-                                                        </td>
-                                                        <td className={`text-right ${tone(r.romPct)}`} title={marginCoverage(r)}>{num(r.romPct) == null ? '—' : `${fmt(r.romPct, 2)}%`}</td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
+                                <button type="button" onClick={() => setMoreFigures((v) => !v)} aria-expanded={moreFigures}
+                                    className="text-2xs text-fg-4 hover:text-fg inline-flex items-center gap-1">
+                                    {moreFigures ? <ChevronDown className="w-3 h-3" aria-hidden="true" /> : <ChevronRight className="w-3 h-3" aria-hidden="true" />}
+                                    {moreFigures ? 'Fewer figures' : 'More figures (margin, hold, best/worst, gross, charges…)'}
+                                </button>
+                                {moreFigures && (
+                                    <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3 mt-2">
+                                        <Tile label="Per trade ÷ margin" value={num(summary.romPct) == null ? '—' : `${fmt(summary.romPct, 2)}%`}
+                                            good={num(summary.romPct) > 0} bad={num(summary.romPct) < 0}
+                                            title="Per-trade net ÷ per-trade margin (Σ net ÷ Σ margin, over the trades that recorded one) — the average return a structure made on the capital it tied up. Margins are the engine's estimate unless the broker's SPAN was available." />
+                                        <Tile label="Avg margin" value={num(summary.avgMargin) == null ? '—' : rup(summary.avgMargin)}
+                                            title={num(summary.marginN) ? `₹ blocked per structure at entry, averaged over ${summary.marginN} of ${summary.trades} trades — ${num(summary.marginSpanN) || 0} from the broker's SPAN, the rest estimated.` : 'No margin was recorded on these trades.'} />
+                                        <Tile label="Gross (pre-cost)" value={rup(summary.grossPnl)}
+                                            good={num(summary.grossPnl) > 0} bad={num(summary.grossPnl) < 0}
+                                            title="Profit before brokerage, STT, exchange and stamp charges." />
+                                        <Tile label="Charges paid" value={rup(summary.charges)} bad
+                                            title={costShare != null ? `${costShare}% of gross profit` : 'Round-trip costs across every trade in this window.'} />
+                                        <Tile label="Avg hold" value={num(summary.avgHoldHours) != null ? `${fmt(summary.avgHoldHours, 1)} h` : '—'}
+                                            title="Mean time a structure stayed open, in hours." />
+                                        <Tile label="Trades" value={fmt(summary.trades)} />
+                                        <Tile label="Best trade" value={rup(summary.bestTrade)} good={num(summary.bestTrade) > 0} />
+                                        <Tile label="Worst trade" value={rup(summary.worstTrade)} bad={num(summary.worstTrade) < 0} />
+                                        <Tile label="Avg win" value={rup(summary.avgWin)} good />
+                                        <Tile label="Avg loss" value={rup(summary.avgLoss)} bad />
+                                        <Tile label="Best day" value={rup(summary.bestDay)} good={num(summary.bestDay) > 0} />
+                                        <Tile label="Worst day" value={rup(summary.worstDay)} bad={num(summary.worstDay) < 0} />
+                                        <Tile label="Trading days" value={fmt(summary.tradingDays)} title="Days with at least one exit." />
                                     </div>
                                 )}
                             </div>
+
+                            {num(summary.excludedQuarantined) > 0 && (
+                                <div className="text-2xs text-warning border border-amber-800/60 bg-amber-950/10 rounded px-2 py-1.5">
+                                    ⚠ {summary.excludedQuarantined} quarantined trade{num(summary.excludedQuarantined) === 1 ? '' : 's'} excluded
+                                    from every figure on this page. They were booked on prices that never existed, so any P&L they
+                                    carry is fiction. They are still listed in the trades table, struck through, so the correction
+                                    stays visible.
+                                </div>
+                            )}
+                        </>
+                    )}
+            </section>
+
+            {/* 2 ── which strategies are working (and Compare) */}
+            <StrategyScorecard sc={sc} templates={templates} single={!canDrill} />
+
+            {hasTrades && (
+                <>
+                    {/* 3 ── P&L over time */}
+                    <section className={`${card} space-y-4`} aria-label="P&L over time">
+{/* 2 ── Daily P&L */}
+                <div>
+                    <div className="text-2xs font-semibold text-fg-3 mb-1">Daily net P&L (₹, by exit day IST)</div>
+                    <ZoomableChart data={dailyRows} height={200}>
+                        <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
+                            <XAxis dataKey="label" tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} minTickGap={26} />
+                            <YAxis width={54} tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} tickFormatter={rupeeTick} />
+                            {/* Returning null from a recharts formatter DROPS that item, which
+                                is how the empty half of the up/down pair stays out of the
+                                tooltip instead of printing "down —". */}
+                            <Tooltip contentStyle={chartTip}
+                                formatter={(v, n) => (num(v) == null ? null : [rup(v), n === 'up' || n === 'down' ? 'net' : n])}
+                                labelFormatter={(l, p) => {
+                                    const d = p?.[0]?.payload;
+                                    return d ? `${d.date} · ${fmt(d.trades)} trade(s) · ${fmt(d.winRate)}% win` : String(l);
+                                }} />
+                            <ReferenceLine y={0} stroke={ct.axis} ifOverflow="extendDomain" />
+                            <Bar name="up" dataKey="up" stackId="net" fill={ct.diverging.positive} isAnimationActive={false} />
+                            <Bar name="down" dataKey="down" stackId="net" fill={ct.diverging.negative} isAnimationActive={false} />
+                        </ComposedChart>
+                    </ZoomableChart>
+                </div>
+
+                {/* 3 ── Equity + drawdown, one x-axis */}
+                <div>
+                    <div className="text-2xs font-semibold text-fg-3 mb-1">
+                        Equity curve <span className="text-fg-5 font-normal">— cumulative net, with the drawdown from peak shaded beneath</span>
+                    </div>
+                    <ZoomableChart data={dailyRows} height={230}>
+                        <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
+                            <XAxis dataKey="label" tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} minTickGap={26} />
+                            <YAxis width={54} tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} tickFormatter={rupeeTick} />
+                            <Tooltip contentStyle={chartTip} formatter={(v, n) => (num(v) == null ? null : [rup(v), n])}
+                                labelFormatter={(l, p) => p?.[0]?.payload?.date || String(l)} />
+                            <Legend wrapperStyle={{ fontSize: ct.type['5xs'] }} />
+                            {/* baseValue={0}: drawdown is ≤ 0 and must hang from the
+                                zero line, not from the axis floor — otherwise the
+                                shading inverts on a book that never recovered. */}
+                            <ReferenceLine y={0} stroke={ct.axis} ifOverflow="extendDomain" />
+                            <Area type="monotone" name="drawdown" dataKey="drawdown" baseValue={0}
+                                stroke={ct.status.critical} strokeOpacity={0.45} strokeWidth={1}
+                                fill={ct.status.critical} fillOpacity={0.16} isAnimationActive={false} />
+                            <Line type="monotone" name="equity" dataKey="equity" stroke={ct.mark.equity}
+                                dot={false} strokeWidth={2} isAnimationActive={false} />
+                        </ComposedChart>
+                    </ZoomableChart>
+                </div>
+                    </section>
+
+                    {/* 4 ── where the P&L came from */}
+                    <section className={card} aria-labelledby="ml-breakdowns-h">
+                        <h2 id="ml-breakdowns-h" className="text-sm font-semibold text-fg mb-2">
+                            Breakdowns <span className="text-fg-5 font-normal text-2xs">— the same trades cut different ways; open a row to see the strategies in it</span>
+                        </h2>
+{tabs.length > 0 && (
+                    <div>
+                        <div className="flex flex-wrap gap-1 border-b border-line mb-1">
+                            {tabs.map((b, i) => (
+                                <button key={b.label || i} onClick={() => setTab(i)}
+                                    className={`text-2xs px-2.5 py-1 rounded-t border-b-2 ${i === tabIdx
+                                        ? 'border-primary text-primary-ink bg-primary/10'
+                                        : 'border-transparent text-fg-5 hover:text-fg-3'}`}>{b.label}</button>
+                            ))}
+                        </div>
+                        {activeTab?.calendar ? (
+                            <div className="pt-2">
+                                <PnlCalendar daily={daily} rangeDays={calendarDays} title={null} />
+                                <div className="text-3xs text-fg-5 mt-1">
+                                    One cell per calendar day, by exit day IST. Grey = no exits that day;
+                                    the darkest shade is a day past ±₹5,000.
+                                </div>
+                            </div>
+                        ) : rows.length === 0 ? (
+                            <div className="text-3xs text-fg-5 py-2">Nothing to break down here.</div>
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-2xs text-fg-3">
+                                    <thead><tr className="text-fg-5">
+                                        {COLS.map((c) => <Th key={c.k} col={c} sort={sort} onSort={onSort} />)}
+                                    </tr></thead>
+                                    <tbody>
+                                        {rows.map((r, i) => {
+                                            const id = `${active?.label}::${r.key}`;
+                                            const st = openRows[id];
+                                            const drillable = canDrill && num(r.strategies) > 0;
+                                            return (
+                                                <React.Fragment key={`${r.key}-${i}`}>
+                                                    <tr className={`border-t border-line-0 ${st ? 'bg-slate-800/30' : ''}`}>
+                                                        <td className="max-w-[16rem]" title={String(r.key ?? '')}>
+                                                            {drillable ? (
+                                                                <button type="button" onClick={() => toggleRow(active.label, r.key)} aria-expanded={!!st}
+                                                                    className="inline-flex items-center gap-1 text-left hover:text-fg max-w-full"
+                                                                    title={`Show the ${r.strategies} strateg${r.strategies === 1 ? 'y' : 'ies'} in this row`}>
+                                                                    {st ? <ChevronDown className="w-3 h-3 shrink-0" aria-hidden="true" /> : <ChevronRight className="w-3 h-3 shrink-0" aria-hidden="true" />}
+                                                                    <span className="truncate">{rowLabel(r.key)}</span>
+                                                                    <span className="text-fg-5 shrink-0">· {r.strategies} strateg{r.strategies === 1 ? 'y' : 'ies'}</span>
+                                                                </button>
+                                                            ) : r.deploymentId ? (
+                                                                <Link to={deploymentHref(r.deploymentId)} onClick={scrollMainTop}
+                                                                    className="truncate block text-primary-ink hover:underline" title="Open this deployment's trades">
+                                                                    {rowLabel(r.key)}
+                                                                </Link>
+                                                            ) : <span className="truncate block">{rowLabel(r.key)}</span>}
+                                                        </td>
+                                                        <FigureCells r={r} />
+                                                    </tr>
+                                                    {st?.loading && (
+                                                        <tr><td colSpan={COLS.length} className="pl-6 py-1 text-fg-5">Loading strategies…</td></tr>
+                                                    )}
+                                                    {st?.err && (
+                                                        <tr><td colSpan={COLS.length} className="pl-6 py-1 text-danger">Could not load: {st.err}</td></tr>
+                                                    )}
+                                                    {st?.children?.map((c) => (
+                                                        <tr key={`${id}::${c.deploymentId || c.key}`} className="border-t border-line-0/50 bg-slate-900/40 text-fg-4">
+                                                            <td className="pl-5 py-0.5 max-w-[16rem]">
+                                                                {c.deploymentId ? (
+                                                                    <Link to={deploymentHref(c.deploymentId)} onClick={scrollMainTop}
+                                                                        className="block truncate text-primary-ink hover:underline" title={`Open ${c.key}'s trades`}>{c.key}</Link>
+                                                                ) : <span className="block truncate">{c.key}</span>}
+                                                                <span className="block truncate text-4xs text-fg-5">
+                                                                    {templates.find((t) => t.key === c.template)?.name || c.template || '—'} · {shortSymbol(c.symbol)}
+                                                                </span>
+                                                            </td>
+                                                            <FigureCells r={c} />
+                                                        </tr>
+                                                    ))}
+                                                </React.Fragment>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
                         )}
-                    </>
+                    </div>
                 )}
+                    </section>
+
+                    {/* 5 ── how trades travelled before they exited */}
+                    <section className={card} aria-labelledby="ml-exc-h">
+                        <h2 id="ml-exc-h" className="text-sm font-semibold text-fg mb-2">
+                            How trades travelled <span className="text-fg-5 font-normal text-2xs">— worst and best point while open, and what a stop or target would have done</span>
+                        </h2>
+                        <ExcursionsPanel excursions={data?.excursions} />
+                    </section>
+                </>
+            )}
         </div>
+    );
+}
+
+/** One of the five headline figures — larger, toned by sign. `tone` is a number
+ *  whose SIGN picks the colour (null = neutral). */
+function HeroTile({ label, value, sub, tone = null, title }) {
+    const t = tone == null ? 'text-fg' : tone > 0 ? 'text-success' : tone < 0 ? 'text-danger' : 'text-fg';
+    return (
+        <div className="rounded-lg border border-line bg-slate-800/60 p-3" title={title}>
+            <div className="text-2xs text-fg-5">{label}</div>
+            <div className={`text-xl font-semibold tabular-nums leading-tight mt-0.5 ${t}`}>{value}</div>
+            {sub ? <div className="text-3xs text-fg-5 mt-1 truncate">{sub}</div> : null}
+        </div>
+    );
+}
+
+/** What trading cost, against what it made before costs. */
+function CostLine({ gross, charges, share }) {
+    if (gross == null || charges == null) return null;
+    if (gross <= 0) {
+        return (
+            <p className="text-xs text-danger">
+                Losing before costs: gross {rup(gross)}, then {rup(charges)} of charges on top.
+            </p>
+        );
+    }
+    const tone = share >= 100 ? 'text-danger' : share >= 30 ? 'text-warning' : 'text-fg-3';
+    return (
+        <p className={`text-xs ${tone}`}>
+            Charges took <span className="font-semibold">{share}%</span> of gross profit — {rup(charges)} of {rup(gross)}.
+            {share >= 100 ? ' Costs ate the whole edge: net is negative because of charges, not the trades.' : ''}
+            <span className="text-fg-5"> The Costs ÷ gross column in Breakdowns and Strategies shows where.</span>
+        </p>
     );
 }
