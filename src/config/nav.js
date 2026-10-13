@@ -37,6 +37,7 @@ import {
     LayoutDashboard,
     Layers,
     LineChart,
+    ScrollText,
     Settings,
     ShieldCheck,
     Square,
@@ -85,8 +86,9 @@ const AiScore = lazy(() => import('../pages/AiScore'));
 const Alerts = lazy(() => import('../pages/Alerts'));
 const DataManager = lazy(() => import('../components/DataManager'));
 const ParityAuditDashboard = lazy(() => import('../components/ParityAuditDashboard'));
+const MarketRules = lazy(() => import('../pages/MarketRules'));
 
-/** The sidebar rail, in order. Twelve entries, one per navigable page. */
+/** The sidebar rail, in order. One entry per navigable page. */
 export const NAV_ITEMS = [
     { path: '/', icon: LayoutDashboard, labelKey: 'nav.dashboard', component: Dashboard },
     // Sits directly under Dashboard: Dashboard is "what is running right now",
@@ -112,6 +114,9 @@ export const NAV_ITEMS = [
     // engines: that page runs the AI, this one says whether it has been worth it.
     { path: '/ai-score', icon: Brain, labelKey: 'nav.aiScore', component: AiScore },
     { path: '/parity-audit', icon: ShieldCheck, labelKey: 'nav.parityAudit', component: ParityAuditDashboard },
+    // Next to the parity audit: both answer "is what the code believes still true?" —
+    // this one for exchange rules (lots, sessions, holidays, MCX margins, circulars).
+    { path: '/market-rules', icon: ScrollText, labelKey: 'nav.marketRules', component: MarketRules },
     { path: '/data-manager', icon: Square, labelKey: 'nav.dataManager', component: DataManager },
     { path: '/settings', icon: Settings, labelKey: 'nav.settings', component: SettingsPage },
 ];

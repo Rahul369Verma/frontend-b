@@ -45,6 +45,9 @@ export default function ProgressGrid({ progress = {}, cells = null, symbols = []
           {etaLabel && <span className="text-warning">⏳ {etaLabel}</span>}
           {progress.cellsTotal ? <span>{progress.cellsDone || 0} of {progress.cellsTotal} strategy × index cells finished</span> : null}
         </div>
+        {(progress.current || 0) >= 20 && progress.tradesSeen === 0 && (
+          <p className="mt-1 text-sm text-warning" role="status">⚠ {progress.current} backtests and not one trade yet — check the capital (can it afford one lot?) and the dates.</p>
+        )}
         {progress.robustSoFar != null && (
           <p className="mt-1 text-sm text-success">So far: {progress.robustSoFar} strateg{progress.robustSoFar === 1 ? 'y holds' : 'ies hold'} up on at least {kDefault ?? 2} indexes</p>
         )}

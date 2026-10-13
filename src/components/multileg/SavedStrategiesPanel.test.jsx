@@ -11,7 +11,7 @@ const LIVE = new Map([['s1', { deployments: [{ _id: 'd1' }], trades: 4, net: 477
 const props = (over = {}) => ({
     list: LIST, templates: [], deployLots: 1, onDeployLots: vi.fn(), pending: {},
     openId: null, onToggle: vi.fn(), onLoad: vi.fn(), onDeploy: vi.fn(), onDelete: vi.fn(),
-    renderDetails: () => null, live: LIVE, ...over,
+    renderDetails: () => null, live: LIVE, defaultOpen: true, ...over,
 });
 
 describe('SavedStrategiesPanel — live results from deployments', () => {
@@ -32,5 +32,39 @@ describe('SavedStrategiesPanel — live results from deployments', () => {
         const names = screen.getAllByRole('row').slice(2).map(r => r.querySelector('td')?.textContent || '');
         expect(names[0]).toMatch(/october-Short Straddle/);
         expect(names[1]).toMatch(/goodSIC/);
+    });
+});
+
+describe('SavedStrategiesPanel — accordion', () => {
+    beforeEach(() => localStorage.clear());
+
+    it('is CLOSED by default: header with the count, no list, no toolbar', () => {
+        render(<SavedStrategiesPanel {...props({ defaultOpen: undefined })} />);
+        const toggle = screen.getByRole('button', { name: /Saved strategies \(2\)/ });
+        expect(toggle).toHaveAttribute('aria-expanded', 'false');
+        expect(screen.queryByText('goodSIC')).not.toBeInTheDocument();
+        expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+        // collapsing never hides a fact: the deployed count rides on the header
+        expect(toggle).toHaveTextContent('1 deployed');
+    });
+
+    it('opens on click and closes again', () => {
+        render(<SavedStrategiesPanel {...props({ defaultOpen: undefined })} />);
+        const toggle = screen.getByRole('button', { name: /Saved strategies/ });
+        fireEvent.click(toggle);
+        expect(toggle).toHaveAttribute('aria-expanded', 'true');
+        expect(screen.getByText('goodSIC')).toBeInTheDocument();
+        fireEvent.click(toggle);
+        expect(screen.queryByText('goodSIC')).not.toBeInTheDocument();
+    });
+
+    it('controlled: follows `open` and reports clicks through onOpenChange', () => {
+        const onOpenChange = vi.fn();
+        const { rerender } = render(<SavedStrategiesPanel {...props({ defaultOpen: undefined, open: false, onOpenChange })} />);
+        fireEvent.click(screen.getByRole('button', { name: /Saved strategies/ }));
+        expect(onOpenChange).toHaveBeenCalledWith(true);
+        expect(screen.queryByText('goodSIC')).not.toBeInTheDocument();   // parent has not opened it yet
+        rerender(<SavedStrategiesPanel {...props({ defaultOpen: undefined, open: true, onOpenChange })} />);
+        expect(screen.getByText('goodSIC')).toBeInTheDocument();
     });
 });

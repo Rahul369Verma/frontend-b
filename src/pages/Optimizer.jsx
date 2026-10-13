@@ -63,6 +63,19 @@ const NOISE_PARAM_KEYS = new Set([
 const SPOT_ARCHIVE_FROM = '2025-06-02', SPOT_ARCHIVE_TO = '2026-02-19';
 const MULTI_DEFAULT_WINDOW = { start_date: '2025-06-16', end_date: '2026-02-19' };
 
+// Why a strategy has no set to show — from the run's own drop counts, never a guess.
+const FAIL_WORDS = { trades: 'too few trades', winRate: 'win rate below the filter', drawdown: 'drawdown above the filter', sharpe: 'Sharpe below the filter', loss: 'lost money' };
+function noSetReason(g) {
+  const d = g.drop_stats || {};
+  const tried = g.trials || null;
+  if (d.capital && tried && d.capital >= tried) return `No set: all ${tried} settings made 0 trades — the capital couldn't afford one lot of this contract.`;
+  const fails = Object.entries(FAIL_WORDS).map(([k, w]) => [w, d[k] || (d.fail && d.fail[k]) || 0]).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+  const extra = d.capital ? ` · ${d.capital} made 0 trades for lack of capital` : '';
+  return fails.length
+    ? `No profitable set found${tried ? ` in ${tried} settings` : ''} — ${fails.slice(0, 3).map(([w, n]) => `${n} ${w}`).join(', ')}${extra}`
+    : `No profitable set found${extra}`;
+}
+
 const prettify = (key) =>
   String(key).split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 
@@ -1244,6 +1257,12 @@ export default function Optimizer() {
                 )}
                 <p className="text-fg-4">Overall {progress.current} of {progress.total}</p>
                 <p className="text-success font-medium">Found {progress.matches} sets that pass the filters{progress.strategyLabel ? ' in the current strategy' : ' so far'}</p>
+                {(progress.current || 0) >= 20 && progress.tradesSeen === 0 && (
+                  <p className="text-sm text-warning max-w-md" role="status">
+                    ⚠ {progress.current} settings tried and not one has made a single trade. Usually the capital can't afford one lot of this contract,
+                    or the date range has no data the strategy can trade — consider stopping and checking the capital and dates.
+                  </p>
+                )}
               </div>
 
               {progress.resumedFrom > 0 && <p className="text-2xs text-fg-4">♻️ Resumed from a checkpoint — {progress.resumedFrom} backtests were already done.</p>}
@@ -1509,7 +1528,7 @@ export default function Optimizer() {
                               </>
                             ) : (
                               <td className="p-2 text-fg-5 italic" colSpan={hasOos ? 9 : 8}>
-                                {g.error ? `Error: ${g.error}` : 'No profitable set found'}
+                                {g.error ? `Error: ${g.error}` : noSetReason(g)}
                               </td>
                             )}
                           </tr>
@@ -1608,6 +1627,17 @@ export default function Optimizer() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Entries the account couldn't afford (counted by the engine, never silent). */}
+              {(() => {
+                const n = strategyGroups.reduce((a, g) => a + ((g.drop_stats && (g.drop_stats.capitalSkippedEntries ?? g.drop_stats.capitalSkips)) || 0), 0);
+                return n > 0 ? (
+                  <div className="text-2xs text-warning" role="status">
+                    ⚠ {n.toLocaleString('en-IN')} entry signals across all settings weren't traded because the balance couldn't afford one lot at the time
+                    {results.runConfig?.capital != null ? ` (starting capital ₹${Number(results.runConfig.capital).toLocaleString('en-IN')})` : ''}. Results above only include the trades that could be paid for — raise capital or pick a smaller contract to see the rest.
+                  </div>
+                ) : null;
+              })()}
 
               {/* Skipped strategies note */}
               {results.skipped_strategies?.length > 0 && (

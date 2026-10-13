@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useId, useMemo, useRef, useState } from 'react';
 import { Save, Trash2, ChevronDown, ChevronRight, Search, X, ArrowDownWideNarrow, ArrowUpNarrowWide } from 'lucide-react';
 import { Chip } from '../viz/primitives';
 import { pnlTone } from '../viz/tokens';
@@ -282,7 +282,16 @@ function StrategyCard({ r, open, onToggle, renderDetails, actionProps }) {
 export default function SavedStrategiesPanel({
     list, templates, deployLots, onDeployLots, pending,
     openId, onToggle, onLoad, onDeploy, onDelete, renderDetails, live = null,
+    // Accordion. CLOSED by default (user, 13-Oct): the Deploy tab opens on the
+    // live deployments, not on a long list of recipes. Controlled when the
+    // parent passes `open` + `onOpenChange` (MultiLeg keeps it across tab
+    // switches); otherwise it manages itself from `defaultOpen`.
+    open: openProp, onOpenChange, defaultOpen = false,
 }) {
+    const [openLocal, setOpenLocal] = useState(defaultOpen);
+    const expanded = openProp ?? openLocal;
+    const setExpanded = (v) => { if (onOpenChange) onOpenChange(v); if (openProp === undefined) setOpenLocal(v); };
+    const bodyId = useId();
     const ref = useRef(null);
     const rem = useRemWidth(ref);
     const layout = rem == null || rem >= WIDE_REM ? 'wide' : rem >= MEDIUM_REM ? 'medium' : 'cards';
@@ -319,14 +328,21 @@ export default function SavedStrategiesPanel({
         : { key, dir: SORT_BY_KEY[key].dir }));
     const actionProps = { pending, onLoad, onDeploy, onDelete };
     const total = (list || []).length;
+    // what is behind the closed header, so collapsing never hides a fact
+    const deployedCount = live ? (list || []).filter(s => live.get(String(s._id))?.deployments?.length).length : 0;
 
     return (
         <div ref={ref} className="bg-surface rounded-xl border border-line p-4 mb-4">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-3">
-                <h2 className="text-sm font-semibold text-fg flex items-center gap-2 mr-auto">
-                    <Save className="w-4 h-4 text-sky-400" aria-hidden="true" /> Saved strategies ({total})
+            <div className={`flex flex-wrap items-center gap-x-4 gap-y-2 ${expanded ? 'mb-3' : ''}`}>
+                <h2 className="text-sm font-semibold text-fg mr-auto">
+                    <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-controls={bodyId}
+                        className="flex items-center gap-2 hover:text-sky-300" title={expanded ? 'Collapse' : 'Expand'}>
+                        {expanded ? <ChevronDown className="w-4 h-4 text-fg-4" aria-hidden="true" /> : <ChevronRight className="w-4 h-4 text-fg-4" aria-hidden="true" />}
+                        <Save className="w-4 h-4 text-sky-400" aria-hidden="true" /> Saved strategies ({total})
+                        {!expanded && deployedCount > 0 && <span className="text-2xs font-normal text-fg-5">· {deployedCount} deployed</span>}
+                    </button>
                 </h2>
-                {total > 0 && (
+                {expanded && total > 0 && (
                     <div className="flex flex-wrap items-center justify-end gap-2 grow min-w-0 max-w-full">
                         <label className="relative flex-1 basis-48 min-w-0 max-w-[24rem]">
                             <span className="sr-only">Filter saved strategies</span>
@@ -357,17 +373,17 @@ export default function SavedStrategiesPanel({
                 )}
             </div>
 
-            {total === 0 ? (
-                <div className="text-xs text-fg-5 py-4 text-center">Nothing saved yet — run a backtest on the Backtest tab and hit Save.</div>
+            {!expanded ? null : total === 0 ? (
+                <div id={bodyId} className="text-xs text-fg-5 py-4 text-center">Nothing saved yet — run a backtest on the Backtest tab and hit Save.</div>
             ) : rows.length === 0 ? (
-                <div className="text-xs text-fg-5 py-6 text-center">
+                <div id={bodyId} className="text-xs text-fg-5 py-6 text-center">
                     No saved strategy matches “{query}”.{' '}
                     <button type="button" onClick={() => setQuery('')} className="inline-flex items-center gap-1 text-sky-300 hover:underline">
                         <X className="w-3 h-3" aria-hidden="true" /> Clear filter
                     </button>
                 </div>
             ) : (
-                <>
+                <div id={bodyId}>
                     {query.trim() && <div className="text-2xs text-fg-5 mb-2">Showing {rows.length} of {total}</div>}
                     {layout === 'cards' ? (
                         <div className={`grid gap-3 ${rem != null && rem >= CARD_PAIR_REM ? 'grid-cols-2' : 'grid-cols-1'}`}>
@@ -380,7 +396,7 @@ export default function SavedStrategiesPanel({
                         <StrategyTable rows={rows} wide={layout === 'wide'} sort={sort} onSort={onSort}
                             openId={openId} onToggle={onToggle} renderDetails={renderDetails} actionProps={actionProps} />
                     )}
-                </>
+                </div>
             )}
         </div>
     );

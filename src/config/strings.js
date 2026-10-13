@@ -72,6 +72,7 @@ export const STRINGS = {
         aiManager: 'AI Manager',
         aiScore: 'AI Score',
         parityAudit: 'Parity Audit',
+        marketRules: 'Market Rules',
         dataManager: 'Data Manager',
         settings: 'Settings',
         // Reachable pages that are deliberately not in the rail.

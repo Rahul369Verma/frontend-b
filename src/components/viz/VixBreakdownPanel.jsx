@@ -32,6 +32,7 @@ function PricingProvenance({ pricing }) {
     const ex = pricing.expirySource;
     const lots = pricing.lotSource || {};
     const skipped = pricing.skipped?.noContract || 0;
+    const capitalSkipped = (pricing.skipped?.capital || 0) + (pricing.skipped?.sellMargin || 0);
     const notes = Array.isArray(pricing.notes) ? pricing.notes : [];
     const cov = pricing.evidence?.coverage || {};
     return (
@@ -44,6 +45,7 @@ function PricingProvenance({ pricing }) {
                     lots: {(lots.printed || 0) + (lots.derived || 0)} exchange{lots.derived ? ` (${lots.derived} derived from turnover)` : ''}{lots.configured ? ` · ${lots.configured} configured` : ''}
                 </Chip>
                 {skipped > 0 && <Chip tone="critical">{skipped} signal{skipped === 1 ? '' : 's'} not traded: no listed contract</Chip>}
+                {capitalSkipped > 0 && <Chip tone="critical" title="The account could not afford one lot at the entry price (1% of the price × lot)">{capitalSkipped} signal{capitalSkipped === 1 ? '' : 's'} not traded: capital below one lot</Chip>}
                 {Object.entries(cov).map(([x, c]) => (
                     <span key={x}>{x} evidence {c.from} → {c.to}{c.ageDays != null ? ` (${c.ageDays}d old)` : ''}</span>
                 ))}

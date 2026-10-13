@@ -56,6 +56,7 @@ import { inr, useChartTheme, rupeeTick } from '../components/viz/tokens';
 import ZoomableChart from '../components/charts/ZoomableChart';
 import PnlCalendar from '../components/charts/PnlCalendar.jsx';
 import ResultsAnalytics from '../components/multileg/ResultsAnalytics.jsx';
+import ExcursionsPanel from '../components/multileg/ExcursionsPanel.jsx';
 import { API_URL } from '../config/api.js';
 import { ROUTES, strategyDetailHref } from '../config/routes.js';
 
@@ -109,15 +110,19 @@ const DAY_OPTS = [
  *  ranking IS the point — the worst strategy should be one click away, at the
  *  bottom of a list whose top is the best. */
 const COLS = [
-    { k: 'key', label: 'Key', align: 'left' },
-    { k: 'trades', label: 'Trades', align: 'right' },
-    { k: 'winRate', label: 'Win %', align: 'right' },
-    { k: 'net', label: 'Net', align: 'right' },
-    { k: 'perTrade', label: 'Per trade', align: 'right' },
-    { k: 'best', label: 'Best', align: 'right' },
-    { k: 'worst', label: 'Worst', align: 'right' },
-    { k: 'lastTradeAt', label: 'Last trade', align: 'right' },
+    { k: 'key', label: 'Key', align: 'left', help: 'The bucket this row groups trades by — open a row to see the deployments in it' },
+    { k: 'trades', label: 'Trades', align: 'right', help: 'Closed trades in this row' },
+    { k: 'winRate', label: 'Win %', align: 'right', help: "Share of this row's trades that made money after charges (net > ₹0). A trade that ended at exactly ₹0 counts as not a win" },
+    { k: 'net', label: 'Net', align: 'right', help: "Sum of this row's net P&L (after charges where they were recorded)" },
+    { k: 'perTrade', label: 'Per trade', align: 'right', help: 'Net ÷ trades — the average result per trade, scratches included' },
+    { k: 'costPct', label: 'Costs ÷ gross', align: 'right', help: 'Charges as a share of gross (pre-cost) profit, over the trades that recorded charges. — = none recorded, or the row lost money before costs' },
+    { k: 'best', label: 'Best', align: 'right', help: 'Best single trade' },
+    { k: 'worst', label: 'Worst', align: 'right', help: 'Worst single trade' },
+    { k: 'lastTradeAt', label: 'Last trade', align: 'right', help: 'Most recent exit in this row' },
 ];
+
+/** Below this many trades, a strategy's figures are shown but not judged. */
+const MIN_TRADES = 20;
 
 /** How many strategy curves the compare chart shows before anyone picks. Four
  *  iso-lightness categorical hues stay separable; a fifth starts to collide. */
@@ -133,7 +138,7 @@ function SortHeader({ col, sort, onSort }) {
         <button
             type="button"
             onClick={() => onSort(col.k)}
-            title={`Sort by ${col.label}`}
+            title={`${col.help ? `${col.help}. ` : ''}Click to sort by ${col.label}.`}
             aria-label={`Sort by ${col.label}`}
             className={`inline-flex items-center gap-0.5 hover:text-fg rounded-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${on ? 'text-fg-3' : ''}`}
         >
@@ -231,6 +236,11 @@ function StrategyCard({ g, color, selected, expanded, onToggleSelect, onToggleEx
                     {fading && <StatusBadge level="warning" title="Positive overall, negative over the last 30 days">Fading</StatusBadge>}
                     {!bleeding && !fading && activeCount > 0 && <StatusBadge level="good" title={`${activeCount} active deployment(s)`}>Running</StatusBadge>}
                     {activeCount === 0 && deps.length > 0 && <span className="text-3xs text-fg-5">stopped</span>}
+                    {trades < MIN_TRADES && (
+                        <Chip title={`Only ${trades} closed trade${trades === 1 ? '' : 's'} in this window — the figures are real, but too few to tell a working strategy from luck. A verdict needs ${MIN_TRADES}.`}>
+                            too few to judge ({trades}/{MIN_TRADES})
+                        </Chip>
+                    )}
                 </div>
             </header>
 
@@ -289,6 +299,85 @@ function StrategyCard({ g, color, selected, expanded, onToggleSelect, onToggleEx
                 )}
             </div>
         </article>
+    );
+}
+
+// ── open now + costs ─────────────────────────────────────────────────────────
+
+/** What the live engine holds right now, marked like the Dashboard card. Closed
+ *  trades are all this page otherwise shows, so open risk was invisible here. */
+function OpenNowSingle({ open, depById, linkForDeployment }) {
+    const [show, setShow] = useState(false);
+    if (!open) return null;
+    const rows = Array.isArray(open.rows) ? open.rows : [];
+    return (
+        <Card title="Open now" subtitle="Live engine positions, marked at the latest quote. Pre-cost — charges are booked at exit."
+            right={open.n > 0 ? (
+                <button type="button" onClick={() => setShow((v) => !v)} aria-expanded={show}
+                    className="text-2xs px-2 py-0.5 rounded border border-line-2 text-fg-4 hover:text-fg">{show ? 'Hide list' : 'Show list'}</button>
+            ) : null}>
+            {open.n === 0 ? (
+                <p className="text-xs text-fg-5">Nothing open — every figure below is a closed trade.</p>
+            ) : (
+                <div className="space-y-2">
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                        <span className="text-xs text-fg-3">{int(open.n)} position{open.n === 1 ? '' : 's'}</span>
+                        <span className="text-sm font-semibold">MTM <Money v={open.mtm} bold /></span>
+                        {open.unmarked > 0 && <span className="text-2xs text-warning">{int(open.unmarked)} without a quote (not in the total)</span>}
+                    </div>
+                    {show && (
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-2xs text-fg-3">
+                                <thead><tr className="text-fg-5 text-left">
+                                    <th className="py-1 pr-3 font-semibold">Deployment</th><th className="pr-3 font-semibold">Contract</th>
+                                    <th className="pr-3 font-semibold">Since (IST)</th><th className="pr-3 text-right font-semibold">Entry → now</th>
+                                    <th className="text-right font-semibold">MTM</th>
+                                </tr></thead>
+                                <tbody>
+                                    {rows.map((r, i) => {
+                                        const d = r.deploymentId ? depById.get(String(r.deploymentId)) : null;
+                                        const href = d ? linkForDeployment(d) : null;
+                                        const label = d?.meta?.name || r.strategyName || '—';
+                                        return (
+                                            <tr key={`${r.symbol}-${i}`} className="border-t border-line-0">
+                                                <td className="py-1 pr-3">{href ? <Link to={href} className="text-primary-ink hover:underline">{label}</Link> : label}</td>
+                                                <td className="pr-3 text-fg-4">{String(r.symbol || '—').replace(/^(NSE|BSE):/, '')} · {r.type || '—'}</td>
+                                                <td className="pr-3 text-fg-4 whitespace-nowrap">{istStamp(r.entryTime)}</td>
+                                                <td className="pr-3 text-right tabular-nums text-fg-4">{r.entryPrice == null ? '—' : `₹${r.entryPrice}`} → {r.ltp == null ? '—' : `₹${r.ltp}`}</td>
+                                                <td className="text-right">{r.mtm == null ? <span className="text-warning">no quote</span> : <Money v={r.mtm} bold />}</td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            )}
+        </Card>
+    );
+}
+
+/** What trading cost against what it made before costs — said out loud, and
+ *  honest about how many trades recorded their charges at all. */
+function CostLine({ costs }) {
+    if (!costs || !n(costs.covered)) {
+        return <p className="text-2xs text-fg-5">No trade in this window recorded its charges, so the cost of trading cannot be shown.</p>;
+    }
+    const partial = n(costs.covered) < n(costs.n);
+    const scope = partial ? ` on the ${int(costs.covered)} of ${int(costs.n)} trades that recorded charges` : '';
+    if (n(costs.costPct) == null) {
+        return <p className="text-xs text-danger">Losing before costs{scope}: gross {inr(costs.gross)}, then {inr(costs.charges)} of charges on top.</p>;
+    }
+    const pct = n(costs.costPct);
+    const tone = pct >= 100 ? 'text-danger' : pct >= 30 ? 'text-warning' : 'text-fg-3';
+    return (
+        <p className={`text-xs ${tone}`}>
+            Charges took <span className="font-semibold">{pct}%</span> of gross profit{scope} — {inr(costs.charges)} of {inr(costs.gross)}.
+            {pct >= 100 ? ' Costs ate the whole edge.' : ''}
+            {partial && <span className="text-fg-5"> Charges are recorded per trade since 23 Sep 2026; older trades have none.</span>}
+            <span className="text-fg-5"> The Costs ÷ gross column in Breakdowns shows where.</span>
+        </p>
     );
 }
 
@@ -538,7 +627,11 @@ export default function LivePortfolio() {
         return list.sort((a, b) => {
             if (sort.k === 'key') return dir * String(a?.key ?? '').localeCompare(String(b?.key ?? ''));
             if (sort.k === 'lastTradeAt') return dir * ((new Date(a?.lastTradeAt || 0).getTime() || 0) - (new Date(b?.lastTradeAt || 0).getTime() || 0));
-            return dir * ((n(a?.[sort.k]) ?? 0) - (n(b?.[sort.k]) ?? 0));
+            // a row with no value (no charges recorded) sorts last either way —
+            // ranking it as 0 would slot it among the genuinely cheap rows
+            const av = n(a?.[sort.k]), bv = n(b?.[sort.k]);
+            if (av == null || bv == null) return (av == null) - (bv == null);
+            return dir * (av - bv);
         });
     }, [active, sort]);
     const onSort = useCallback((k) => setSort((s) => (s.k === k
@@ -560,11 +653,61 @@ export default function LivePortfolio() {
         return m ? (m.name || `${m.strategyName || 'strategy'} · ${String(m.symbol || '').replace(/^(NSE|BSE):/, '').replace(/-INDEX$/, '')}`) : key;
     }, [depById, isDeploymentTab]);
 
+    // ── drill-down: a breakdown row opened into the deployments in it ────────
+    // Keyed to the request, so a new window closes every row instead of showing
+    // the previous window's deployments under the new figures.
+    const [openBk, setOpenBk] = useState({ reqKey: null, ids: [] });
+    const openIds = useMemo(() => new Set(openBk.reqKey === reqKey ? openBk.ids : []), [openBk, reqKey]);
+    const toggleBk = useCallback((id) => setOpenBk((o) => {
+        const ids = new Set(o.reqKey === reqKey ? o.ids : []);
+        if (ids.has(id)) ids.delete(id); else ids.add(id);
+        return { reqKey, ids: [...ids] };
+    }), [reqKey]);
+    const depLabel = useCallback((id) => {
+        const m = depById.get(String(id))?.meta;
+        return m ? (m.name || `${m.strategyName || 'strategy'} · ${String(m.symbol || '').replace(/^(NSE|BSE):/, '').replace(/-INDEX$/, '')}`) : String(id);
+    }, [depById]);
+
     const columns = useMemo(() => COLS.map((c) => ({
         key: c.k,
         align: c.align,
         header: <SortHeader col={c} sort={sort} onSort={onSort} />,
         render: (r) => {
+            if (c.k === 'key' && r._child) {
+                const d = r.deploymentId ? depById.get(String(r.deploymentId)) : null;
+                const href = d ? linkForDeployment(d) : null;
+                const label = r.deploymentId ? depLabel(r.deploymentId) : r.key;
+                return (
+                    <span className="inline-flex items-center gap-1 pl-5 min-w-0 text-fg-4">
+                        {href
+                            ? <Link to={href} className="text-primary-ink hover:underline truncate max-w-[18rem]" title={`Open ${label}`}>{label}</Link>
+                            : <span className="truncate max-w-[18rem]" title={label}>{label}</span>}
+                    </span>
+                );
+            }
+            if (c.k === 'key' && Array.isArray(r.children) && r.children.length) {
+                const id = `${active?.label}::${r.key}`;
+                const isOpen = openIds.has(id);
+                const count = r.children.length;
+                return (
+                    <button type="button" onClick={() => toggleBk(id)} aria-expanded={isOpen}
+                        className="inline-flex items-center gap-1 text-left hover:text-fg min-w-0"
+                        title={`Show the ${count} deployment${count === 1 ? '' : 's'} in this row`}>
+                        {isOpen ? <ChevronUp className="w-3 h-3 flex-shrink-0" aria-hidden="true" /> : <ChevronDown className="w-3 h-3 flex-shrink-0" aria-hidden="true" />}
+                        <span className="truncate max-w-[16rem]">{rowLabel(r)}</span>
+                        <span className="text-fg-5 flex-shrink-0">· {count} deployment{count === 1 ? '' : 's'}</span>
+                        {(isStrategyTab && (n(r.net) ?? 0) < 0) && <StatusBadge level="critical" title="Net negative over this window">Bleeding</StatusBadge>}
+                    </button>
+                );
+            }
+            if (c.k === 'costPct') {
+                const v = n(r.costPct);
+                const tone = v == null ? 'text-fg-5' : v >= 100 ? 'text-danger font-semibold' : v >= 50 ? 'text-warning' : 'text-fg-4';
+                const title = v != null
+                    ? `${inr(r.charges)} of charges against ${inr(r.gross)} gross profit, on the ${int(r.chargesN)} of ${int(r.trades)} trades that recorded charges`
+                    : n(r.chargesN) ? `Losing before costs on the ${int(r.chargesN)} trades that recorded charges (gross ${inr(r.gross)})` : 'No trade in this row recorded its charges';
+                return <span className={`tabular-nums ${tone}`} title={title}>{v == null ? '—' : `${v}%`}</span>;
+            }
             if (c.k === 'key') {
                 const href = linkFor(r);
                 const losing = (isStrategyTab || isDeploymentTab) && (n(r.net) ?? 0) < 0;
@@ -590,8 +733,13 @@ export default function LivePortfolio() {
             if (c.k === 'perTrade' || c.k === 'best' || c.k === 'worst') return <Money v={r[c.k]} />;
             return <span className="text-fg-5">{istStamp(r.lastTradeAt)}</span>;
         },
-    })), [sort, onSort, linkFor, rowLabel, isStrategyTab, isDeploymentTab]);
-    const tableRows = useMemo(() => rows.map((r, i) => ({ ...r, _key: `${r?.key ?? i}-${i}` })), [rows]);
+    })), [sort, onSort, linkFor, rowLabel, isStrategyTab, isDeploymentTab, active, openIds, toggleBk, depById, depLabel, linkForDeployment]);
+    const tableRows = useMemo(() => rows.flatMap((r, i) => {
+        const parent = { ...r, _key: `${r?.key ?? i}-${i}` };
+        const id = `${active?.label}::${r.key}`;
+        if (!openIds.has(id) || !Array.isArray(r.children)) return [parent];
+        return [parent, ...r.children.map((c, j) => ({ ...c, _child: true, _key: `${parent._key}::${c.key ?? j}` }))];
+    }), [rows, active, openIds]);
 
     const chartTip = ct.tooltipStyle({ fontSize: ct.type['3xs'] });
     
@@ -665,6 +813,9 @@ export default function LivePortfolio() {
                 </Card>
             ) : (
                 <>
+                    {/* ── 0 · What is open right now (not in any figure below) ── */}
+                    <OpenNowSingle open={data?.open} depById={depById} linkForDeployment={linkForDeployment} />
+
                     {/* ── 1 · Combined summary ───────────────────────────── */}
                     <StatRow cols={5}>
                         <StatTile label="Net P&L" hero value={inr(summary.netPnl)} tone={toneOf(summary.netPnl)} hint={`${int(summary.trades)} closed trades · ${int(summary.tradingDays)} trading days`} />
@@ -675,6 +826,7 @@ export default function LivePortfolio() {
                         <StatTile label="Max drawdown" value={inr(summary.maxDrawdown)} tone={(n(summary.maxDrawdown) ?? 0) < 0 ? 'negative' : 'neutral'}
                             hint={`Best day ${inr(summary.bestDay)} · worst day ${inr(summary.worstDay)}`} />
                     </StatRow>
+                    <CostLine costs={summary.costs} />
 
                     {/* ── 2 · Strategies ─────────────────────────────────── */}
                     <Card
@@ -816,6 +968,13 @@ export default function LivePortfolio() {
                                 <DataTable columns={columns} rows={tableRows} dense empty="Nothing to break down here." />
                             </>
                         )}
+                    </Card>
+
+                    {/* ── 8 · How trades travelled ───────────────────────── */}
+                    <Card title="How trades travelled"
+                        subtitle="Worst and best point while open, and what a stop or target at that level alone would have done.">
+                        <ExcursionsPanel excursions={data?.excursions} basis="gross"
+                            missingNote="the live engine started recording each trade's path on 7 Oct 2026" />
                     </Card>
                 </>
             ))}

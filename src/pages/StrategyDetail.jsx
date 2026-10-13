@@ -78,6 +78,39 @@ const bookedOf = (t) => {
     return { value: null, basis: null };
 };
 
+// Absent is NOT zero (see tradePnl): a trade with no recorded charges or marks
+// shows "—", never ₹0.
+const finOrNull = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+const chargesOf = (t) => (t?.charges && typeof t.charges === 'object' ? finOrNull(t.charges.total) : finOrNull(t?.charges));
+const grossOf = (t) => finOrNull(t?.gross_pnl) ?? finOrNull(t?.charges?.gross_pnl) ?? finOrNull(t?.pnl);
+const TRADES_PAGE = 50;
+
+/** Charges ÷ gross over the trades that recorded both — and how many did. */
+function costStatsOf(trades) {
+    let gross = 0, charges = 0, covered = 0;
+    for (const t of trades) {
+        const c = chargesOf(t), g = grossOf(t);
+        if (c == null || g == null) continue;
+        covered++; charges += c; gross += g;
+    }
+    return { n: trades.length, covered, gross, charges, costPct: covered && gross > 0 ? Math.round((charges / gross) * 100) : null };
+}
+
+/** What trading cost this deployment, against what it made before costs. */
+function CostLine({ trades }) {
+    const c = costStatsOf(trades);
+    if (!c.covered) return <p className="text-2xs text-fg-5 -mt-3 mb-5">No trade here recorded its charges (recorded per trade since 23 Sep 2026), so the cost of trading cannot be shown.</p>;
+    const scope = c.covered < c.n ? ` on the ${c.covered} of ${c.n} trades that recorded charges` : '';
+    if (c.costPct == null) return <p className="text-xs text-danger -mt-3 mb-5">Losing before costs{scope}: gross {fmtINR(c.gross)}, then {fmtINR(c.charges)} of charges on top.</p>;
+    const tone = c.costPct >= 100 ? 'text-danger' : c.costPct >= 30 ? 'text-warning' : 'text-fg-3';
+    return (
+        <p className={`text-xs ${tone} -mt-3 mb-5`}>
+            Charges took <span className="font-semibold">{c.costPct}%</span> of gross profit{scope} — {fmtINR(c.charges)} of {fmtINR(c.gross)}.
+            {c.costPct >= 100 ? ' Costs ate the whole edge.' : ''}
+        </p>
+    );
+}
+
 /** A trade_history doc in the one shape <TradePathChart> takes for both books. */
 const toPathTrade = (t) => {
     const booked = bookedOf(t);
@@ -528,6 +561,7 @@ export default function StrategyDetail() {
 
             {/* KPI strip */}
             <KpiStrip kpis={kpis} openCount={openPos.length} />
+            <CostLine trades={closed} />
 
             {/* Tabs */}
             <Tabs className="mb-4" ariaLabel="Result views"
@@ -728,6 +762,7 @@ function TradesTable({ trades, openPos, pathCoverage }) {
     const [filter, setFilter] = useState('all'); // all | wins | losses
     const [sortBy, setSortBy] = useState('exitTime');
     const [sortDir, setSortDir] = useState('desc');
+    const [page, setPage] = useState(0);
     // Rows whose P&L path is expanded, keyed like the <tr>s.
     const [openRows, setOpenRows] = useState(() => new Set());
     const toggleRow = useCallback((key) => {
@@ -748,16 +783,27 @@ function TradesTable({ trades, openPos, pathCoverage }) {
                 if (sortBy === 'pnl')      return tradePnl(t);
                 if (sortBy === 'exitTime') return new Date(t.exitTime || t.timestamp).getTime();
                 if (sortBy === 'entryTime') return new Date(t.entryTime || t.timestamp).getTime();
+                if (sortBy === 'charges') return chargesOf(t);
+                if (sortBy === 'mae') return finOrNull(t.maeRupees);
+                if (sortBy === 'mfe') return finOrNull(t.mfeRupees);
                 return 0;
             };
-            return (getVal(a) - getVal(b)) * dir;
+            const x = getVal(a), y = getVal(b);
+            if (x == null && y == null) return 0;
+            if (x == null) return 1;            // not recorded → last, either direction
+            if (y == null) return -1;
+            return (x - y) * dir;
         });
     }, [trades, filter, sortBy, sortDir]);
 
     const toggleSort = (col) => {
         if (sortBy === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
         else { setSortBy(col); setSortDir('desc'); }
+        setPage(0);
     };
+    const pages = Math.max(1, Math.ceil(filtered.length / TRADES_PAGE));
+    const pageNow = Math.min(page, pages - 1);
+    const pageRows = filtered.slice(pageNow * TRADES_PAGE, (pageNow + 1) * TRADES_PAGE);
 
     return (
         <div>
@@ -767,7 +813,7 @@ function TradesTable({ trades, openPos, pathCoverage }) {
                     {['all', 'wins', 'losses'].map(f => (
                         <button
                             key={f}
-                            onClick={() => setFilter(f)}
+                            onClick={() => { setFilter(f); setPage(0); }}
                             className={`px-3 py-1.5 capitalize ${filter === f ? 'bg-primary/20 text-primary-ink' : 'text-fg-4 hover:text-fg'}`}
                         >
                             {f}
@@ -799,12 +845,15 @@ function TradesTable({ trades, openPos, pathCoverage }) {
                             <th className="px-2 py-2 text-right">In</th>
                             <th className="px-2 py-2 text-right">Out</th>
                             <SortableTh col="pnl" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} className="px-2 py-2 text-right">P&L</SortableTh>
+                            <SortableTh col="charges" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} className="px-2 py-2 text-right">Chg</SortableTh>
+                            <SortableTh col="mae" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} className="px-2 py-2 text-right">Worst</SortableTh>
+                            <SortableTh col="mfe" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} className="px-2 py-2 text-right">Best</SortableTh>
                             <th className="px-2 py-2 text-left">Reason</th>
                             <th className="px-2 py-2 text-left">AI</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {filtered.slice(0, 200).map((t, i) => {
+                        {pageRows.map((t, i) => {
                             const pnl = tradePnl(t);
                             const pnlCls = pnl > 0 ? 'text-success' : pnl < 0 ? 'text-danger' : 'text-fg-3';
                             const rowKey = String(t._id || t.trade_id || i);
@@ -838,6 +887,17 @@ function TradesTable({ trades, openPos, pathCoverage }) {
                                     <td className="px-2 py-1.5 text-right text-fg-4">{fmtNum(t.entryPrice ?? t.price)}</td>
                                     <td className="px-2 py-1.5 text-right text-fg-4">{fmtNum(t.exitPrice)}</td>
                                     <td className={`px-2 py-1.5 text-right font-bold ${pnlCls}`}>{fmtINR(pnl)}</td>
+                                    <td className="px-2 py-1.5 text-right text-fg-5" title={chargesOf(t) == null ? 'Charges not recorded on this trade' : 'Round-trip charges'}>
+                                        {chargesOf(t) == null ? '—' : fmtINR(chargesOf(t))}
+                                    </td>
+                                    <td className={`px-2 py-1.5 text-right ${finOrNull(t.maeRupees) < 0 ? 'text-danger' : 'text-fg-5'}`}
+                                        title={finOrNull(t.maeRupees) == null ? 'No marks recorded or rebuilt for this trade' : `Worst mark while open, before charges (${src})`}>
+                                        {finOrNull(t.maeRupees) == null ? '—' : fmtINR(t.maeRupees)}
+                                    </td>
+                                    <td className={`px-2 py-1.5 text-right ${finOrNull(t.mfeRupees) > 0 ? 'text-success' : 'text-fg-5'}`}
+                                        title={finOrNull(t.mfeRupees) == null ? 'No marks recorded or rebuilt for this trade' : `Best mark while open, before charges (${src})`}>
+                                        {finOrNull(t.mfeRupees) == null ? '—' : fmtINR(t.mfeRupees)}
+                                    </td>
                                     <td className="px-2 py-1.5 text-fg-4 max-w-[11.25rem] truncate" title={t.reason}>{t.reason || '—'}</td>
                                     <td className="px-2 py-1.5 text-fg-4">
                                         {t.ai_decision ? (
@@ -849,7 +909,7 @@ function TradesTable({ trades, openPos, pathCoverage }) {
                                 </tr>
                                 {isOpen && (
                                     <tr id={panelId} className="border-b border-line-0 bg-slate-900/40">
-                                        <td colSpan={11} className="px-2 py-2">
+                                        <td colSpan={14} className="px-2 py-2">
                                             <TradePathChart trade={toPathTrade(t)} />
                                         </td>
                                     </tr>
@@ -859,9 +919,16 @@ function TradesTable({ trades, openPos, pathCoverage }) {
                         })}
                     </tbody>
                 </table>
-                {filtered.length > 200 && (
-                    <div className="text-center text-fg-5 text-xs py-3">
-                        Showing first 200 of {filtered.length} trades.
+                {pages > 1 && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 py-3 text-xs text-fg-4">
+                        <span>Showing {pageNow * TRADES_PAGE + 1}–{Math.min((pageNow + 1) * TRADES_PAGE, filtered.length)} of {filtered.length} trades</span>
+                        <div className="flex items-center gap-1">
+                            <button type="button" disabled={pageNow === 0} onClick={() => setPage(Math.max(0, pageNow - 1))}
+                                className="px-2 py-0.5 rounded border border-line bg-slate-800 hover:text-fg disabled:opacity-40">‹ Prev</button>
+                            <span className="px-1">Page {pageNow + 1} of {pages}</span>
+                            <button type="button" disabled={pageNow >= pages - 1} onClick={() => setPage(Math.min(pages - 1, pageNow + 1))}
+                                className="px-2 py-0.5 rounded border border-line bg-slate-800 hover:text-fg disabled:opacity-40">Next ›</button>
+                        </div>
                     </div>
                 )}
             </div>

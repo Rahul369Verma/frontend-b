@@ -20,6 +20,7 @@ export const ROUTES = Object.freeze({
     alerts: '/alerts',
     tickStrategies: '/tick-strategies',
     tickResults: '/tick-results',
+    marketRules: '/market-rules',
 });
 
 /**

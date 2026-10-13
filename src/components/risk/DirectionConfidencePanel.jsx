@@ -22,6 +22,7 @@ import { usePolling } from '../../hooks/usePolling.js';
 import { useConfirm } from '../confirmContext.js';
 import { toast } from '../toastStore.js';
 import { sideState } from './directionState.js';
+import DirectionGateHistory from './DirectionGateHistory.jsx';
 
 const n = (v) => { if (v == null || v === '') return null; const x = Number(v); return Number.isFinite(x) ? x : null; };
 const pct0 = (v) => (n(v) == null ? '—' : `${Math.round(n(v) * 100)}%`);
@@ -64,12 +65,17 @@ function SideBlock({ meta, side, opts, credit }) {
     );
 }
 
-export function DirectionConfidenceView({ data, onMode, busy }) {
+export function DirectionConfidenceView({ data, onMode, onTrackBlocked, busy }) {
     if (!data) return null;
     const { sides, opts, mode, history, scorecard, live, excluded } = data;
     const sc = scorecard || {};
     const wb = sc.wouldBlock || { n: 0 };
-    const verdictLevel = wb.n >= 10 ? (wb.net < 0 ? 'good' : 'critical') : 'info';
+    const en = sc.enforce || null;
+    // value = book with the gate − book without it (shadow would-blocks + enforce ghosts/knock-ons)
+    const verdictLevel = sc.judged != null
+        ? (sc.judged >= 10 ? (sc.value > 0 ? 'good' : 'critical') : 'info')
+        : (wb.n >= 10 ? (wb.net < 0 ? 'good' : 'critical') : 'info');
+    const trackBlocked = opts?.trackBlocked !== false;
     return (
         <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -85,6 +91,12 @@ export function DirectionConfidenceView({ data, onMode, busy }) {
                         { v: 'enforce', label: 'Enforce', hint: 'Block weak-side signals except probes' },
                     ]} />
             </div>
+            {onTrackBlocked && (
+                <label className="inline-flex items-center gap-2 text-2xs text-fg-4" title="Enforce mode: carry each blocked signal down the real entry path and follow it at real prices (never an order), so the history shows what it would have made">
+                    <input type="checkbox" checked={trackBlocked} disabled={busy} onChange={(e) => onTrackBlocked(e.target.checked)} aria-label="Follow blocked trades as ghosts" />
+                    Follow blocked trades as ghosts (enforce)
+                </label>
+            )}
             {busy && <Spinner label="Saving…" />}
             {live?.stale && <StatusBadge level="warning">Engine snapshot is stale or not running — decisions fail open</StatusBadge>}
 
@@ -94,7 +106,7 @@ export function DirectionConfidenceView({ data, onMode, busy }) {
 
             <div className="border border-line/60 rounded-lg p-3 space-y-1.5" data-testid="scorecard">
                 <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-medium text-fg-3">Shadow scorecard — would blocking have helped?</span>
+                    <span className="text-xs font-medium text-fg-3">Scorecard, last ~4 weeks — would blocking have helped?</span>
                     <StatusBadge level={verdictLevel}>{sc.verdict || '—'}</StatusBadge>
                 </div>
                 <p className="text-2xs text-fg-4">
@@ -105,6 +117,16 @@ export function DirectionConfidenceView({ data, onMode, busy }) {
                     {' '}Probes: {sc.decisions?.PROBE?.n ?? 0} (net {inr(sc.decisions?.PROBE?.net ?? 0, { sign: true })}).
                     {sc.unrecorded?.n ? ` ${sc.unrecorded.n} trade${sc.unrecorded.n === 1 ? '' : 's'} have no recorded verdict (before this feature, or gate off).` : ''}
                 </p>
+                {en && (en.ghosts > 0 || en.ghostsOpen > 0 || en.knockOn > 0 || mode === 'enforce') && (
+                    <p className="text-2xs text-fg-4" data-testid="scorecard-enforce">
+                        Enforce: {en.ghosts} blocked trade{en.ghosts === 1 ? '' : 's'} followed as ghosts would have made{' '}
+                        <span className={pnlTone(en.ghostNet)}>{inr(en.ghostNet, { sign: true })}</span>
+                        {en.ghostsOpen ? ` (+${en.ghostsOpen} still open)` : ''}; {en.knockOn} knock-on trade{en.knockOn === 1 ? '' : 's'} made{' '}
+                        <span className={pnlTone(en.knockOnNet)}>{inr(en.knockOnNet, { sign: true })}</span>.
+                        {' '}Gate value <span className={pnlTone(sc.value)}>{inr(sc.value, { sign: true })}</span>.
+                        {!trackBlocked && ' Ghost tracking is OFF — new blocks are dropped unscored.'}
+                    </p>
+                )}
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -176,12 +198,24 @@ export default function DirectionConfidencePanel() {
         } finally { setBusy(false); }
     };
 
+    const onTrackBlocked = async (trackBlocked) => {
+        setBusy(true);
+        try {
+            await axios.post(`${API_URL}/analytics/direction-confidence/settings`, { trackBlocked });
+            toast.success(trackBlocked ? 'Blocked trades will be followed as ghosts' : 'Ghost tracking off');
+            await load();
+        } catch (e) {
+            toast.error(e?.response?.data?.error || e.message);
+        } finally { setBusy(false); }
+    };
+
     return (
         <Card title={<span className="inline-flex items-center gap-2"><Compass className="w-4 h-4" aria-hidden="true" />Direction confidence — CE vs PE</span>}
             subtitle="How much recent trades trust each side; the gate's verdict is stamped on every entry">
             {err && <Placeholder>Could not load direction confidence: {err}</Placeholder>}
             {!data && !err && <Spinner label="Loading direction confidence…" />}
-            <DirectionConfidenceView data={data} onMode={onMode} busy={busy} />
+            <DirectionConfidenceView data={data} onMode={onMode} onTrackBlocked={onTrackBlocked} busy={busy} />
+            <div className="mt-3"><DirectionGateHistory /></div>
         </Card>
     );
 }

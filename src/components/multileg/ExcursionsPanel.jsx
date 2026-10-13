@@ -15,7 +15,14 @@ import { fmt, rup } from './builderFormat';
 
 const signed = (v) => (v > 0 ? `+${rup(v)}` : rup(v));
 
-export default function ExcursionsPanel({ excursions: x }) {
+/**
+ * `basis` says what the marks and results are measured on, because the two
+ * books differ: multileg marks are NET of estimated costs; single-leg marks are
+ * PRE-COST, so each trade is compared with its GROSS P&L. `missingNote` lets a
+ * book explain why trades lack marks (single-leg recorded none before the
+ * path sampler shipped).
+ */
+export default function ExcursionsPanel({ excursions: x, basis = 'net', missingNote = '' }) {
     const ct = useChartTheme();
     if (!x || !x.n) {
         return <div className="text-xs text-fg-5">No trade in this filter has a recorded worst/best mark yet.</div>;
@@ -32,7 +39,7 @@ export default function ExcursionsPanel({ excursions: x }) {
                 Each dot below is one trade: how far it went against you (left) and how it finished (up = profit).
             </p>
             {x.missing > 0 && (
-                <p className="text-2xs text-fg-5">{x.missing} trade{x.missing === 1 ? '' : 's'} in this filter have no recorded worst/best mark and are not in these figures.</p>
+                <p className="text-2xs text-fg-5">{x.missing} trade{x.missing === 1 ? '' : 's'} in this filter have no recorded worst/best mark and are not in these figures{missingNote ? ` — ${missingNote}` : ''}.</p>
             )}
             {/* not ZoomableChart: it zooms by slicing ONE shared data array, and a
                 scatter's two series each carry their own */}
@@ -88,7 +95,9 @@ export default function ExcursionsPanel({ excursions: x }) {
                 </table>
             </div>
             <p className="text-3xs text-fg-5 leading-relaxed">
-                Estimates, read off each trade's recorded marks (net of estimated costs, about one a minute). A move inside a minute can go
+                Estimates, read off each trade's recorded marks ({basis === 'gross'
+                    ? 'before charges, about one a minute — so each trade is compared with its gross P&L, not its net'
+                    : 'net of estimated costs, about one a minute'}). A move inside a minute can go
                 deeper than the recorded worst point, and a real stop fills worse than its level — so the stop figures are on the generous
                 side. A stop and a target are shown alone: which one a trade would have touched first depends on its path. Positive = the
                 rule would have added to net; negative = it would have cost you.

@@ -50,7 +50,7 @@ const COUNCIL_MEMBER_OPTIONS = [
 // LOT_SIZES moved to Backend API
 
 import { useLocation } from 'react-router-dom';
-import { INSTRUMENT_CONFIG, MARKET_TIMINGS } from '../constants';
+import { INSTRUMENT_CONFIG, MARKET_TIMINGS, MCX_MARGIN } from '../constants';
 import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 import { API_URL } from '../config/api.js';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
@@ -1795,8 +1795,10 @@ export default function Backtest() {
                     const pct = typeof cfg.marginPct === 'number' ? cfg.marginPct : fallbackPct;
                     const HEDGE_RETENTION = 0.25;
                     let marginPerLot = null;
-                    if (isMcx && cfg.marginPerLot) {
-                        marginPerLot = isHedged ? Math.round(cfg.marginPerLot * HEDGE_RETENTION) : cfg.marginPerLot;
+                    // MCX: the exchange's margin is a share of the contract value (dated snapshot), shown as a rate.
+                    const mcxRate = isMcx ? (MCX_MARGIN.rates[cfg.underlying] ?? null) : null;
+                    if (isMcx) {
+                        marginPerLot = null;
                     } else if (cfg.lotSize && pct) {
                         // Use a representative spot from the symbol family to preview margin.
                         // The engine will re-derive this from the actual entry spot.
@@ -1824,9 +1826,9 @@ export default function Backtest() {
                                 </div>
                                 <div className="bg-slate-900/60 border border-purple-700/40 rounded p-2">
                                     <div className="text-3xs uppercase tracking-wide text-purple-400">Margin / Lot</div>
-                                    <div className="text-sm font-mono text-fg">{fmtINR(marginPerLot)}</div>
+                                    <div className="text-sm font-mono text-fg">{isMcx ? (mcxRate != null ? `${(mcxRate * 100).toFixed(2)}%${isHedged ? ' × 0.25' : ''}` : 'unknown') : fmtINR(marginPerLot)}</div>
                                     <div className="text-4xs text-fg-5">
-                                        {isMcx ? 'MCX SPAN+Exposure' : pct ? `${(pct * 100).toFixed(0)}% × notional` : '—'}
+                                        {isMcx ? `of the contract value (MCX SPAN+ELM, ${MCX_MARGIN.asOf})` : pct ? `${(pct * 100).toFixed(0)}% × notional` : '—'}
                                         {isHedged && !isMcx ? ' × 0.25' : ''}
                                     </div>
                                 </div>

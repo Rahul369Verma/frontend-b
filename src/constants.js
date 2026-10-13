@@ -6,6 +6,20 @@
 // notional (spot × lotSize). Used by the Selling-mode UI to preview the
 // auto-derived margin before sending the backtest request.
 
+// MCX initial margin (SPAN + ELM) as a share of the CONTRACT VALUE — the same dated
+// snapshot the backend uses (backend/src/domain/costs/mcxMargin.js). The fixed rupee
+// `marginPerLot` values below are stale (GOLD ₹55,000 vs ₹13.8 lakh real) and unused.
+export const MCX_MARGIN = {
+  asOf: '2026-10-13',
+  source: 'Zerodha NRML margin rate (= MCX SPAN + ELM)',
+  rates: {
+    GOLD: 0.0925, GOLDM: 0.0925, GOLDPETAL: 0.0925, GOLDGUINEA: 0.0925, GOLDTEN: 0.0925,
+    SILVER: 0.1275, SILVERM: 0.1275, SILVERMIC: 0.1275, CRUDEOIL: 0.3125, CRUDEOILM: 0.3125,
+    NATURALGAS: 0.1713, NATGASMINI: 0.1713, COPPER: 0.0925, ZINC: 0.0934, ZINCMINI: 0.0933,
+    ALUMINIUM: 0.0939, ALUMINI: 0.0936, LEAD: 0.0743, LEADMINI: 0.0743, NICKEL: 0.0927,
+  },
+};
+
 export const INSTRUMENT_CONFIG = {
     "NSE:NIFTYBANK-INDEX": {
         underlying: "BANKNIFTY",

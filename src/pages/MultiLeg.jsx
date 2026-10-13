@@ -4,7 +4,7 @@ import axios from 'axios';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceDot, ReferenceArea, Legend,
 } from 'recharts';
-import { Layers, Play, Pause, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp, Wallet } from 'lucide-react';
+import { Layers, Play, Pause, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp, Wallet, ChevronDown, ChevronRight } from 'lucide-react';
 import StructureAttributionPanel from '../components/viz/StructureAttributionPanel';
 import StrategyBuilder from '../components/multileg/StrategyBuilder';
 import ResultsAnalytics from '../components/multileg/ResultsAnalytics';
@@ -228,6 +228,10 @@ export default function MultiLeg() {
     // Saved strategies + live deployments (Deploy tab)
     const [savedList, setSavedList] = useState([]);
     const [savedDetail, setSavedDetail] = useState(null); // _id of the expanded saved-strategy row
+    // Deploy-tab accordions — CLOSED on every page load (user, 13-Oct), kept
+    // while you move between tabs. Deliberately not in localStorage.
+    const [savedPanelOpen, setSavedPanelOpen] = useState(false);
+    const [sigTimelineOpen, setSigTimelineOpen] = useState(false);
     const [depDetail, setDepDetail] = useState(null);     // _id of the expanded deployment (full order detail)
     const [depChart, setDepChart] = useState(null);       // _id of the deployment showing its live payoff chart
     const [depPayoff, setDepPayoff] = useState(null);     // { id, data } — backend risk-graph (expiry + T+0 curves)
@@ -2117,6 +2121,7 @@ export default function MultiLeg() {
                     <RegimePanel />
 
                     <SavedStrategiesPanel
+                        open={savedPanelOpen} onOpenChange={setSavedPanelOpen}
                         list={savedList} templates={templates}
                         deployLots={deployLots} onDeployLots={setDeployLots} pending={pending}
                         openId={savedDetail} onToggle={setSavedDetail}
@@ -2175,11 +2180,29 @@ export default function MultiLeg() {
                     {/* ── Signal Status Timeline (per deployment) ────────────────── */}
                     {mlDeps.signalStatus && Object.keys(mlDeps.signalStatus).length > 0 && (
                         <div className="bg-surface rounded-xl border border-line p-4 mb-4">
-                            <div className="flex items-center justify-between mb-2">
-                                <div className="text-sm font-semibold text-fg flex items-center gap-2"><Activity className="w-4 h-4 text-warning" /> Signal Status Timeline</div>
-                                <span className="text-3xs text-fg-5">newest → · 🟢 entry · ⚪ neutral · 🔵 ready · 🟡 waiting</span>
+                            <div className={`flex items-center justify-between gap-2 flex-wrap ${sigTimelineOpen ? 'mb-2' : ''}`}>
+                                <h2 className="text-sm font-semibold text-fg">
+                                    <button type="button" onClick={() => setSigTimelineOpen(o => !o)} aria-expanded={sigTimelineOpen} aria-controls="ml-signal-timeline"
+                                        className="flex items-center gap-2 hover:text-warning" title={sigTimelineOpen ? 'Collapse' : 'Expand'}>
+                                        {sigTimelineOpen ? <ChevronDown className="w-4 h-4 text-fg-4" aria-hidden="true" /> : <ChevronRight className="w-4 h-4 text-fg-4" aria-hidden="true" />}
+                                        <Activity className="w-4 h-4 text-warning" aria-hidden="true" /> Signal Status Timeline
+                                    </button>
+                                </h2>
+                                {sigTimelineOpen ? (
+                                    <span className="text-3xs text-fg-5">newest → · 🟢 entry · ⚪ neutral · 🔵 ready · 🟡 waiting</span>
+                                ) : (() => {
+                                    // closed: still say what is inside — one count per current status
+                                    const counts = {};
+                                    for (const d of mlDeps.deployments) {
+                                        const a = mlDeps.signalStatus[d._id]?.current?.action;
+                                        if (a) counts[a] = (counts[a] || 0) + 1;
+                                    }
+                                    const ORDER = ['ENTRY', 'READY', 'WAIT', 'NEUTRAL', 'DONE'];
+                                    const keys = Object.keys(counts).sort((x, y) => (ORDER.indexOf(x) + 99 * (ORDER.indexOf(x) < 0)) - (ORDER.indexOf(y) + 99 * (ORDER.indexOf(y) < 0)));
+                                    return <span className="text-3xs text-fg-5">{keys.map(k => `${counts[k]} ${k.toLowerCase()}`).join(' · ') || 'no status yet'}</span>;
+                                })()}
                             </div>
-                            <div className="space-y-1.5">
+                            {sigTimelineOpen && <div id="ml-signal-timeline" className="space-y-1.5">
                                 {mlDeps.deployments.filter(d => mlDeps.signalStatus[d._id]).map(d => {
                                     const info = mlDeps.signalStatus[d._id];
                                     const cur = info?.current;
@@ -2210,7 +2233,7 @@ export default function MultiLeg() {
                                         </div>
                                     );
                                 })}
-                            </div>
+                            </div>}
                         </div>
                     )}
 

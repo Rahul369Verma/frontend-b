@@ -54,4 +54,16 @@ describe('DirectionConfidenceView', () => {
         expect(sideState({ confidence: 0.7, nEff: 9 }, base.opts).label).toBe('STRONG');
         expect(sideState({ confidence: 0.5, nEff: 9 }, base.opts).label).toBe('NEUTRAL');
     });
+    it('enforce: scores the ghosts and knock-ons, and the ghost switch reports its new state', () => {
+        const onTrackBlocked = vi.fn();
+        const d = { ...base, mode: 'enforce', opts: { ...base.opts, trackBlocked: true },
+            scorecard: { ...base.scorecard, enforce: { ghosts: 4, ghostNet: 2100, ghostsOpen: 1, knockOn: 2, knockOnNet: 300, blockedNotFollowed: 1 }, value: -1800, judged: 16, verdict: 'the gate has cost ₹1800 over 16 blocked trades' } };
+        render(<DirectionConfidenceView data={d} onMode={() => {}} onTrackBlocked={onTrackBlocked} />);
+        const en = screen.getByTestId('scorecard-enforce').textContent;
+        expect(en).toMatch(/4 blocked trades followed as ghosts would have made/);
+        expect(en).toMatch(/\+1 still open/);
+        expect(en).toMatch(/2 knock-on trades/);
+        fireEvent.click(screen.getByLabelText('Follow blocked trades as ghosts'));
+        expect(onTrackBlocked).toHaveBeenCalledWith(false);
+    });
 });
