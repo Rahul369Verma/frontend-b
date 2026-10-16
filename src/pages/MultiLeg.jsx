@@ -27,6 +27,11 @@ import { spotMove, pfText, pfValue } from '../components/multileg/builderFormat'
 import SavedStrategiesPanel from '../components/multileg/SavedStrategiesPanel';
 import EngineJournal from '../components/multileg/EngineJournal';
 import RegimePanel from '../components/multileg/RegimePanel';
+import { PromoteDialog } from '../components/golive/goLiveShared.jsx';
+import DocLink from '../components/DocLink.jsx';
+
+/** Multi-leg tab → its documentation section. */
+const TAB_DOC = { builder: 'builder-tab', backtest: 'backtest-tab', sweep: 'optimizer-tab', scan: 'scan-tab', auto: 'auto-tab', deploy: 'deploy-regime', results: 'results-tab' };
 
 
 // Static fallback — replaced by /api/config/instruments (same source as Backtest).
@@ -241,6 +246,7 @@ export default function MultiLeg() {
     const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
     const [confirmState, setConfirmState] = useState(null); // { title, body, danger, confirmLabel, requireText, onConfirm }
     const [livePreview, setLivePreview] = useState(null);          // pre-deploy risk preview modal { strategy, tradeMode, data, loading }
+    const [promote, setPromote] = useState(null);                  // go-live promotion dialog { id, name } for a fresh PAPER deployment
     const [pending, setPending] = useState({});             // per-action pending flags (button spinners)
     const [depSort, setDepSort] = useLocalStorage('ml_dep_sort', 'state');   // state|mtm|pnl|name
     const [depFilter, setDepFilter] = useLocalStorage('ml_dep_filter', 'all'); // all|LIVE|PAPER|open
@@ -883,12 +889,14 @@ export default function MultiLeg() {
         finally { setPending(p => { const n = { ...p }; delete n[key]; return n; }); }
     };
 
-    // Deploy PAPER immediately; LIVE goes through the pre-deploy risk preview +
-    // type-to-confirm modal (opened by openPreview below).
+    // Deploy PAPER immediately. LIVE = the pre-deploy risk preview + type-to-confirm,
+    // then a PAPER deployment that the go-live gate promotes (broker drill, evidence,
+    // flat book, canary) — the backend refuses trade_mode LIVE on deploy.
     const doDeploy = (s, tradeMode) => withPending(`deploy:${s._id}`, async () => {
-        await axios.post(`${API_URL}/multileg/strategies/${s._id}/deploy`, { trade_mode: tradeMode, lots: deployLots });
+        const r = await axios.post(`${API_URL}/multileg/strategies/${s._id}/deploy`, { trade_mode: 'PAPER', lots: deployLots });
         refreshDeployments();
-    }, `Deployed “${s.name}” ${tradeMode}`);
+        if (tradeMode === 'LIVE' && r.data && r.data._id) setPromote({ id: r.data._id, name: r.data.name });
+    }, tradeMode === 'LIVE' ? `Deployed “${s.name}” on PAPER — now the go-live checks` : `Deployed “${s.name}” PAPER`);
 
     // Fetch a live risk preview, then open the modal (LIVE requires type-to-confirm).
     const openPreview = async (s, tradeMode) => {
@@ -925,7 +933,7 @@ export default function MultiLeg() {
     // (table row or card), so its grids reflow on the space they actually get.
     const renderSavedDetails = (s) => {
         const m = s.backtest?.metrics;
-        const opt = s.optimizer || null;
+        const opt = s.optimizer || (s.backtest?.split?.val ? { ...s.backtest.split, isSplit: true } : null);
         const deps = liveByStrategy.get(String(s._id))?.deployments || [];
         const liveSection = deps.length ? (
             <div className="space-y-1.5">
@@ -982,11 +990,13 @@ export default function MultiLeg() {
                 {opt && (
                     <div className="space-y-1.5">
                         <div className="text-2xs text-fg-4 leading-relaxed">
-                            From Auto-optimize <span className="font-mono text-fg-3 break-all">{opt.jobId}</span> · champion #{opt.rank}
-                            {opt.split != null && <> · last {Math.round(opt.split * 100)}% of the window held out for validation</>}
+                            {opt.isSplit
+                                ? <>Split of one backtest of these settings · last {Math.round((opt.ratio ?? 0.3) * 100)}% as validation (the settings were not tuned on either part)</>
+                                : <>From Auto-optimize <span className="font-mono text-fg-3 break-all">{opt.jobId}</span> · champion #{opt.rank}</>}
+                            {!opt.isSplit && opt.split != null && <> · last {Math.round(opt.split * 100)}% of the window held out for validation</>}
                             {opt.robustness && (
                                 <span className={opt.robustness.robust === false ? 'text-danger' : opt.robustness.robust === true ? 'text-success' : ''}>
-                                    {' · '}{opt.robustness.robust === true ? '✓ Holds OOS' : opt.robustness.robust === false ? '⚠ Overfit risk' : 'OOS unknown'}
+                                    {' · '}{opt.robustness.robust === true ? (opt.isSplit ? (Number(opt.train?.netPnl) > 0 ? '✓ Held up in the last part' : '↗ Better in the last part (the first part lost)') : '✓ Holds OOS') : opt.robustness.robust === false ? (opt.isSplit ? '⚠ Faded in the last part' : '⚠ Overfit risk') : 'OOS unknown'}
                                     {opt.robustness.ratio != null ? ` · val/train ${opt.robustness.ratio}` : ''} — {opt.robustness.note}
                                 </span>
                             )}
@@ -1163,6 +1173,7 @@ export default function MultiLeg() {
                 <div className="mb-3 p-2.5 rounded-lg border border-amber-800/40 bg-amber-950/10">
                     <label className="flex flex-wrap items-center gap-2 text-xs text-warning">
                         <span className="font-semibold">⭐ Professional preset</span>
+                        <DocLink to="multi-leg#setup-panel" />
                         <select value={presetKey}
                             onChange={e => { setPresetKey(e.target.value); const p = presets.find(x => x.key === e.target.value); if (p) applyPreset(p); }}
                             className="bg-slate-800 border border-line rounded p-1 text-fg-2 text-xs">
@@ -1422,7 +1433,7 @@ export default function MultiLeg() {
 
     const PayoffCard = (
         <div className="bg-surface rounded-xl border border-line p-4">
-            <div className="text-sm font-semibold text-fg mb-2">Payoff at expiry (per unit)</div>
+            <div className="text-sm font-semibold text-fg mb-2">Payoff at expiry (per unit) <DocLink to="multi-leg#setup-panel" /></div>
             {preview?.curve ? (
                 <ZoomableChart data={preview.curve} height={300}>
                     <LineChart >
@@ -1525,7 +1536,10 @@ export default function MultiLeg() {
                 onCancel={() => setConfirmState(null)} />
             <PreviewModal preview={livePreview} deployLots={deployLots} onCancel={() => setLivePreview(null)}
                 onConfirm={() => { const s = livePreview.strategy; setLivePreview(null); doDeploy(s, 'LIVE'); }} />
-            <PageHeader className="mb-3" icon={Layers} title="Multi-Leg Structures"
+            <PromoteDialog open={!!promote} kind="multileg" id={promote?.id} name={promote?.name}
+                onClose={() => { if (promote) pushToast(`“${promote.name}” stays on PAPER until it is promoted (Go-Live page)`, 'info', 6000); setPromote(null); }}
+                onDone={(res) => { pushToast(`LIVE — canary: first ${res.canary.trades} trades at ${res.canary.lots} lot(s)`, 'success', 8000); setPromote(null); refreshDeployments(); }} />
+            <PageHeader docs="multi-leg#overview" className="mb-3" icon={Layers} title="Multi-Leg Structures"
                 subtitle={<>Spreads · butterflies · condors · straddles · ratio backspreads · calendars — backtest, optimize, scan, and auto-race across symbols before any deployment.</>}
                 actions={(
                     <Link to={ROUTES.livePortfolioMulti}
@@ -1539,7 +1553,10 @@ export default function MultiLeg() {
             <Tabs className="mb-1" ariaLabel="Multi-leg sections"
                 tabs={TABS.map((t) => ({ id: t.id, label: t.label, icon: t.icon, hint: t.desc }))}
                 value={mode} onChange={setMode} />
-            <div className="text-2xs text-fg-5 mb-4 pl-1">{TABS.find(t => t.id === mode)?.desc}</div>
+            <div className="text-2xs text-fg-5 mb-4 pl-1 flex flex-wrap items-center gap-2">
+                <span>{TABS.find(t => t.id === mode)?.desc}</span>
+                <DocLink to={`multi-leg#${TAB_DOC[mode] || 'overview'}`} label="How this tab works" />
+            </div>
 
             {error && <div className="mb-4 p-2 bg-red-900/20 border border-red-700/50 rounded text-danger text-xs">{error}</div>}
 
@@ -1553,7 +1570,7 @@ export default function MultiLeg() {
                         {SetupCard}
                         {PayoffCard}
                         <div className="bg-surface rounded-xl border border-line p-4">
-                            <div className="text-sm font-semibold text-fg mb-3">Run</div>
+                            <div className="text-sm font-semibold text-fg mb-3">Run <DocLink to="multi-leg#backtest-tab" /></div>
                             <div className="grid grid-cols-3 gap-2 text-xs mb-3">{DateRangeInputs}</div>
                             {ChainSourceInputs}
                             {/* text-primary-ink, not text-primary-ink, on a `bg-primary/<alpha>`
@@ -1633,7 +1650,7 @@ export default function MultiLeg() {
                     {result?.trades?.length > 0 && (
                         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
                             <div className="bg-surface rounded-xl border border-line p-4">
-                                <div className="text-sm font-semibold text-fg mb-2">Equity (net, ₹)</div>
+                                <div className="text-sm font-semibold text-fg mb-2">Equity (net, ₹) <DocLink to="multi-leg#backtest-tab" /></div>
                                 <ZoomableChart data={equity} height={300}>
                                     <LineChart >
                                         <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
@@ -1646,7 +1663,7 @@ export default function MultiLeg() {
                                 </ZoomableChart>
                             </div>
                             <div className="bg-surface rounded-xl border border-line p-4 overflow-x-auto">
-                                <div className="text-sm font-semibold text-fg mb-2">Trades ({result.trades.length})</div>
+                                <div className="text-sm font-semibold text-fg mb-2">Trades ({result.trades.length}) <DocLink to="multi-leg#backtest-tab" /></div>
                                 <div className="max-h-[21.25rem] overflow-y-auto">
                                     <table className="w-full text-2xs text-fg-3">
                                         <thead className="sticky top-0 bg-surface"><tr className="text-fg-5 text-left"><th>Entry</th><th>Exit</th><th>Hold</th><th>Reason</th><th className="text-right">Spot in→out</th><th className="text-right">Credit</th><th className="text-right" title="Position size actually taken. 'risk' basis = sized to risk_per_trade, so it varies per trade.">Lots</th><th className="text-right" title="Worst per-unit delta the structure carried at ANY point in its life. A 'neutral' structure that reaches 0.5+ was not neutral. Exit-time delta hides this because exits cluster at DTE 0 where the reading is dominated by terminal gamma.">Worst Δ/u</th><th className="text-right">Margin</th><th className="text-right">Net ₹</th></tr></thead>
@@ -1684,7 +1701,7 @@ export default function MultiLeg() {
                         {SetupCard}
                         {PayoffCard}
                         <div className="bg-surface rounded-xl border border-line p-4">
-                            <div className="text-sm font-semibold text-fg mb-3">Sweep configuration</div>
+                            <div className="text-sm font-semibold text-fg mb-3">Sweep configuration <DocLink to="multi-leg#optimizer-tab" /></div>
                             <div className="grid grid-cols-3 gap-2 text-xs mb-3">{DateRangeInputs}</div>
                             <div className="grid grid-cols-2 gap-2 text-xs mb-3">{RankingInputs}</div>
                             <div className="grid grid-cols-2 gap-2 text-xs mb-3">
@@ -1763,7 +1780,7 @@ export default function MultiLeg() {
             {mode === 'scan' && (
                 <>
                     <div className="bg-surface rounded-xl border border-line p-4 mb-4">
-                        <div className="text-sm font-semibold text-fg mb-3">Scan configuration — every structure at its defaults, one leaderboard</div>
+                        <div className="text-sm font-semibold text-fg mb-3">Scan configuration — every structure at its defaults, one leaderboard <DocLink to="multi-leg#scan-tab" /></div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                             <div>
                                 <div className="text-fg-4 mb-1">Structures</div>
@@ -1977,7 +1994,7 @@ export default function MultiLeg() {
                     {autoJobs.length > 0 && (
                         <div className="bg-surface rounded-xl border border-line p-3 mb-4">
                             <div className="flex items-center justify-between mb-2">
-                                <div className="text-xs font-semibold text-fg">Recent runs (persisted — re-attach after a refresh)</div>
+                                <div className="text-xs font-semibold text-fg">Recent runs (persisted — re-attach after a refresh) <DocLink to="multi-leg#auto-tab" /></div>
                                 <div className="flex items-center gap-2">
                                     <span className="text-3xs text-fg-5 hidden sm:inline" title="A run that dies on its own (server restart or an error) is restarted from its last checkpoint, up to 3 times in a row. A run the resource guard parks (low memory, market hours) restarts by itself as soon as there is room again — those parks don't use up the 3 tries, because the guard parks a multi-day run every trading morning. A run YOU pause is never restarted automatically.">
                                         crash or resource guard → auto-resume · paused by you → stays paused
@@ -2088,7 +2105,7 @@ export default function MultiLeg() {
                             </div>
                             {autoState.result.leaderboard?.length > 0 && (
                                 <div className="bg-surface rounded-xl border border-line p-4 mt-4 overflow-x-auto">
-                                    <div className="text-sm font-semibold text-fg mb-2">Full leaderboard (stage-3 survivors)</div>
+                                    <div className="text-sm font-semibold text-fg mb-2">Full leaderboard (stage-3 survivors) <DocLink to="multi-leg#auto-tab" /></div>
                                     <table className="w-full text-2xs text-fg-3">
                                         <thead><tr className="text-fg-5 text-left"><th>#</th><th>Structure</th><th>Symbol</th><th>Signal</th><th className="text-right">Val net ₹</th><th className="text-right">Val PF</th><th className="text-right">Val win%</th><th className="text-right">Train net ₹</th><th className="text-right">OOS</th></tr></thead>
                                         <tbody>
@@ -2148,7 +2165,7 @@ export default function MultiLeg() {
                         );
                         return (
                             <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
-                                <Card label="Combined P&L (all books)" tone={combined < 0 ? 'border-rose-800/50 bg-rose-950/10' : 'border-emerald-800/50 bg-emerald-950/10'}>
+                                <Card label={<>Combined P&L (all books) <DocLink to="multi-leg#deploy-summary" /></>} tone={combined < 0 ? 'border-rose-800/50 bg-rose-950/10' : 'border-emerald-800/50 bg-emerald-950/10'}>
                                     <div className={`text-xl font-mono font-bold ${combined < 0 ? 'text-danger' : 'text-success'}`}>₹{fmt(combined)}</div>
                                     <div className="text-3xs text-fg-5">Realized ₹{fmt(realized)} · Open {open >= 0 ? '+' : ''}₹{fmt(open)}</div>
                                 </Card>
@@ -2181,12 +2198,13 @@ export default function MultiLeg() {
                     {mlDeps.signalStatus && Object.keys(mlDeps.signalStatus).length > 0 && (
                         <div className="bg-surface rounded-xl border border-line p-4 mb-4">
                             <div className={`flex items-center justify-between gap-2 flex-wrap ${sigTimelineOpen ? 'mb-2' : ''}`}>
-                                <h2 className="text-sm font-semibold text-fg">
+                                <h2 className="text-sm font-semibold text-fg flex items-center gap-2">
                                     <button type="button" onClick={() => setSigTimelineOpen(o => !o)} aria-expanded={sigTimelineOpen} aria-controls="ml-signal-timeline"
                                         className="flex items-center gap-2 hover:text-warning" title={sigTimelineOpen ? 'Collapse' : 'Expand'}>
                                         {sigTimelineOpen ? <ChevronDown className="w-4 h-4 text-fg-4" aria-hidden="true" /> : <ChevronRight className="w-4 h-4 text-fg-4" aria-hidden="true" />}
                                         <Activity className="w-4 h-4 text-warning" aria-hidden="true" /> Signal Status Timeline
                                     </button>
+                                    <DocLink to="multi-leg#deploy-signal-timeline" />
                                 </h2>
                                 {sigTimelineOpen ? (
                                     <span className="text-3xs text-fg-5">newest → · 🟢 entry · ⚪ neutral · 🔵 ready · 🟡 waiting</span>
@@ -2266,7 +2284,7 @@ export default function MultiLeg() {
 
                     <div className="bg-surface rounded-xl border border-line p-4 mb-4">
                         <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                            <div className="text-sm font-semibold text-fg flex items-center gap-2"><Rocket className="w-4 h-4 text-warning" /> Deployments ({visibleDeps.length}{visibleDeps.length !== (mlDeps.deployments || []).length ? `/${(mlDeps.deployments || []).length}` : ''})</div>
+                            <div className="text-sm font-semibold text-fg flex items-center gap-2"><Rocket className="w-4 h-4 text-warning" /> <DocLink to="multi-leg#deploy-toolbar" /> Deployments ({visibleDeps.length}{visibleDeps.length !== (mlDeps.deployments || []).length ? `/${(mlDeps.deployments || []).length}` : ''})</div>
                             <div className="flex flex-wrap items-center gap-2 text-2xs">
                                 {/* freshness / connection */}
                                 <span className={`flex items-center gap-1 ${!lastPoll.ok ? 'text-danger' : 'text-fg-5'}`} title="Auto-refreshes every 5s">
@@ -2454,7 +2472,7 @@ export default function MultiLeg() {
                                         <div key={d._id} className={`rounded-lg border p-3 relative ${isLive ? 'border-red-600 bg-red-950/20 ring-1 ring-red-800/40' : 'border-line bg-slate-900/40'} ${busy ? 'opacity-70' : ''}`}>
                                             {isLive && <div className="absolute -top-2 left-3 text-5xs font-bold px-1.5 py-0.5 rounded bg-red-700 text-white tracking-wider">● REAL MONEY</div>}
                                             <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 mb-1">
-                                                <div className="min-w-0 break-words text-xs font-semibold text-fg-2 flex items-center gap-1.5">{d.name}{busy && <RefreshCw className="w-3 h-3 animate-spin text-fg-4" />}</div>
+                                                <div className="min-w-0 break-words text-xs font-semibold text-fg-2 flex items-center gap-1.5">{d.name}{busy && <RefreshCw className="w-3 h-3 animate-spin text-fg-4" />}<DocLink to="multi-leg#deployment-card" /></div>
                                                 <div className="flex flex-wrap gap-1">
                                                     <span className={`text-3xs px-1.5 py-0.5 rounded border ${d.trade_mode === 'LIVE' ? 'border-red-700 text-danger' : 'border-sky-700 text-sky-300'}`}>{d.trade_mode}</span>
                                                     <span className={`text-3xs px-1.5 py-0.5 rounded border ${d.status === 'ACTIVE' ? 'border-emerald-700 text-success' : 'border-line-2 text-fg-4'}`}>{d.status}</span>
@@ -2550,6 +2568,7 @@ export default function MultiLeg() {
                                                 <div className="mb-2 border-t border-line-0 pt-2">
                                                     <div className="flex items-center justify-between text-3xs text-fg-4 mb-1 flex-wrap gap-x-3">
                                                         <span className="flex items-center gap-2">
+                                                            <DocLink to="multi-leg#risk-graph" />
                                                             <span className="text-success">━ expiry</span>
                                                             {pg && <span className="text-sky-300">┅ now (T+0)</span>}
                                                             {pg && <span className="text-violet-300/70">▨ ±1σ move</span>}
@@ -2722,6 +2741,7 @@ export default function MultiLeg() {
                                             {/* ── Full order detail (professional view) ── */}
                                             {detailOpen && (
                                                 <div className="text-3xs mb-2 border-t border-line-0 pt-2 space-y-2">
+                                                    <DocLink to="multi-leg#order-details" label="What these fields mean" />
                                                     <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 font-mono text-fg-4">
                                                         <div>Deployment <span className="text-fg-3">{d.name}</span></div>
                                                         <div>Created <span className="text-fg-3">{istDateTime(d.createdAt)}</span></div>
@@ -2892,7 +2912,7 @@ export default function MultiLeg() {
                             flooding deployment could fill in minutes. */}
                         <EngineJournal deployments={mlDeps.deployments || []} repeats={mlDeps.repeats || {}} focus={journalFocus} active={mode === 'deploy'} />
                         <div className="bg-surface rounded-xl border border-line p-4 flex flex-col max-h-[40rem]">
-                            <div className="text-sm font-semibold text-fg mb-2">Structure trades ({mlTrades.length})</div>
+                            <div className="text-sm font-semibold text-fg mb-2">Structure trades ({mlTrades.length}) <DocLink to="multi-leg#engine-journal" /></div>
                             {mlTrades.length === 0 ? <div className="text-xs text-fg-5">No completed structure round-trips yet.</div> : (
                               <div className="flex-1 min-h-0 overflow-auto">
                                 <table className="w-full text-2xs text-fg-3">
@@ -3014,7 +3034,7 @@ export default function MultiLeg() {
                             {/* Trades table */}
                             <div className="bg-surface rounded-xl border border-line p-4 overflow-x-auto">
                                 <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
-                                    <div className="text-sm font-semibold text-fg">Structure round-trips ({resFiltered.length})</div>
+                                    <div className="text-sm font-semibold text-fg">Structure round-trips ({resFiltered.length}) <DocLink to="multi-leg#results-tab" /></div>
                                     {(() => {
                                         const allOpen = resPageRows.length > 0 && resPageRows.every(t => resTradeOpen.has(resTradeId(t)));
                                         const anyOpen = resPageRows.some(t => resTradeOpen.has(resTradeId(t)));
@@ -3289,7 +3309,7 @@ function PreviewModal({ preview, deployLots, onConfirm, onCancel }) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true">
             <div className="w-full max-w-lg rounded-xl border border-red-700 bg-slate-900 p-4">
                 <div className="text-sm font-bold text-danger mb-1">🔴 Deploy “{need}” LIVE — confirm risk</div>
-                <div className="text-2xs text-fg-4 mb-3">Real broker orders · {deployLots} lot(s) · marketable-limit, hedges first. Review before confirming.</div>
+                <div className="text-2xs text-fg-4 mb-3">Real broker orders · {deployLots} lot(s) · marketable-limit, hedges first. Review before confirming — it is deployed on PAPER first, then the go-live checks (broker drill, evidence, canary) decide.</div>
                 {loading ? <div className="text-xs text-fg-4 py-6 text-center">Pricing the structure at the live chain…</div>
                     : data?.error ? <div className="text-xs text-danger py-4">Preview failed: {data.error}<div className="text-fg-5 mt-1">(needs live market hours + a valid chain). You can still deploy, but you’ll be doing so blind.</div></div>
                     : data ? (
@@ -3326,7 +3346,7 @@ function PreviewModal({ preview, deployLots, onConfirm, onCancel }) {
                 </label>
                 <div className="flex justify-end gap-2">
                     <button onClick={onCancel} className="px-3 py-1.5 rounded border border-line-2 bg-slate-800 text-fg-3 text-xs hover:text-fg">Cancel</button>
-                    <button onClick={() => ok && onConfirm()} disabled={!ok} className="px-3 py-1.5 rounded bg-red-700 hover:bg-red-600 text-white text-xs font-semibold disabled:opacity-40">Deploy LIVE</button>
+                    <button onClick={() => ok && onConfirm()} disabled={!ok} className="px-3 py-1.5 rounded bg-red-700 hover:bg-red-600 text-white text-xs font-semibold disabled:opacity-40">Continue to go-live checks</button>
                 </div>
             </div>
         </div>
@@ -3696,7 +3716,7 @@ function MarketRead({ symbol, presets, onApplyPreset }) {
     return (
         <div className="rounded-lg border border-line bg-slate-800/30 p-2.5 mb-3">
             <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-fg-2">🧭 Market read <span className="text-fg-5 font-normal">— momentum + where the sellers are</span></span>
+                <span className="text-xs font-semibold text-fg-2">🧭 Market read <span className="text-fg-5 font-normal">— momentum + where the sellers are</span> <DocLink to="multi-leg#setup-panel" /></span>
                 <button onClick={load} disabled={loading} className="text-3xs px-2 py-0.5 rounded border border-line-2 bg-slate-800 text-fg-3 hover:text-fg disabled:opacity-40">{loading ? 'reading…' : data ? 'refresh' : 'read now'}</button>
             </div>
             {err && <div className="text-2xs text-danger mt-1.5">{err}</div>}

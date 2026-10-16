@@ -131,7 +131,7 @@ export function PathSourceChip({ source }) {
 }
 
 /** Tooltip body: IST time plus every number the mark carries. */
-function PathTooltip({ active, payload, ct, fmtAt, markName, bookedName = 'booked net' }) {
+function PathTooltip({ active, payload, ct, fmtAt, markName, bookedName = 'booked net', symbol = null }) {
     if (!active || !Array.isArray(payload) || !payload.length) return null;
     const r = payload[0]?.payload;
     if (!r) return null;
@@ -142,7 +142,7 @@ function PathTooltip({ active, payload, ct, fmtAt, markName, bookedName = 'booke
                 ? <div>{bookedName} {rup(r.booked)}</div>
                 : <div>{markName} {rup(r.net)}</div>}
             {r.gross != null && <div>gross {rup(r.gross)}</div>}
-            {r.ltp != null && <div>option {premium(r.ltp)}</div>}
+            {r.ltp != null && <div>option {premium(r.ltp, symbol)}</div>}
             {r.spot != null && <div>spot {fmtNum(r.spot, 0)}</div>}
         </div>
     );
@@ -317,7 +317,7 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan })
                             tickFormatter={(v) => fmtNum(v, 0)} />
                     )}
                     <Tooltip cursor={{ stroke: ct.mark.live, strokeDasharray: '3 3' }}
-                        content={<PathTooltip ct={ct} fmtAt={fmtAt} markName={marksAreNet ? 'net' : 'mark (pre-cost)'} bookedName={bookedName} />} />
+                        content={<PathTooltip ct={ct} fmtAt={fmtAt} markName={marksAreNet ? 'net' : 'mark (pre-cost)'} bookedName={bookedName} symbol={trade && trade.symbol} />} />
                     <Legend wrapperStyle={{ fontSize: ct.type['5xs'] }} />
                     <ReferenceLine yAxisId="pnl" y={0} stroke={ct.axis} ifOverflow="extendDomain" />
                     {/* extendDomain, not the default: MAE/MFE can sit outside the

@@ -4,6 +4,7 @@ import DirectionConfidencePanel from '../components/risk/DirectionConfidencePane
 import TradeDetailsModal from '../components/TradeDetailsModal';
 import CollapsibleCard from '../components/CollapsibleCard';
 import { StatRow, StatTile, PageHeader, Chip, ModeChip, Spinner } from '../components/viz/primitives';
+import DocLink from '../components/DocLink.jsx';
 import { Play, Square, Activity, DollarSign, TrendingUp, AlertTriangle, Shield, ShoppingCart, List, Database, ChevronDown, ChevronRight, LayoutDashboard } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -555,7 +556,7 @@ export default function Dashboard() {
       {/* Header — one PageHeader for every page; the mode and the broker
           session are chips beside the title, the system monitor sits in the
           actions slot on the right. */}
-      <PageHeader
+      <PageHeader docs="dashboard#overview"
         icon={LayoutDashboard}
         title="Live Dashboard"
         badges={(
@@ -605,6 +606,7 @@ export default function Dashboard() {
               <div className="flex-1">
                   <h3 className="text-warning font-bold mb-1">
                       ⚠️ Web session credentials need attention
+                      <DocLink to="dashboard#session-banner" className="ml-2" />
                   </h3>
                   <p className="text-warning/80 text-sm mb-2">
                       {sessionHealth.total_expired > 0 && (
@@ -656,7 +658,7 @@ export default function Dashboard() {
       <div className="space-y-6">
           {/* Global Defaults — collapsible, DEFAULT COLLAPSED. When folded, the
               header still surfaces a one-line summary + a loud KILL-SWITCH badge. */}
-          <CollapsibleCard
+          <CollapsibleCard docs="dashboard#global-defaults"
               title="Global Defaults"
               icon={Shield}
               storageKey="dash:globalDefaults"
@@ -695,7 +697,7 @@ export default function Dashboard() {
       </div>
 
       {/* Live Market Data Section — collapsible */}
-      <CollapsibleCard
+      <CollapsibleCard docs="dashboard#market-data"
           title="Live Market Data (BANKNIFTY)"
           icon={TrendingUp}
           storageKey="dash:marketData"
@@ -776,6 +778,7 @@ export default function Dashboard() {
                       <div className="flex-1 min-w-40 px-4 py-2 flex flex-col justify-center">
                           <div className="text-3xs uppercase tracking-wider text-fg-5 font-bold flex items-center gap-1.5">
                               <DollarSign className="w-3 h-3" /> Combined P&L
+                              <DocLink to="dashboard#stats-strip" />
                           </div>
                           <div className={`text-2xl font-bold font-mono ${colorFor(combined)}`}>
                               {fmt(combined)}
@@ -845,6 +848,7 @@ export default function Dashboard() {
               <div className="flex items-center justify-between mb-2">
                   <h3 className="text-sm font-bold flex items-center gap-2 text-fg-2">
                       <Activity className="w-4 h-4 text-primary-ink" /> Signal Status Timeline
+                      <DocLink to="dashboard#signal-timeline" />
                   </h3>
                   <span className="text-3xs text-fg-5">
                       newest →  · last {Math.max(...Object.values(signalStatus).map(s => s?.history?.length || 0), 0)} checks per symbol
@@ -910,6 +914,7 @@ export default function Dashboard() {
           <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-bold flex items-center gap-2">
                   <ShoppingCart className="w-5 h-5 text-primary-ink" /> Live Positions
+                  <DocLink to="dashboard#live-positions" />
                   {positions.length > 0 && (
                       <span className="text-xs font-normal text-fg-5">
                           {positions.length} open
@@ -1482,6 +1487,7 @@ export default function Dashboard() {
           <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold flex items-center gap-2 text-fg">
                 <List className="w-5 h-5 text-primary-ink" /> Real Option Chain <span className="text-fg-5 text-sm font-normal">(BANKNIFTY)</span>
+                <DocLink to="dashboard#option-chain" />
               </h2>
               <button
                   onClick={toggleOptionChain}
@@ -1573,6 +1579,7 @@ export default function Dashboard() {
       {/* MongoDB Trade History */}
       <div className="bg-surface rounded-xl border border-line p-6">
           <div className="flex justify-between items-center mb-4">
+              <div className="flex items-center gap-2">
               <button
                   type="button"
                   onClick={toggleTrades}
@@ -1584,6 +1591,8 @@ export default function Dashboard() {
                 <Database className="w-5 h-5 text-primary-ink" /> Trade History
                 {tradesTotal > 0 && <span className="text-xs font-normal text-fg-5">({tradesTotal})</span>}
               </button>
+              <DocLink to="dashboard#trade-history" />
+              </div>
               {tradesExpanded && (
               <div className="flex items-center gap-4">
                   <div className="flex items-center gap-2">
@@ -1687,11 +1696,11 @@ export default function Dashboard() {
                                 <td className="p-3 text-fg-3">
                                     {trade.status ? (
                                         <div className="flex flex-col gap-0.5">
-                                            <span className="text-xs text-fg-4">En: {premium(trade.entryPrice ?? trade.price)}</span>
-                                            {trade.exitPrice && <span>Ex: <span className="text-fg">{premium(trade.exitPrice)}</span></span>}
+                                            <span className="text-xs text-fg-4">En: {premium(trade.entryPrice ?? trade.price, trade.symbol)}</span>
+                                            {trade.exitPrice && <span>Ex: <span className="text-fg">{premium(trade.exitPrice, trade.symbol)}</span></span>}
                                         </div>
                                     ) : (
-                                        <span>{premium(trade.price)}</span>
+                                        <span>{premium(trade.price, trade.symbol)}</span>
                                     )}
                                 </td>
 
@@ -1746,6 +1755,7 @@ export default function Dashboard() {
               <div className="flex items-center gap-3">
                   <h2 className="text-xl font-bold flex items-center gap-2">
                       <Activity className="w-5 h-5 text-primary-ink" /> Live Activity Feed
+                      <DocLink to="dashboard#activity-feed" />
                       {activityLoading && <span className="text-3xs text-fg-5 font-normal">refreshing…</span>}
                   </h2>
                   <button
@@ -2008,10 +2018,11 @@ export default function Dashboard() {
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-[2px]" onClick={() => setActivityDetail(null)}>
               {/* Presentational: exists only to stop the click bubbling to the
                   backdrop — it is not itself an control. */}
-              <div className="bg-surface border border-line-2 rounded-xl w-full max-w-2xl max-h-[80vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}> role="presentation"
+              <div className="bg-surface border border-line-2 rounded-xl w-full max-w-2xl max-h-[80vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()} role="presentation">
                   <div className="p-4 border-b border-line flex justify-between items-center">
                       <h3 className="font-bold text-fg">
                           {activityDetail.type} · {activityDetail.symbol || '—'}
+                          <DocLink to="dashboard#activity-feed" className="ml-2" />
                       </h3>
                       <button onClick={() => setActivityDetail(null)} className="text-fg-4 hover:text-fg text-xl">×</button>
                   </div>
@@ -2129,6 +2140,7 @@ export default function Dashboard() {
                       <h3 className={`text-lg font-bold flex items-center gap-2 ${previewModal.params.type === 'CE' ? 'text-success' : 'text-danger'}`}>
                           {previewModal.params.type === 'CE' ? <TrendingUp className="w-5 h-5" /> : <TrendingUp className="w-5 h-5 rotate-180" />}
                           Confirm {previewModal.params.type} Entry
+                          <DocLink to="dashboard#test-windows" />
                       </h3>
                       
                       <div className="flex items-center gap-3">
@@ -2272,11 +2284,11 @@ export default function Dashboard() {
         <div className="fixed inset-0 bg-black/60 backdrop-blur-[2px] z-50 flex items-center justify-center p-4" onClick={closeSimulator}>
           {/* Presentational: exists only to stop the click bubbling to the
               backdrop — it is not itself an control. */}
-          <div className="bg-slate-900 border border-line rounded-xl w-full max-w-lg shadow-2xl" onClick={e => e.stopPropagation()}> role="presentation"
+          <div className="bg-slate-900 border border-line rounded-xl w-full max-w-lg shadow-2xl" onClick={e => e.stopPropagation()} role="presentation">
             {/* Header */}
             <div className="p-4 border-b border-line flex items-center justify-between">
               <div>
-                <h3 className="text-base font-bold text-warning">🧪 Signal Simulator</h3>
+                <h3 className="text-base font-bold text-warning">🧪 Signal Simulator <DocLink to="dashboard#test-windows" /></h3>
                 <p className="text-xs text-fg-4 mt-0.5">{simModal.symbol} — runs full pipeline without placing an order</p>
               </div>
               <button onClick={closeSimulator} className="text-fg-4 hover:text-fg text-xl leading-none">×</button>

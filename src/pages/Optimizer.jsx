@@ -1,5 +1,8 @@
 import React, { useState, useRef, useMemo, useId } from 'react';
-import { PageHeader } from '../components/viz/primitives';
+import { PageHeader, Segmented } from '../components/viz/primitives';
+import DeltaInstrumentPicker from '../components/delta/DeltaInstrumentPicker';
+import DeltaParams from '../components/delta/DeltaParams';
+import { isDeltaSymbol } from '../components/delta/deltaFormat.js';
 import { useNavigate } from 'react-router-dom';
 import { Activity, Play, TrendingUp, AlertTriangle, Code, ChevronDown, ChevronRight, Check, Trophy, Square, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { useGlobalState } from '../context/GlobalContext';
@@ -16,6 +19,14 @@ import CrossIndexResults from '../components/optimizer/CrossIndexResults';
 import RecentRuns from '../components/optimizer/RecentRuns';
 import { useConfirm } from '../components/confirmContext.js';
 import { INDEX_SYMBOLS, PRESETS, plannedBacktests, defaultK, nameOf } from '../components/optimizer/crossIndex';
+import DocLink from '../components/DocLink.jsx';
+import MemberBuilder from '../components/combiner/MemberBuilder.jsx';
+import CombinerCrownPanel, { CombinerGates } from '../components/optimizer/CombinerGatesPanel.jsx';
+import { consistencyText, consistencyVerdict } from '../components/viz/consistencyFormat.js';
+
+// Signal combiner (stage 2): the candidate members a draw picks from when none are chosen —
+// the council's validated nine, so the two can be compared.
+const DEFAULT_COMBINER_POOL = 'wyckoff_spring,smc_ob,liquidity_sweep,volume_surge,apex_confluence,intraday_momentum,ichimoku_kumo,rsi2_reversion,gap_edge';
 
 
 
@@ -56,6 +67,7 @@ const NOISE_PARAM_KEYS = new Set([
   'minTrades', 'minWinRate', 'maxDrawdown', 'minSharpeRatio',
   'min_trades', 'min_win_rate', 'max_drawdown', 'min_sharpe_ratio', 'stop_on_match',
   'use_ai_prediction', 'DISABLE_RANDOMIZATION', 'signal',
+  'rank_metric', 'min_consistency', 'member_pool', 'combiner_null_runs',
   // multi-index run orchestration
   'symbols', 'preset', 'budget', 'seed', 'cross_index', 'minSlU', 'optimizer_workers', 'optimizer_block', 'jobId', 'iterations',
 ]);
@@ -64,7 +76,7 @@ const SPOT_ARCHIVE_FROM = '2025-06-02', SPOT_ARCHIVE_TO = '2026-02-19';
 const MULTI_DEFAULT_WINDOW = { start_date: '2025-06-16', end_date: '2026-02-19' };
 
 // Why a strategy has no set to show — from the run's own drop counts, never a guess.
-const FAIL_WORDS = { trades: 'too few trades', winRate: 'win rate below the filter', drawdown: 'drawdown above the filter', sharpe: 'Sharpe below the filter', loss: 'lost money' };
+const FAIL_WORDS = { trades: 'too few trades', winRate: 'win rate below the filter', drawdown: 'drawdown above the filter', sharpe: 'Sharpe below the filter', consistency: 'consistency below the filter', loss: 'lost money' };
 function noSetReason(g) {
   const d = g.drop_stats || {};
   const tried = g.trials || null;
@@ -601,6 +613,7 @@ export default function Optimizer() {
     'symbols', 'preset', 'budget', 'seed', 'cross_index', 'minSlU', 'optimizer_workers', 'optimizer_block',
     'minTrades', 'minWinRate', 'maxDrawdown', 'minSharpeRatio',
     'min_trades', 'min_win_rate', 'max_drawdown', 'min_sharpe_ratio', 'signal',
+    'rank_metric', 'min_consistency', 'combiner_null_runs',
     // run-context (set explicitly + normalized below)
     'symbol', 'strategy', 'resolution', 'start_date', 'end_date', 'startDate', 'endDate',
     'capital', 'lot_size', 'lots', 'dataSource', 'backtest_mode', 'futures_expiry',
@@ -760,7 +773,9 @@ export default function Optimizer() {
   // held up out-of-sample (robust). Otherwise no trophy (honest "nothing robust").
   // Re-derived client-side so it follows the toggle without a re-run.
   const bestStrategyId = (() => {
-    const top = strategyGroups[0];
+    // A signal combiner that failed its crown gates stays listed but is never the winner
+    // (the server applies the same rule — see pooledRun.runCombinerGates).
+    const top = strategyGroups.find(g => !g.crownBlocked);
     if (!top || !top.best) return null;
     if (!hasOos) return top.strategy;
     return top.best.robust ? top.strategy : null;
@@ -812,7 +827,7 @@ export default function Optimizer() {
 
   return (
     <div className="p-6 space-y-6">
-      <PageHeader icon={Activity} title="Strategy Optimizer"
+      <PageHeader docs="optimizer#overview" icon={Activity} title="Strategy Optimizer"
         subtitle="Grid-search a strategy's parameters with out-of-sample ranking, then bake the winner as its default." />
 
       <div className={`grid grid-cols-1 gap-8 ${configCollapsed ? 'lg:grid-cols-[3rem_1fr]' : 'lg:grid-cols-3'}`}>
@@ -835,7 +850,7 @@ export default function Optimizer() {
         ) : (
         <div className="bg-surface p-6 rounded-xl border border-line space-y-6 h-fit">
           <div className="flex items-center justify-between">
-            <h2 className="text-xl font-bold">Parameters</h2>
+            <h2 className="text-xl font-bold flex items-center gap-2">Parameters <DocLink to="optimizer#setup" /></h2>
             <button
               onClick={toggleConfigCollapsed}
               title="Collapse Parameters"
@@ -907,17 +922,61 @@ export default function Optimizer() {
                   ? `Every selected strategy is tried on all ${symbols.length} indexes with the same settings, then ranked by how many indexes it holds up on.`
                   : `Each selected strategy is optimized separately (${config.iterations || 0} iterations each) on this symbol, then ranked to find the best.`}
               </p>
+              {selectedStrategies.includes('signal_combiner') && (
+                <div className="mt-3 rounded-lg border border-line p-3 space-y-2">
+                  <p className="text-xs text-fg-3 font-medium">Signal combiner — candidate members <DocLink to="signal-combiner#optimizer" /></p>
+                  <p className="text-2xs text-fg-5">
+                    Each draw picks 2–6 of these, a rule and its settings; the members' own parameters are never changed by the search.
+                    After the run, the best setting on each index must beat every member run alone and random picks from the same members, or it is not crowned.
+                  </p>
+                  <MemberBuilder value={config.member_pool || DEFAULT_COMBINER_POOL} resolution={config.resolution || '5'}
+                    onChange={(pool) => setConfig(c => ({ ...c, member_pool: pool }))} />
+                  <label className="flex flex-wrap items-center gap-2 text-2xs text-fg-4">
+                    Random-selection runs per index (≥ 19 for p ≤ 0.05)
+                    <input type="number" min="5" step="1" className="w-[5rem] bg-slate-900 border border-line rounded p-1 text-fg"
+                      value={config.combiner_null_runs ?? 19} onChange={e => setConfig(c => ({ ...c, combiner_null_runs: Number(e.target.value) || 19 }))} />
+                  </label>
+                </div>
+              )}
             </div>
 
-            <IndexChips
+            <div>
+              <div className="block text-sm font-medium text-fg-4 mb-1">Exchange</div>
+              <Segmented
+                options={[{ v: 'FYERS', label: 'NSE / BSE / MCX' }, { v: 'DELTA', label: 'Delta Exchange' }]}
+                value={isDeltaSymbol(config.symbol) ? 'DELTA' : 'FYERS'}
+                onChange={(v) => {
+                  if (v === 'DELTA' && !isDeltaSymbol(config.symbol)) {
+                    setConfig({ ...config, symbol: 'DELTA:BTCUSD', symbols: ['DELTA:BTCUSD'], lots: config.lots || 1, delta_leverage: config.delta_leverage ?? 10, holding_enabled: true, trade_start_time: '00:00', trade_end_time: '23:59' });
+                  } else if (v === 'FYERS' && isDeltaSymbol(config.symbol)) {
+                    const first = Object.keys(instrumentConfig).find(k => k.endsWith('-INDEX')) || 'NSE:NIFTY50-INDEX';
+                    setConfig({ ...config, symbol: first, symbols: [first], lot_size: instrumentConfig[first]?.lotSize });
+                  }
+                }}
+              />
+              {isDeltaSymbol(config.symbol) && <p className="text-3xs text-fg-5 mt-1">Delta runs one contract at a time (the multi-index pool covers NSE/BSE indexes).</p>}
+            </div>
+
+            {isDeltaSymbol(config.symbol) && (
+              <div className="space-y-3">
+                <DeltaInstrumentPicker id="optimizer-delta-symbol" value={config.symbol} onChange={(sym) => setConfig({ ...config, symbol: sym, symbols: [sym] })} />
+                <label htmlFor="optimizer-delta-contracts" className="block text-xs text-fg-4">Contracts
+                  <input id="optimizer-delta-contracts" type="number" min="1" step="1" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
+                    value={config.lots || 1} onChange={e => setConfig({ ...config, lots: Math.max(1, parseInt(e.target.value, 10) || 1) })} />
+                </label>
+                <DeltaParams symbol={config.symbol} params={config} onChange={setConfig} idPrefix="optimizer-delta" />
+              </div>
+            )}
+
+            {!isDeltaSymbol(config.symbol) && <IndexChips
               selected={symbols.filter(s => INDEX_SYMBOLS.includes(s))}
               onChange={setSymbols}
               badges={dataCheckResult ? Object.fromEntries(Object.entries(dataCheckResult.symbols || {}).map(([sym, v]) => [sym, {
                 ok: !!v.eligible, text: v.eligible ? `✓ ${v.days}d` : `⚠ ${v.days ?? 0}d`, title: v.eligible ? `${v.days} sessions, data OK` : (v.reasons || []).join('; '),
               }])) : {}}
-            />
+            />}
 
-            {!isMulti && (
+            {!isMulti && !isDeltaSymbol(config.symbol) && (
             <div>
               <label htmlFor="optimizer-symbol-1" className="block text-sm font-medium text-fg-4 mb-1">Symbol</label>
               <select id="optimizer-symbol-1"
@@ -959,7 +1018,7 @@ export default function Optimizer() {
                 </p>
                 <p className="text-2xs text-fg-5">Each index uses its exchange lot (as of the start date) — not editable here.</p>
               </div>
-            ) : (
+            ) : isDeltaSymbol(config.symbol) ? null : (
             <div>
               <label htmlFor="optimizer-lot-size-2" className="block text-sm font-medium text-fg-4 mb-1">Lot Size</label>
               <input id="optimizer-lot-size-2"
@@ -1129,6 +1188,26 @@ export default function Optimizer() {
                 <input id="optimizer-min-sharpe-ratio-13" type="number" step="0.1" className="w-full bg-slate-900 border border-line rounded p-2 text-fg"
                   value={config.minSharpeRatio !== undefined ? config.minSharpeRatio : ''}
                   onChange={e => setConfig({ ...config, minSharpeRatio: e.target.value === '' ? '' : parseFloat(e.target.value) })} />
+              </div>
+              <div>
+                <label htmlFor="optimizer-min-consistency" className="block text-sm font-medium text-fg-4 mb-1" title="0–100: profitable months × how straight the equity line is, on the training window. 0 = off.">Min Consistency</label>
+                <input id="optimizer-min-consistency" type="number" min="0" max="100" step="5" placeholder="off" className="w-full bg-slate-900 border border-line rounded p-2 text-fg"
+                  value={config.min_consistency ?? ''}
+                  onChange={e => setConfig({ ...config, min_consistency: e.target.value === '' ? undefined : Number(e.target.value) })} />
+              </div>
+              <div className="col-span-2">
+                <span className="block text-sm font-medium text-fg-4 mb-1">Rank settings for <DocLink to="optimizer#consistency" /></span>
+                <Segmented size="md" value={config.rank_metric || 'standard'}
+                  onChange={v => setConfig(c => ({ ...c, rank_metric: v === 'standard' ? undefined : v }))}
+                  options={[
+                    { v: 'standard', label: 'Best risk-adjusted', hint: 'The usual score: Sharpe, profit factor, per-trade edge, drawdown, out-of-sample discount' },
+                    { v: 'consistency', label: 'Steady across the range', hint: 'The same score plus a strong reward for making money in most months with a straight equity line' },
+                  ]} />
+                <p className="text-2xs text-fg-5 mt-1">
+                  {config.rank_metric === 'consistency'
+                    ? 'Settings that make money in most months with a straight equity line rank higher; ones whose profit comes from one stretch rank lower. Settings must still hold up out-of-sample.'
+                    : 'Sharpe and total P&L summarise the whole range, so a setting that is flat for a year and jumps at the end can rank high. Pick “Steady” to prefer settings that earn throughout.'}
+                </p>
               </div>
               <div>
                 <label htmlFor="optimizer-slippage-14" className="block text-sm font-medium text-fg-4 mb-1">Slippage (%)</label>
@@ -1308,6 +1387,7 @@ export default function Optimizer() {
                 </div>
               )}
               <CrossIndexResults result={results} onTest={goTest} onSave={saveSettings} onClear={clearResults} noise={NOISE_PARAM_KEYS} />
+              <CombinerCrownPanel result={results} />
             </div>
           ) : results ? (
             <div className="space-y-6">
@@ -1324,6 +1404,7 @@ export default function Optimizer() {
                   <h2 className="text-xl font-bold flex items-center gap-2">
                     <TrendingUp className="w-5 h-5 text-success" />
                     Optimization Results
+                    <DocLink to="optimizer#results" />
                   </h2>
                   {/* Run context — what these results were optimized on (from the
                       self-describing result, so it stays correct after refresh). */}
@@ -1470,6 +1551,7 @@ export default function Optimizer() {
                       <th className="p-2">Max DD</th>
                       <th className="p-2">Sharpe</th>
                       <th className="p-2">PF</th>
+                      <th className="p-2" title="0–100: profitable months × straightness of the equity line (full window)">Consistency</th>
                       {hasOos && <th className="p-2 text-success">Out-of-Sample</th>}
                       <th className="p-2">Sets</th>
                     </tr>
@@ -1512,6 +1594,7 @@ export default function Optimizer() {
                                 <td className="p-2 text-danger">{m.maxDrawdown}%</td>
                                 <td className="p-2 text-blue-400">{m.sharpeRatio}</td>
                                 <td className="p-2 text-purple-300">{fmtPF(m.profitFactor)}</td>
+                                <td className="p-2" title={consistencyVerdict(m.consistency?.score)}>{consistencyText(m.consistency?.score)}</td>
                                 {hasOos && (
                                   <td className="p-2">
                                     {g.best.oos ? (
@@ -1527,16 +1610,23 @@ export default function Optimizer() {
                                 <td className="p-2 text-fg-4">{g.best_parameters?.length || 0}</td>
                               </>
                             ) : (
-                              <td className="p-2 text-fg-5 italic" colSpan={hasOos ? 9 : 8}>
+                              <td className="p-2 text-fg-5 italic" colSpan={hasOos ? 10 : 9}>
                                 {g.error ? `Error: ${g.error}` : noSetReason(g)}
                               </td>
                             )}
                           </tr>
+                          {g.combinerGates && (
+                            <tr className="border-b border-line-0">
+                              <td colSpan={hasOos ? 13 : 12} className="p-3 bg-slate-900/30">
+                                <CombinerGates gates={g.combinerGates} />
+                              </td>
+                            </tr>
+                          )}
 
                           {/* Expanded: this strategy's top parameter sets */}
                           {isOpen && g.best_parameters?.length > 0 && (
                             <tr className="bg-slate-900/40">
-                              <td colSpan={hasOos ? 12 : 11} className="p-3">
+                              <td colSpan={hasOos ? 13 : 12} className="p-3">
                                 <div className="overflow-x-auto">
                                   <table className="w-full text-left border-collapse">
                                     <thead>
@@ -1549,6 +1639,7 @@ export default function Optimizer() {
                                         <th className="p-2">Max DD</th>
                                         <th className="p-2">Sharpe</th>
                                         <th className="p-2">PF</th>
+                                        <th className="p-2" title="0–100, full window">Consistency</th>
                                         {hasOos && <th className="p-2 text-success">OOS P&L</th>}
                                         {hasOos && <th className="p-2 text-success">OOS Win%</th>}
                                         {hasOos && <th className="p-2">Verdict</th>}
@@ -1581,6 +1672,7 @@ export default function Optimizer() {
                                             <td className="p-2 text-danger">{rm.maxDrawdown}%</td>
                                             <td className="p-2 text-blue-400">{rm.sharpeRatio}</td>
                                             <td className="p-2 text-purple-300">{fmtPF(rm.profitFactor)}</td>
+                                            <td className="p-2" title={consistencyVerdict(rm.consistency?.score)}>{consistencyText(rm.consistency?.score)}{res.oos?.consistency ? <span className="text-fg-5"> · test {consistencyText(res.oos.consistency.score)}</span> : null}</td>
                                             {hasOos && (
                                               <td className={`p-2 font-mono ${(res.oos?.totalPnL ?? 0) > 0 ? 'text-success' : 'text-danger'}`}>
                                                 {res.oos ? fmtPnL(res.oos.totalPnL) : '—'}

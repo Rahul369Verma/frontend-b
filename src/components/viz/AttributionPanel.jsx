@@ -28,10 +28,16 @@ export default function AttributionPanel({ data, context = 'live' }) {
         if (!o) return [];
         const s = [];
         if (o.fullAttribution > 0) {
+            // A book of futures / perpetuals only has direction (and funding): no zero
+            // greek rows pretending there was convexity or decay to measure.
+            const optionGreeks = Math.abs(o.gammaPnl) > 0.01 || Math.abs(o.vegaPnl) > 0.01 || Math.abs(o.thetaPnl) > 0.01;
             s.push({ label: 'Direction (delta)', value: o.deltaPnl });
-            s.push({ label: 'Convexity (gamma)', value: o.gammaPnl });
-            s.push({ label: 'Vol (vega)', value: o.vegaPnl });
-            s.push({ label: 'Decay (theta)', value: o.thetaPnl });
+            if (optionGreeks) {
+                s.push({ label: 'Convexity (gamma)', value: o.gammaPnl });
+                s.push({ label: 'Vol (vega)', value: o.vegaPnl });
+                s.push({ label: 'Decay (theta)', value: o.thetaPnl });
+            }
+            if (Math.abs(o.carryPnl || 0) > 0.01) s.push({ label: 'Funding (perpetual carry)', value: o.carryPnl });
             if (Math.abs(o.residualPnl) > 0.01) s.push({ label: 'Unexplained', value: o.residualPnl });
         } else {
             s.push({ label: 'Gross P&L', value: o.grossPnl });
@@ -93,7 +99,7 @@ export default function AttributionPanel({ data, context = 'live' }) {
             </StatRow>
 
             {/* The most actionable output — ranked plain-language findings. */}
-            <Card title="What the numbers say"
+            <Card docs="risk#attribution" title="What the numbers say"
                   subtitle={context === 'backtest'
                       ? 'Found before deployment, not after — a take-profit below break-even books "wins" that are net losses.'
                       : 'Ranked by how much money the issue is costing.'}>
@@ -101,7 +107,7 @@ export default function AttributionPanel({ data, context = 'live' }) {
             </Card>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <Card
+                <Card docs="risk#attribution"
                     title="Where the money came from"
                     subtitle="Gross P&L split into the market factors that produced it, then the frictions taken out."
                     right={o.fullAttribution < o.trades
@@ -120,7 +126,7 @@ export default function AttributionPanel({ data, context = 'live' }) {
                     )}
                 </Card>
 
-                <Card title="Break-even reality check"
+                <Card docs="risk#attribution" title="Break-even reality check"
                       subtitle="The premium move each trade needed just to pay its own costs.">
                     <StatRow cols={2}>
                         <StatTile label="Avg break-even" value={`${num(o.avgBreakEvenPoints)} pts`}
@@ -147,7 +153,7 @@ export default function AttributionPanel({ data, context = 'live' }) {
                 </Card>
             </div>
 
-            <Card
+            <Card docs="risk#attribution"
                 title="Breakdown"
                 right={
                     <div className="flex gap-1">

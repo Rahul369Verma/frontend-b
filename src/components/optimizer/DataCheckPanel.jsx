@@ -1,6 +1,7 @@
 import React from 'react';
 import { API_ORIGIN } from '../../config/api.js';
 import { nameOf } from './crossIndex';
+import DocLink from '../DocLink.jsx';
 
 // Before Start: is each index's data good enough to judge a strategy on?
 // Ineligible indexes still run but don't count toward "held up on K of N".
@@ -33,7 +34,7 @@ export default function DataCheckPanel({ symbols, dataSource, start, end, oosFra
   return (
     <section className="p-3 bg-slate-800 rounded-lg border border-line space-y-2" aria-label="Data check">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-fg-3">Data check</h3>
+        <h3 className="text-sm font-medium text-fg-3">Data check <DocLink to="optimizer#data-check" /></h3>
         {loading && <span className="text-2xs text-fg-5">checking…</span>}
       </div>
       {error && <p className="text-2xs text-danger">Data check failed: {error}</p>}

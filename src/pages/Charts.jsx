@@ -281,7 +281,7 @@ export default function Charts() {
 
     const symbolOptions = useMemo(() => {
         if (!universe) return [{ value: symbol, label: symbol, kind: 'index' }];
-        return [...(universe.indices || []), ...(universe.equities || []), ...(universe.commodities || []), ...(universe.traded || [])];
+        return [...(universe.indices || []), ...(universe.equities || []), ...(universe.commodities || []), ...(universe.delta || []), ...(universe.traded || [])];
     }, [universe, symbol]);
 
     const wins = trades.filter(t => (n(t.net) ?? 0) > 0).length;
@@ -311,7 +311,7 @@ export default function Charts() {
 
     return (
         <div className="p-6 space-y-4">
-            <PageHeader
+            <PageHeader docs="charts"
                 icon={CandlestickChart}
                 title="Charts"
                 subtitle="Any index, equity or traded option — with this desk's own entries, exits, stops, targets, strikes and break-evens drawn on the price."
@@ -332,7 +332,7 @@ export default function Charts() {
                 <label className="text-fg-5">Symbol
                     <select value={symbol} onChange={(e) => { setSymbol(e.target.value); setSelected(null); setDrawMode(false); }}
                         className="block mt-0.5 bg-card-2 border border-line rounded p-1.5 text-fg-2 min-w-[16rem]">
-                        {['index', 'equity', 'commodity', 'option'].map(kind => {
+                        {['index', 'equity', 'commodity', 'delta', 'option'].map(kind => {
                             const group = symbolOptions.filter(o => o.kind === kind);
                             if (!group.length) return null;
                             const GROUP_LABEL = {
@@ -343,6 +343,8 @@ export default function Charts() {
                                 // carries the contract the chart will actually fetch.
                                 commodity: 'MCX futures (near-month contract)',
                                 option: 'Options we have traded (60d)',
+                                // USD prices (INR for *_INR spot pairs); options are on the Delta page.
+                                delta: 'Delta Exchange (perpetuals + spot)',
                             };
                             return (
                                 <optgroup key={kind} label={GROUP_LABEL[kind]}>
@@ -451,7 +453,7 @@ export default function Charts() {
                 <Card><EmptyState icon={CandlestickChart} title="No candles in this window.">Widen the range or pick another interval.</EmptyState></Card>
             ) : (
                 <>
-                    <Card
+                    <Card docs="charts#chart"
                         title={`${symbol.replace(/^(NSE|BSE):/, '')} · ${RESOLUTIONS.find(r => r.v === resolution)?.label || resolution}`}
                         subtitle={overlays?.note}
                         right={
@@ -550,7 +552,7 @@ export default function Charts() {
                     </StatRow>
 
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                        <Card title="Trades in this window" subtitle="Click a row to zoom the chart to that trade and show only its levels.">
+                        <Card docs="charts#trades" title="Trades in this window" subtitle="Click a row to zoom the chart to that trade and show only its levels.">
                             {trades.length === 0 ? (
                                 <EmptyState title="Nothing traded here">
                                     No trade of ours falls in this window on this symbol. Pick a wider range, or a symbol you have actually traded.
@@ -564,7 +566,7 @@ export default function Charts() {
                             )}
                         </Card>
 
-                        <Card title={sel ? sel.label : 'Trade detail'} subtitle={sel ? 'What the chart is showing you' : 'Select a trade on the left.'}>
+                        <Card docs="charts#trades" title={sel ? sel.label : 'Trade detail'} subtitle={sel ? 'What the chart is showing you' : 'Select a trade on the left.'}>
                             {!sel ? (
                                 <Placeholder>Nothing selected.</Placeholder>
                             ) : (

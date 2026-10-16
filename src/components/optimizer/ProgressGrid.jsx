@@ -1,6 +1,7 @@
 import React from 'react';
 import { Square } from 'lucide-react';
 import { nameOf } from './crossIndex';
+import DocLink from '../DocLink.jsx';
 
 const STEPS = [
   { key: 'loading', label: 'Loading data' },
@@ -34,6 +35,7 @@ export default function ProgressGrid({ progress = {}, cells = null, symbols = []
             {i + 1}. {s.label}
           </li>
         ))}
+        <li className="self-center"><DocLink to="optimizer#progress" /></li>
       </ol>
       <div>
         <p className="text-lg font-bold text-fg">{stepText}</p>

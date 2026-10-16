@@ -68,3 +68,38 @@ describe('SavedStrategiesPanel — accordion', () => {
         expect(screen.getByText('goodSIC')).toBeInTheDocument();
     });
 });
+
+describe('SavedStrategiesPanel — a 70/30 split saved with a plain backtest', () => {
+    beforeEach(() => localStorage.clear());
+    const SPLIT = {
+        _id: 's3', name: 'nifty-core', template: 'short_strangle', symbol: 'NSE:NIFTY50-INDEX', entry_mode: 'time',
+        backtest: {
+            from: '2025-01-01', to: '2026-10-16', resolution: '5',
+            metrics: { netPnl: 500000, n: 442, winRate: 80, roiOnMarginPct: 90, profitFactor: 3 },
+            split: { ratio: 0.3, train: { netPnl: 300000, n: 308 }, val: { netPnl: 200000, n: 134, profitFactor: 4 }, robustness: { robust: true, ratio: 0.67, note: 'holds out of sample' } },
+        },
+    };
+    const FADED = { ...SPLIT, _id: 's4', name: 'bankex', backtest: { ...SPLIT.backtest, split: { ...SPLIT.backtest.split, val: { netPnl: -5000, n: 134 }, robustness: { robust: false, ratio: -0.02, note: 'edge disappears out-of-sample' } } } };
+
+    it('fills the Val/Train columns, says "Held up" / "Faded" — never "Holds"/"Overfit" — and shows no Auto chip', () => {
+        render(<SavedStrategiesPanel {...props({ list: [SPLIT, FADED, LIST[0]] })} />);
+        const row = screen.getByText('nifty-core').closest('tr');
+        expect(within(row).getByText('✓ Held up')).toBeInTheDocument();
+        expect(within(row).queryByText(/Auto #/)).not.toBeInTheDocument();
+        expect(within(row).queryByText(/Overfit/)).not.toBeInTheDocument();
+        const faded = screen.getByText('bankex').closest('tr');
+        expect(within(faded).getByText('⚠ Faded')).toBeInTheDocument();
+        // a plain backtest without a split still shows — in the OOS columns
+        expect(within(row).queryByText('↗ Better lately')).not.toBeInTheDocument();
+        const plain = screen.getByText('october-Short Straddle - NIFTY50').closest('tr');
+        expect(within(plain).queryByText(/Held up|Faded/)).not.toBeInTheDocument();
+    });
+
+    it('a strategy that lost in the first part and gained lately reads "Better lately", not "Held up"', () => {
+        const IMPROVED = { ...SPLIT, _id: 's5', name: 'goodSIC', backtest: { ...SPLIT.backtest, split: { ...SPLIT.backtest.split, train: { netPnl: -26133, n: 124 }, val: { netPnl: 13088, n: 55 }, robustness: { robust: true, ratio: null, note: 'positive out-of-sample (train was weak)' } } } };
+        render(<SavedStrategiesPanel {...props({ list: [IMPROVED] })} />);
+        const row = screen.getByText('goodSIC').closest('tr');
+        expect(within(row).getByText('↗ Better lately')).toBeInTheDocument();
+        expect(within(row).queryByText('✓ Held up')).not.toBeInTheDocument();
+    });
+});

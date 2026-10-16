@@ -11,6 +11,7 @@ import { useConfirm } from '../components/confirmContext.js';
 import { PageHeader, Chip } from '../components/viz/primitives';
 import { inr, pnlTone } from '../components/viz/tokens';
 import { toast } from '../components/toastStore.js';
+import DocLink from '../components/DocLink.jsx';
 
 // Build a Fyers futures symbol from an index key + expiry date.
 //   buildFuturesSymbol('NSE:NIFTYBANK-INDEX', '2026-06-30')
@@ -453,7 +454,7 @@ export default function TickStrategies() {
 
     return (
         <div className="p-6 space-y-6">
-            <PageHeader
+            <PageHeader docs="tick-strategies#overview"
                 icon={Zap}
                 title="Live Tick Strategies"
                 badges={<Chip tone="paper" title="These strategies never place broker orders">PAPER ONLY</Chip>}
@@ -529,7 +530,7 @@ export default function TickStrategies() {
                 <div className="bg-slate-800 border border-slate-500 rounded-xl p-4 flex items-start gap-3">
                     <PowerOff className="w-6 h-6 text-slate-300 flex-shrink-0 mt-0.5" />
                     <div className="flex-1">
-                        <h3 className="text-slate-100 font-bold mb-1">⏸️ Tick engine is PAUSED — nothing is running</h3>
+                        <h3 className="text-slate-100 font-bold mb-1">⏸️ Tick engine is PAUSED — nothing is running <DocLink to="tick-strategies#controls" /></h3>
                         <p className="text-slate-300 text-sm">
                             Paused by <span className="font-mono">{snapshot.engine.pausedBy || 'operator'}</span>
                             {snapshot.engine.pausedReason ? <>: <span className="font-semibold">{snapshot.engine.pausedReason}</span></> : null}
@@ -558,7 +559,7 @@ export default function TickStrategies() {
                 <div className="bg-amber-950 border border-amber-700 rounded-xl p-4 flex items-start gap-3">
                     <AlertTriangle className="w-6 h-6 text-warning flex-shrink-0 mt-0.5" />
                     <div className="flex-1">
-                        <h3 className="text-warning font-bold mb-1">Tick engine held OFF — pause state unknown</h3>
+                        <h3 className="text-warning font-bold mb-1">Tick engine held OFF — pause state unknown <DocLink to="tick-strategies#controls" /></h3>
                         <p className="text-warning/80 text-sm">
                             The engine could not read its pause switch from the database at startup, so it did not
                             start. Running it blind could re-impose load you had switched off. Press Start once the
@@ -580,7 +581,7 @@ export default function TickStrategies() {
                 <div className="bg-red-950 border border-red-700 rounded-xl p-4 flex items-start gap-3 animate-pulse">
                     <Octagon className="w-6 h-6 text-danger flex-shrink-0 mt-0.5" />
                     <div className="flex-1">
-                        <h3 className="text-danger font-bold mb-1">🛑 Tick engine is HALTED — no new entries will fire</h3>
+                        <h3 className="text-danger font-bold mb-1">🛑 Tick engine is HALTED — no new entries will fire <DocLink to="tick-strategies#controls" /></h3>
                         <p className="text-danger/80 text-sm">
                             Halted by <span className="font-mono">{snapshot.engine.haltActor || 'system'}</span>:
                             {' '}<span className="font-semibold">{snapshot.engine.haltReason || '(no reason)'}</span>
@@ -661,7 +662,7 @@ export default function TickStrategies() {
 
             {/* Strategies list */}
             <div className="bg-surface p-6 rounded-xl border border-line">
-                <h2 className="text-lg font-bold text-fg mb-4">Deployed Strategies</h2>
+                <h2 className="text-lg font-bold text-fg mb-4 flex items-center gap-2">Deployed Strategies <DocLink to="tick-strategies#strategies" /></h2>
                 {merged.length === 0 ? (
                     <div className="text-fg-5 text-sm italic text-center py-8">
                         No tick strategies yet. Click <span className="text-warning font-semibold">New Tick Strategy</span> to deploy one — e.g. a Large Order Detector on NIFTY futures to catch institutional fills.
@@ -685,6 +686,7 @@ export default function TickStrategies() {
             <div className="bg-surface p-6 rounded-xl border border-line">
                 <h2 className="text-lg font-bold text-fg mb-4 flex items-center gap-2">
                     <Activity className="w-5 h-5 text-cyan-400" /> Live Event Feed
+                    <DocLink to="tick-strategies#feed" />
                     <span className="text-xs font-normal text-fg-5">({snapshot.events?.length || 0} recent)</span>
                 </h2>
                 {!snapshot.events || snapshot.events.length === 0 ? (
@@ -709,6 +711,7 @@ export default function TickStrategies() {
                     <div className="flex justify-between items-center mb-4">
                         <h2 className="text-lg font-bold text-fg flex items-center gap-2">
                             <Layers className="w-5 h-5 text-cyan-400" /> Tick Recordings
+                            <DocLink to="tick-strategies#recordings" />
                             <span className="text-xs font-normal text-fg-5">({recordings.length})</span>
                         </h2>
                         <button
@@ -730,7 +733,7 @@ export default function TickStrategies() {
 
             {/* Paper trade log */}
             <div className="bg-surface p-6 rounded-xl border border-line">
-                <h2 className="text-lg font-bold text-fg mb-4">Paper Trade Log <span className="text-xs font-normal text-fg-5">(showing latest {trades.length} of {tradesTotal})</span></h2>
+                <h2 className="text-lg font-bold text-fg mb-4">Paper Trade Log <DocLink to="tick-strategies#trade-log" /> <span className="text-xs font-normal text-fg-5">(showing latest {trades.length} of {tradesTotal})</span></h2>
                 {trades.length === 0 ? (
                     <div className="text-fg-5 text-sm italic text-center py-6">No trades recorded yet.</div>
                 ) : (
@@ -813,7 +816,7 @@ export default function TickStrategies() {
 
             {/* Create / edit modal */}
             {createOpen && (
-                <Modal
+                <Modal docs="tick-strategies#new-strategy"
                     title={editingId ? 'Edit Tick Strategy' : 'Deploy New Tick Strategy'}
                     onClose={() => { setCreateOpen(false); setEditingId(null); }}
                     onSubmit={submitForm}
@@ -1240,14 +1243,14 @@ function EventRow({ ev }) {
     );
 }
 
-function Modal({ title, children, onClose, onSubmit, submitLabel, loading, error }) {
+function Modal({ title, children, onClose, onSubmit, submitLabel, loading, error, docs = null }) {
     // Shared modal: this one hook makes every caller Escape-dismissable.
     useEscapeKey(onClose);
     return (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-6">
             <div className="bg-slate-900 border border-line rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
                 <div className="flex justify-between items-center mb-5">
-                    <h3 className="text-lg font-bold text-fg">{title}</h3>
+                    <h3 className="text-lg font-bold text-fg flex items-center gap-2">{title}{docs && <DocLink to={docs} />}</h3>
                     <button onClick={onClose} className="text-fg-4 hover:text-fg text-xl leading-none">×</button>
                 </div>
                 <div className="space-y-4">{children}</div>
@@ -1546,7 +1549,7 @@ function RecordingForm({ onClose, onSubmit }) {
     // Same optgroups as strategy create form — picker-only dropdown that
     // populates the chip list above when its value changes.
     return (
-        <Modal
+        <Modal docs="tick-strategies#recordings"
             title="New Tick Recording"
             onClose={onClose}
             onSubmit={handleSubmit}
@@ -1740,7 +1743,7 @@ function SamplePreviewModal({ recording, onClose }) {
     const symbols = Array.isArray(recording.symbols) ? recording.symbols : [];
 
     return (
-        <Modal
+        <Modal docs="tick-strategies#recordings"
             title={`Sample — ${recording.name}`}
             onClose={onClose}
             onSubmit={onClose}
@@ -1954,7 +1957,7 @@ function ReplayModal({ recording, types, onClose }) {
     const presets = types[strategyType]?.presets || [];
 
     return (
-        <Modal
+        <Modal docs="tick-strategies#recordings"
             title={`Replay — ${recording.name}`}
             onClose={onClose}
             onSubmit={result ? onClose : handleRun}
@@ -2117,7 +2120,7 @@ function ReplayResults({ result, expandedRun, onExpandRun }) {
 
             {isOptimizer && (
                 <div>
-                    <h4 className="text-sm font-bold text-fg mb-2">Leaderboard ({runs.length} trials)</h4>
+                    <h4 className="text-sm font-bold text-fg mb-2">Leaderboard ({runs.length} trials) <DocLink to="tick-strategies#recordings" /></h4>
                     <div className="overflow-x-auto border border-line rounded">
                         <table className="w-full text-xs">
                             <thead className="text-3xs uppercase text-fg-5 border-b border-line bg-slate-900">

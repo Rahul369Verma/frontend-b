@@ -22,6 +22,7 @@ import DayEquityCurves from '../components/viz/DayEquityCurves';
 import {
     normalizeSingleLegTrade, buildDayCurves, istDayStartMs, istDayOf, singleLegVoidReason,
 } from '../utils/dayCurves';
+import DocLink from '../components/DocLink.jsx';
 
 // Upper bound on trades pulled in one shot. Per-symbol closed-trade counts are
 // in the low hundreds today (busiest underlying ~180), so this covers them with
@@ -432,7 +433,7 @@ export default function StrategyDetail() {
     return (
         <div className="p-6 max-w-[94rem] mx-auto">
             {/* Header — back link is a real route (the results hub), not history */}
-            <PageHeader
+            <PageHeader docs="strategy-detail"
                 className="mb-6"
                 backTo={ROUTES.livePortfolio}
                 backLabel="All results"
@@ -649,7 +650,7 @@ function EquityCurveView({ data }) {
     if (!data.length) return <div className="text-fg-5">No data.</div>;
     return (
         <div>
-            <h2 className="text-base font-semibold text-fg-2 mb-3">Cumulative P&L</h2>
+            <h2 className="text-base font-semibold text-fg-2 mb-3 flex items-center gap-2">Cumulative P&L <DocLink to="strategy-detail#tabs" /></h2>
             <ResponsiveContainer width="100%" height={420}>
                 <LineChart data={data} margin={{ top: 10, right: 20, bottom: 10, left: 10 }}>
                     <CartesianGrid stroke={ct.grid} strokeDasharray="3 3" />
@@ -808,7 +809,7 @@ function TradesTable({ trades, openPos, pathCoverage }) {
     return (
         <div>
             <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                <h2 className="text-base font-semibold text-fg-2">Trades</h2>
+                <h2 className="text-base font-semibold text-fg-2 flex items-center gap-2">Trades <DocLink to="strategy-detail#tabs" /></h2>
                 <div className="flex bg-slate-800 rounded border border-line overflow-hidden text-xs">
                     {['all', 'wins', 'losses'].map(f => (
                         <button
@@ -1033,7 +1034,7 @@ function DistributionView({ histogram, hourMap, kpis }) {
         <div className="space-y-8">
             {/* P&L Distribution */}
             <div>
-                <h2 className="text-base font-semibold text-fg-2 mb-3">Trade P&L Distribution</h2>
+                <h2 className="text-base font-semibold text-fg-2 mb-3 flex items-center gap-2">Trade P&L Distribution <DocLink to="strategy-detail#tabs" /></h2>
                 <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={histogram} margin={{ top: 24, right: 20, bottom: 30, left: 10 }}>
                         <CartesianGrid stroke={ct.grid} strokeDasharray="3 3" />
@@ -1092,6 +1093,7 @@ function DistributionView({ histogram, hourMap, kpis }) {
             <div>
                 <h2 className="text-base font-semibold text-fg-2 mb-3 flex items-center gap-2">
                     <Clock className="w-4 h-4" /> Hour-of-Day Performance
+                    <DocLink to="strategy-detail#tabs" />
                 </h2>
                 <div className="overflow-x-auto">
                     <div className="inline-block min-w-full">

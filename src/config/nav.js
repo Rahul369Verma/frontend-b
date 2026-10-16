@@ -31,12 +31,15 @@
 import {
     Activity,
     BellRing,
+    Bitcoin,
+    BookOpen,
     Brain,
     Gauge,
     CandlestickChart,
     LayoutDashboard,
     Layers,
     LineChart,
+    Rocket,
     ScrollText,
     Settings,
     ShieldCheck,
@@ -87,6 +90,9 @@ const Alerts = lazy(() => import('../pages/Alerts'));
 const DataManager = lazy(() => import('../components/DataManager'));
 const ParityAuditDashboard = lazy(() => import('../components/ParityAuditDashboard'));
 const MarketRules = lazy(() => import('../pages/MarketRules'));
+const Delta = lazy(() => import('../pages/Delta'));
+const GoLive = lazy(() => import('../pages/GoLive'));
+const Docs = lazy(() => import('../pages/Docs'));
 
 /** The sidebar rail, in order. One entry per navigable page. */
 export const NAV_ITEMS = [
@@ -100,6 +106,12 @@ export const NAV_ITEMS = [
     { path: '/backtest', icon: LineChart, labelKey: 'nav.backtest', component: Backtest },
     { path: '/optimizer', icon: Activity, labelKey: 'nav.optimizer', component: Optimizer },
     { path: '/multi-leg', icon: Layers, labelKey: 'nav.multiLeg', component: MultiLeg },
+    // Delta Exchange India: the second venue (crypto + tokenised assets, 24×7) — its
+    // contracts, option chains, feed and account. Trades come only from deployments.
+    { path: '/delta', icon: Bitcoin, labelKey: 'nav.delta', component: Delta },
+    // PAPER → LIVE goes through this page and nowhere else: broker drills, evidence,
+    // risk gates, then a promotion with a self-demoting canary.
+    { path: '/go-live', icon: Rocket, labelKey: 'nav.goLive', component: GoLive },
     { path: '/risk', icon: Gauge, labelKey: 'nav.risk', component: Risk },
     // Stock screener + scheduled alerts over every NSE stock. Discovery, not
     // execution: nothing on this page places an order.
@@ -118,6 +130,9 @@ export const NAV_ITEMS = [
     // this one for exchange rules (lots, sessions, holidays, MCX margins, circulars).
     { path: '/market-rules', icon: ScrollText, labelKey: 'nav.marketRules', component: MarketRules },
     { path: '/data-manager', icon: Square, labelKey: 'nav.dataManager', component: DataManager },
+    // Plain-language explanation of every page and section; each section of the
+    // app links here through its 📖 DocLink.
+    { path: '/docs', icon: BookOpen, labelKey: 'nav.docs', component: Docs },
     { path: '/settings', icon: Settings, labelKey: 'nav.settings', component: SettingsPage },
 ];
 
@@ -131,6 +146,8 @@ export const NAV_ITEMS = [
 export const HIDDEN_ROUTES = [
     { path: '/strategy/:symbol', labelKey: 'nav.strategyDetail', component: StrategyDetail },
     { path: '/callback', labelKey: 'nav.callback', component: Callback },
+    // a doc page: /docs/<page>#<section> (DocLink targets)
+    { path: '/docs/:pageId', labelKey: 'nav.docs', component: Docs },
 ];
 
 /** Everything that gets a <Route>. Rail order first, then the unlisted pages. */

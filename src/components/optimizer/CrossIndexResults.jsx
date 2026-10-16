@@ -3,8 +3,9 @@ import { ChevronDown, ChevronRight, Trophy, AlertTriangle, TrendingUp } from 'lu
 import useRemWidth from '../../hooks/useRemWidth';
 import { API_ORIGIN } from '../../config/api.js';
 import {
-  nameOf, bestPerStrategy, verdictOf, bannerSentence, buildTestParams, buildSaveBodies, weakestOf, tradesPerDayOf, failWords, MULTI_OMIT_KEYS,
+  nameOf, bestPerStrategy, verdictOf, bannerSentence, buildTestParams, buildSaveBodies, weakestOf, tradesPerDayOf, failWords, MULTI_OMIT_KEYS, winnerAt,
 } from './crossIndex';
+import DocLink from '../DocLink.jsx';
 
 const TONE = {
   success: 'bg-emerald-500/15 border-emerald-500/40 text-success',
@@ -59,6 +60,7 @@ function IndexCard({ row, symbol, onTest, onSave }) {
         <dt className="text-fg-5" title={PF_HELP}>Test PF</dt><dd>{pf(c.oosPF)}</dd>
         <dt className="text-fg-5">Test trades</dt><dd>{c.oosTrades ?? '—'}</dd>
         <dt className="text-fg-5">Full window</dt><dd className="font-mono">{rupee(c.fullPnL)} · {c.fullTrades ?? 0}t</dd>
+        <dt className="text-fg-5" title="Consistency 0–100: profitable months × how straight the equity line is (full window)">Consistency</dt><dd>{c.fullConsistency != null ? Math.round(c.fullConsistency) : '—'}{c.oosConsistency != null ? <span className="text-fg-5"> · test {Math.round(c.oosConsistency)}</span> : null}</dd>
         <dt className="text-fg-5">Min SL pts</dt><dd>{c.minSlPoints ?? '—'}</dd>
       </dl>
       {c.failReason && <p className="text-3xs text-fg-4">Why not: {failWords(c.failReason)}</p>}
@@ -166,7 +168,8 @@ export default function CrossIndexResults({ result, onTest, onSave, onClear, noi
   const [saveMsg, setSaveMsg] = React.useState(null);
   const { held, notHeld } = React.useMemo(() => bestPerStrategy(result.aggregate, k), [result, k]);
   const sentence = bannerSentence(result, k);
-  const winnerAtK = held[0] || null;
+  // Not simply held[0]: a signal combiner that failed its crown gates holds up but is never crowned.
+  const winnerAtK = React.useMemo(() => winnerAt(result, k), [result, k]);
 
   const test = (row, symbol) => onTest(buildTestParams(result, row, symbol), row.strategy);
   const save = async (row, syms, onlyRobust = false) => {
@@ -242,7 +245,7 @@ export default function CrossIndexResults({ result, onTest, onSave, onClear, noi
           </td>
           <td className="p-2 font-bold text-primary-ink">#{rank}</td>
           <td className="p-2 text-fg-2 font-medium">
-            <span className="flex items-center gap-1.5">{rank === 1 && row.kValues?.[k] != null && <Trophy className="w-3.5 h-3.5 text-warning" aria-hidden="true" />}{row.label}</span>
+            <span className="flex items-center gap-1.5">{winnerAtK && row.strategy === winnerAtK.strategy && row.drawId === winnerAtK.drawId && <Trophy className="w-3.5 h-3.5 text-warning" aria-hidden="true" />}{row.label}</span>
             <span className="text-3xs text-fg-5">held up on {row.robustCount} of {n}</span>
           </td>
           <td className="p-2"><div className="flex flex-wrap gap-1">{symbols.map(s => <VerdictChip key={s} row={row} symbol={s} onTest={test} />)}</div></td>
@@ -282,7 +285,7 @@ export default function CrossIndexResults({ result, onTest, onSave, onClear, noi
     <div ref={panelRef} className="space-y-5">
       <div className="flex justify-between items-start gap-3 flex-wrap">
         <div>
-          <h2 className="text-xl font-bold flex items-center gap-2"><TrendingUp className="w-5 h-5 text-success" aria-hidden="true" />Best settings across indexes</h2>
+          <h2 className="text-xl font-bold flex items-center gap-2"><TrendingUp className="w-5 h-5 text-success" aria-hidden="true" />Best settings across indexes<DocLink to="optimizer#results" /></h2>
           <p className="text-2xs text-fg-5 mt-1">
             {symbols.map(nameOf).join(', ')} · {rc.start_date} → {rc.end_date} · test window after {rc.oos_split_date} ({Math.round((rc.oos_fraction ?? 0.3) * 100)}%)
             {result.preset ? ` · ${result.preset}` : ''}{result.budget ? ` (${result.budget.d1}${result.budget.s2 ? ` + ${result.budget.d2} for the best ${result.budget.s2}` : ''} settings per index)` : ''} · seed {result.seed}

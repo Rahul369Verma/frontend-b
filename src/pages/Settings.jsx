@@ -6,6 +6,7 @@ import { PageHeader, Tabs } from '../components/viz/primitives';
 import { istDateTime } from '../components/viz/tokens';
 import { API_URL } from '../config/api.js';
 import { useConfirm } from '../components/confirmContext.js';
+import DocLink from '../components/DocLink.jsx';
 
 
 export default function Settings() {
@@ -165,7 +166,7 @@ export default function Settings() {
 
   return (
     <div className="p-6 space-y-6 max-w-4xl mx-auto">
-      <PageHeader icon={SettingsIcon} title="Settings" subtitle="Broker keys, AI web cookies and notifications." />
+      <PageHeader docs="settings" icon={SettingsIcon} title="Settings" subtitle="Broker keys, AI web cookies and notifications." />
 
       {message && (
         <div className={`p-4 rounded-lg flex items-center gap-2 ${
@@ -189,10 +190,11 @@ export default function Settings() {
                 <h2 className="text-xl font-bold text-fg flex items-center gap-2">
                    <div className="w-2 h-8 bg-purple-500 rounded-full"></div>
                    General Configuration
+                   <DocLink to="settings#data-source" />
                 </h2>
                 <div className="p-4 bg-slate-900/50 rounded-lg border border-line flex items-center justify-between">
                      <div>
-                        <h3 className="text-fg font-medium">Live Data Source</h3>
+                        <h3 className="text-fg font-medium">Live Data Source <DocLink to="settings#data-source" /></h3>
                         <p className="text-sm text-fg-4">Select the price source for analysis (Spot vs Futures).</p>
                      </div>
                      <select 
@@ -215,7 +217,7 @@ export default function Settings() {
                 </div>
                 <div className="p-4 bg-slate-900/50 rounded-lg border border-line flex items-center justify-between">
                      <div>
-                        <h3 className="text-fg font-medium">Max Daily Loss (₹)</h3>
+                        <h3 className="text-fg font-medium">Max Daily Loss (₹) <DocLink to="settings#risk-limits" /></h3>
                         <p className="text-sm text-fg-4">Circuit breaker: blocks new entries when daily loss hits this limit.</p>
                      </div>
                      <div className="flex items-center gap-2">
@@ -248,6 +250,7 @@ export default function Settings() {
                 <h2 className="text-xl font-bold text-fg flex items-center gap-2">
                   <div className="w-2 h-8 bg-blue-500 rounded-full"></div>
                   Fyers API Settings
+                  <DocLink to="settings#fyers" />
                 </h2>
                 <div className="grid gap-4 p-4 bg-slate-900/50 rounded-lg border border-line">
                   <div>
@@ -314,6 +317,7 @@ export default function Settings() {
                 <h2 className="text-xl font-bold text-fg flex items-center gap-2">
                   <div className="w-2 h-8 bg-orange-500 rounded-full"></div>
                   Angel One Settings
+                  <DocLink to="settings#angel" />
                 </h2>
                 <div className="grid gap-4 p-4 bg-slate-900/50 rounded-lg border border-line">
                    <div>
@@ -338,6 +342,7 @@ export default function Settings() {
                 <h2 className="text-xl font-bold text-fg flex items-center gap-2">
                   <div className="w-2 h-8 bg-yellow-500 rounded-full"></div>
                   Commodities (MCX)
+                  <DocLink to="settings#mcx" />
                 </h2>
                 <div className="p-4 bg-slate-900/50 rounded-lg border border-line flex items-center justify-between">
                   <div>
@@ -383,6 +388,7 @@ export default function Settings() {
                 <h2 className="text-xl font-bold text-fg flex items-center gap-2">
                   <div className="w-2 h-8 bg-amber-500 rounded-full"></div>
                   AI Web Cookies (Global)
+                  <DocLink to="settings#ai-cookies" />
                 </h2>
                 <p className="text-sm text-fg-4 mt-2">
                   Update Claude.ai and Gemini web-session cookies in ONE place. Every backtest
@@ -514,7 +520,7 @@ export default function Settings() {
 
           {activeTab === 'notifications' && (
              <div className="space-y-6">
-                <h2 className="text-xl font-bold text-fg">Telegram Notifications</h2>
+                <h2 className="text-xl font-bold text-fg flex items-center gap-2">Telegram Notifications <DocLink to="settings#notifications" /></h2>
                 <div className="p-4 bg-slate-900/50 rounded-lg border border-line space-y-4">
                     <p className="text-fg-4 text-sm">Send a test message to verify your Telegram bot integration.</p>
                     <button 

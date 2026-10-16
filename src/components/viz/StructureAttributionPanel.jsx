@@ -73,17 +73,17 @@ export default function StructureAttributionPanel({ data }) {
                           hint="the two engines a structure runs on" />
             </StatRow>
 
-            <Card title="The verdict">
+            <Card docs="multi-leg#backtest-tab" title="The verdict">
                 <p className="text-sm text-fg-2 leading-relaxed">{data.verdict}</p>
             </Card>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <Card title="Where the structure's money came from"
+                <Card docs="multi-leg#backtest-tab" title="Where the structure's money came from"
                       subtitle="Every leg repriced at entry and exit, summed.">
                     <Waterfall steps={steps} total={{ label: 'Net P&L', value: t.netPnl }} />
                 </Card>
 
-                <Card title="Which leg carried the risk"
+                <Card docs="multi-leg#backtest-tab" title="Which leg carried the risk"
                       subtitle='A "+₹2,000 net" can hide "the short leg lost ₹18k and the wings saved it".'>
                     <DataTable
                         columns={[
@@ -110,7 +110,7 @@ export default function StructureAttributionPanel({ data }) {
             </div>
 
             {driverTotal > 0 && (
-                <Card title="Driver mix across trades"
+                <Card docs="multi-leg#backtest-tab" title="Driver mix across trades"
                       subtitle="A template that flips driver between trades is not a clean bet on either.">
                     <div className="space-y-2">
                         {Object.entries(data.driverCounts)

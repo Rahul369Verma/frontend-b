@@ -49,6 +49,22 @@ export function bestPerStrategy(rows, k) {
   return { held: all.filter(r => r.kValues?.[k] != null), notHeld: all.filter(r => r.kValues?.[k] == null) };
 }
 
+/**
+ * Strategies that may NOT take the crown at K although they held up: a signal combiner that
+ * passed its crown gates (beats every member alone and random selection) on fewer than K
+ * indexes. The server applies the same rule (pooledRun: combinerCrown).
+ */
+export function crownBlockedAt(result, k) {
+  const cc = result?.combinerCrown;
+  return cc && Number(cc.gatePasses) < Number(k) ? new Set(['signal_combiner']) : new Set();
+}
+
+/** The crowned row at K: the best that held up and is not blocked (null when none). */
+export function winnerAt(result, k) {
+  const blocked = crownBlockedAt(result, k);
+  return bestPerStrategy(result?.aggregate, k).held.find(r => !blocked.has(r.strategy)) || null;
+}
+
 const VERDICTS = {
   robust: { label: 'Held up', tone: 'success', short: '✓' },
   overfit: { label: 'Overfit', tone: 'danger', short: '⚠' },
@@ -61,7 +77,7 @@ const VERDICTS = {
 };
 export const verdictOf = (cell) => VERDICTS[cell?.status] || VERDICTS.not_run;
 
-const FAIL_WORDS = { trades: 'too few trades', winRate: 'win rate below the filter', drawdown: 'drawdown above the filter', sharpe: 'Sharpe below the filter', loss: 'lost money in training', oos: 'failed the held-out test' };
+const FAIL_WORDS = { trades: 'too few trades', winRate: 'win rate below the filter', drawdown: 'drawdown above the filter', sharpe: 'Sharpe below the filter', consistency: 'consistency below the filter', loss: 'lost money in training', oos: 'failed the held-out test' };
 export const failWords = (r) => FAIL_WORDS[r] || r || '';
 
 const pf = (x) => (x == null ? '∞' : Number(x).toFixed(2));
@@ -75,11 +91,19 @@ export function bannerSentence(result, k) {
   const strategies = (result.indexes?.[0]?.strategies || []).length;
   const w = result.sharedWinner;
   if (!w || (k != null && k !== w.k)) {
-    const { held } = bestPerStrategy(result.aggregate, k ?? result.kDefault);
-    if (held.length && k != null) {
-      const top = held[0];
-      return `${top.label} held up out-of-sample on ${top.robustCount} of ${n} indexes with the same settings (best at "at least ${k} of ${n}").${exTail}`;
+    const kk = k ?? result.kDefault;
+    const { held } = bestPerStrategy(result.aggregate, kk);
+    const blocked = crownBlockedAt(result, kk);
+    const top = winnerAt(result, kk);
+    const topAt = top ? held.findIndex(r => r.strategy === top.strategy && r.drawId === top.drawId) : held.length;
+    const passedOver = held.filter((r, i) => blocked.has(r.strategy) && i < topAt);
+    const why = passedOver.length
+      ? ` ${passedOver.map(r => r.label).join(', ')} held up too, but is not crowned: it beat every member alone and random picks from the same members on only ${result.combinerCrown.gatePasses} of ${n} indexes (needs ${kk}).`
+      : '';
+    if (top && k != null) {
+      return `${top.label} held up out-of-sample on ${top.robustCount} of ${n} indexes with the same settings (best at "at least ${k} of ${n}").${why}${exTail}`;
     }
+    if (passedOver.length) return `No strategy can be crowned at "at least ${kk} of ${n}".${why}${exTail}`;
     return `No strategy held up out-of-sample on at least ${k ?? result.kDefault} of ${n} indexes with the same settings. See "By index" for single-index results.${exTail}`;
   }
   const groups = w.groupsTotal > 1 ? ` (${w.groupsCovered} of ${w.groupsTotal} market groups)` : '';

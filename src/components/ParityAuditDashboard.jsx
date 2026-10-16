@@ -11,6 +11,7 @@ import { INSTRUMENT_CONFIG } from '../constants';
 import { useChartTheme } from '../theme/chartTheme.js';
 import { pollInterval } from '../hooks/usePolling.js';
 import { API_BASE } from '../config/api.js';
+import DocLink from './DocLink.jsx';
 
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -402,6 +403,7 @@ export default function ParityAuditDashboard() {
                 <div>
                     <h1 className="text-xl font-bold text-fg flex items-center gap-2">
                         <span className="text-warning">⚡</span> Parity Audit Dashboard
+                        <DocLink to="parity-audit" label="Guide" className="text-xs" />
                     </h1>
                     <p className="text-xs text-fg-5 mt-0.5">
                         Numerical consistency: Standard (pandas_ta/SB3) vs. Nitro (JAX/XLA) — first 100 warm-up bars skipped automatically
@@ -416,7 +418,7 @@ export default function ParityAuditDashboard() {
 
             {/* ── Config Panel ── */}
             <div className="bg-slate-900/60 border border-line rounded-xl p-5 space-y-4">
-                <h2 className="text-xs text-fg-4 uppercase tracking-wider font-bold">Audit Configuration</h2>
+                <h2 className="text-xs text-fg-4 uppercase tracking-wider font-bold">Audit Configuration <DocLink to="parity-audit#config" /></h2>
 
                 <div className="grid grid-cols-2 gap-4">
                     {/* Symbol */}

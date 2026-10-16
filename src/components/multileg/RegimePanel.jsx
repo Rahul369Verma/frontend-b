@@ -187,7 +187,7 @@ export default function RegimePanel() {
     };
     return (
         <div ref={ref} className="mb-4">
-            <Card title={<span className="inline-flex items-center gap-2"><Compass className="w-4 h-4" aria-hidden="true" />Market regime & structure fit</span>}
+            <Card docs="multi-leg#deploy-regime" title={<span className="inline-flex items-center gap-2"><Compass className="w-4 h-4" aria-hidden="true" />Market regime & structure fit</span>}
                 subtitle="Pure maths, shadow mode — what kind of afternoon is likely, and which structures suit it">
                 {err && <Placeholder>Could not load the regime read: {err}</Placeholder>}
                 {!data && !err && <Spinner label="Loading regime read…" />}

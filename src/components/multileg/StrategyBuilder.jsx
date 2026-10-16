@@ -9,6 +9,7 @@ import {
     inputCls, cellCls, btnCls,
 } from './builderFormat';
 import { API_URL } from '../../config/api.js';
+import DocLink from '../DocLink.jsx';
 
 /**
  * STRATEGY BUILDER — draw ANY option structure leg-by-leg and see everything
@@ -646,6 +647,7 @@ export default function StrategyBuilder() {
             <div className="bg-surface rounded-xl border border-line p-4">
                 <div className="text-sm font-semibold text-fg mb-3 flex items-center gap-2 flex-wrap">
                     🧱 Strategy builder
+                    <DocLink to="multi-leg#builder-tab" />
                     <span className="text-fg-5 font-normal text-2xs">— draw any structure leg-by-leg and see everything before committing</span>
                     {loading && <span className="text-3xs text-sky-400">analysing…</span>}
                 </div>

@@ -23,6 +23,7 @@ import { StatusBadge, Chip, Segmented, Spinner, DataTable, Placeholder } from '.
 import { inr, istDateTime, pnlTone, rupeeTick } from '../viz/tokens.js';
 import { usePolling } from '../../hooks/usePolling.js';
 import useRemWidth from '../../hooks/useRemWidth.js';
+import DocLink from '../DocLink.jsx';
 import { RANGE_OPTIONS, verdictLevel, decidedCount, modeLabel, nNet, notFollowedTitle, ghostAiSummary } from './directionGateHistoryFormat.js';
 
 function ValueTooltip({ active, payload, ct }) {
@@ -108,6 +109,7 @@ function GhostTable({ ghosts, total, open, narrow }) {
         <div className="space-y-1" data-testid="gate-ghosts">
             <p className="text-xs font-semibold text-fg-2">
                 Blocked trades, followed as ghosts ({total}{total > rows.length ? `, newest ${rows.length} shown` : ''})
+                <DocLink to="glossary#ghost-trade" className="ml-1" />
             </p>
             {narrow ? (
                 <div className="space-y-1.5 max-h-80 overflow-auto">
@@ -153,7 +155,7 @@ export function DirectionGateHistoryView({ data, days, onDays }) {
     return (
         <div ref={ref} className="space-y-3" data-testid="gate-history">
             <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-fg-2">Scorecard history — has the gate made or cost money?</span>
+                <span className="text-xs font-semibold text-fg-2">Scorecard history — has the gate made or cost money? <DocLink to="dashboard#direction-gate-history" label="What do these columns mean?" /></span>
                 <Segmented value={days} onChange={onDays} options={RANGE_OPTIONS} />
             </div>
             <div className="flex flex-wrap items-center gap-2">

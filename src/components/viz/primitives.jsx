@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import DocLink from '../DocLink.jsx';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Loader2, X } from 'lucide-react';
 import { STATUS_ICON, inr, useChartTheme } from './tokens';
@@ -33,13 +34,15 @@ import { STATUS_ICON, inr, useChartTheme } from './tokens';
 
 // ── Card ─────────────────────────────────────────────────────────────────────
 
-export function Card({ title, subtitle, right, children, className = '' }) {
+// `docs` = a documentation target ("page#section") — renders the 📖 link that
+// opens this section's explanation (see components/DocLink.jsx).
+export function Card({ title, subtitle, right, children, className = '', docs = null }) {
     return (
         <div className={`bg-surface border border-line/60 rounded-lg ${className}`}>
             {(title || right) && (
                 <div className="flex items-start justify-between gap-3 px-4 pt-3 pb-2">
                     <div className="min-w-0">
-                        {title && <h2 className="text-sm font-semibold text-fg">{title}</h2>}
+                        {title && <h2 className="text-sm font-semibold text-fg">{title}{docs && <DocLink to={docs} className="ml-2" />}</h2>}
                         {subtitle && <p className="text-xs text-fg-5 mt-0.5">{subtitle}</p>}
                     </div>
                     {right && <div className="flex-shrink-0 text-xs text-fg-4">{right}</div>}
@@ -519,7 +522,7 @@ export function Findings({ findings = [], emptyText = 'No issues detected in thi
  * invisible to no-unused-vars, and renaming it `_Icon` to silence the rule is
  * exactly what produced two `ReferenceError: Icon is not defined` crashes.
  */
-export function PageHeader({ icon, title, subtitle, badges, actions, backTo, backLabel = 'Back', className = '' }) {
+export function PageHeader({ icon, title, subtitle, badges, actions, backTo, backLabel = 'Back', className = '', docs = null }) {
     const Icon = icon;
     return (
         <header className={`flex items-start justify-between flex-wrap gap-3 ${className}`}>
@@ -535,11 +538,12 @@ export function PageHeader({ icon, title, subtitle, badges, actions, backTo, bac
                         {Icon && <Icon className="w-5 h-5 text-primary-ink flex-shrink-0" aria-hidden="true" />}
                         <span className="truncate">{title}</span>
                         {badges}
+                        {docs && <DocLink to={docs} label="Guide" className="text-xs" />}
                     </h1>
                     {subtitle && <p className="text-xs text-fg-5 mt-1 max-w-3xl">{subtitle}</p>}
                 </div>
             </div>
-            {actions && <div className="flex items-center gap-2 flex-wrap">{actions}</div>}
+            {actions && <div className="flex items-center gap-2 flex-wrap min-w-0 max-w-full">{actions}</div>}
         </header>
     );
 }
@@ -703,7 +707,7 @@ export function EmptyState({ icon, title, children, action, className = '' }) {
  * dialog is labelled. Replaces six overlays at three opacities where only one
  * wired the Escape key.
  */
-export function Modal({ open, onClose, title, children, footer, width = 'max-w-lg' }) {
+export function Modal({ open, onClose, title, children, footer, width = 'max-w-lg', docs = null }) {
     useEffect(() => {
         if (!open) return undefined;
         const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
@@ -718,7 +722,7 @@ export function Modal({ open, onClose, title, children, footer, width = 'max-w-l
                 className={`w-full ${width} bg-surface border border-line rounded-lg shadow-2xl max-h-[90vh] flex flex-col`}>
                 {(title || onClose) && (
                     <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-line-0">
-                        <h2 className="text-sm font-semibold text-fg">{title}</h2>
+                        <h2 className="text-sm font-semibold text-fg">{title}{docs && <DocLink to={docs} className="ml-2" />}</h2>
                         {onClose && (
                             <button type="button" onClick={onClose} aria-label="Close" className="text-fg-5 hover:text-fg p-1 rounded">
                                 <X className="w-4 h-4" aria-hidden="true" />

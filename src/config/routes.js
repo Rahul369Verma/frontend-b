@@ -21,6 +21,8 @@ export const ROUTES = Object.freeze({
     tickStrategies: '/tick-strategies',
     tickResults: '/tick-results',
     marketRules: '/market-rules',
+    delta: '/delta',
+    goLive: '/go-live',
 });
 
 /**

@@ -159,9 +159,15 @@ export function inr(v, { compact = false, sign = false, dp = null } = {}) {
  * one page showed the same fill two ways. 2dp everywhere, non-finite as an em
  * dash like every other formatter here.
  */
-export function premium(v) {
+export function premium(v, symbol = null) {
     const n = Number(v);
-    return Number.isFinite(n) ? `₹${n.toFixed(2)}` : '—';
+    if (!Number.isFinite(n)) return '—';
+    // Delta Exchange contracts are priced in USD (INR only for *_INR spot pairs);
+    // their P&L is still rupees, but a BTC price is not ₹83,000.
+    if (typeof symbol === 'string' && symbol.startsWith('DELTA:') && !/_INR$/.test(symbol)) {
+        return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: n < 1 ? 6 : 2 })}`;
+    }
+    return `₹${n.toFixed(2)}`;
 }
 
 /**

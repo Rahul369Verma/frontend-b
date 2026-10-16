@@ -43,6 +43,7 @@ import useLocalStorage from '../../hooks/useLocalStorage';
 import StrategyScorecard, { OpenNow } from './StrategyScorecard';
 import ExcursionsPanel from './ExcursionsPanel';
 import useScorecard from './useScorecard';
+import DocLink from '../DocLink.jsx';
 
 // One deployment's own trades: the Results tab scoped to it. Works from the
 // Multi-Leg page and from Live Portfolio alike (MultiLeg reads ?deployment=).
@@ -266,6 +267,7 @@ export default function ResultsAnalytics({
                 <div className="flex items-center justify-between flex-wrap gap-2">
                     <h2 id="ml-summary-h" className="text-sm font-semibold text-fg">
                         Summary <span className="text-fg-5 font-normal text-2xs">— booked round-trips only, quarantined fills excluded</span>
+                        <DocLink to="multi-leg#results-tab" className="ml-2" />
                     </h2>
                     <div className="flex items-center gap-1">
                         {daysProp === undefined && DAY_OPTS.map((o) => (
@@ -420,6 +422,7 @@ export default function ResultsAnalytics({
                     <section className={card} aria-labelledby="ml-breakdowns-h">
                         <h2 id="ml-breakdowns-h" className="text-sm font-semibold text-fg mb-2">
                             Breakdowns <span className="text-fg-5 font-normal text-2xs">— the same trades cut different ways; open a row to see the strategies in it</span>
+                        <DocLink to="multi-leg#results-tab" className="ml-2" />
                         </h2>
 {tabs.length > 0 && (
                     <div>
@@ -508,6 +511,7 @@ export default function ResultsAnalytics({
                     <section className={card} aria-labelledby="ml-exc-h">
                         <h2 id="ml-exc-h" className="text-sm font-semibold text-fg mb-2">
                             How trades travelled <span className="text-fg-5 font-normal text-2xs">— worst and best point while open, and what a stop or target would have done</span>
+                        <DocLink to="glossary#mae-mfe" className="ml-2" />
                         </h2>
                         <ExcursionsPanel excursions={data?.excursions} />
                     </section>

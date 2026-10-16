@@ -17,12 +17,13 @@ import axios from 'axios';
 import { Compass } from 'lucide-react';
 import { API_URL } from '../../config/api.js';
 import { Card, StatusBadge, Chip, Meter, Segmented, Spinner, DataTable, Placeholder } from '../viz/primitives';
-import { inr, istTime, pnlTone } from '../viz/tokens.js';
+import { inr, istDateTime, pnlTone } from '../viz/tokens.js';
 import { usePolling } from '../../hooks/usePolling.js';
 import { useConfirm } from '../confirmContext.js';
 import { toast } from '../toastStore.js';
 import { sideState } from './directionState.js';
 import DirectionGateHistory from './DirectionGateHistory.jsx';
+import DocLink from '../DocLink.jsx';
 
 const n = (v) => { if (v == null || v === '') return null; const x = Number(v); return Number.isFinite(x) ? x : null; };
 const pct0 = (v) => (n(v) == null ? '—' : `${Math.round(n(v) * 100)}%`);
@@ -33,6 +34,19 @@ const SIDES = [
 ];
 
 const DECISION_TONE = { ALLOW: 'good', PROBE: 'info', BLOCK: 'critical', THIN: 'muted', UNMEASURED: 'warning', OFF: 'muted' };
+
+// What each decision means, on hover — the chip alone is jargon.
+const DECISION_MEANING = {
+    ALLOW: 'ALLOW — this side is trusted enough (confidence at or above the floor); the trade goes ahead.',
+    BLOCK: 'BLOCK — this side is weak (confidence below the floor). In Shadow it is only recorded; in Enforce (✕) the signal is rejected.',
+    PROBE: 'PROBE — the side is weak, but every Nth weak signal is let through on purpose as a test trade, so the side can earn its confidence back.',
+    THIN: 'THIN — too few recent trades on this side to judge, so the trade goes ahead.',
+    UNMEASURED: 'UNMEASURED — the engine had no fresh confidence reading, so the gate stayed out of the way (fails open).',
+    OFF: 'OFF — the gate is switched off; nothing was decided.',
+};
+
+// The scorecard verdict badge: its icon is part of the message, not decoration.
+const VERDICT_HELP = 'Badge icon: ✓ = blocking would have made money · ✕ = blocking would have cost money · i = information only, not enough data to judge yet (needs 10+ blocked trades).';
 
 function SideBlock({ meta, side, opts, credit }) {
     const st = sideState(side, opts);
@@ -107,7 +121,7 @@ export function DirectionConfidenceView({ data, onMode, onTrackBlocked, busy }) 
             <div className="border border-line/60 rounded-lg p-3 space-y-1.5" data-testid="scorecard">
                 <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-medium text-fg-3">Scorecard, last ~4 weeks — would blocking have helped?</span>
-                    <StatusBadge level={verdictLevel}>{sc.verdict || '—'}</StatusBadge>
+                    <StatusBadge level={verdictLevel} title={VERDICT_HELP}>{sc.verdict || '—'}</StatusBadge>
                 </div>
                 <p className="text-2xs text-fg-4">
                     {wb.n} trade{wb.n === 1 ? '' : 's'} the gate would have blocked, net{' '}
@@ -131,23 +145,26 @@ export function DirectionConfidenceView({ data, onMode, onTrackBlocked, busy }) 
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                 <div>
-                    <p className="text-2xs uppercase tracking-wide text-fg-5 mb-1">Confidence at each session close</p>
+                    <p className="text-2xs uppercase tracking-wide text-fg-5 mb-1">Confidence at each session close (IST) <DocLink to="dashboard#direction-confidence" /></p>
                     <DataTable dense rows={(history || []).slice().reverse().map(h => ({ ...h, _key: h.date }))} empty="No sessions yet"
                         columns={[
-                            { key: 'date', header: 'Session' },
+                            // measured at the 15:40 close; today's row is "so far" until then
+                            { key: 'date', header: 'Session', render: r => (r.at
+                                ? <span title={r.live ? 'Session still open — this is the reading so far, not the close' : 'Measured at the session close'}>{istDateTime(r.at)}{r.live ? ' (so far)' : ''}</span>
+                                : `${r.date}, 15:40`) },
                             { key: 'CE', header: 'CE', align: 'right', render: r => `${pct0(r.CE)} (${r.ceN})` },
                             { key: 'PE', header: 'PE', align: 'right', render: r => `${pct0(r.PE)} (${r.peN})` },
                         ]} />
                 </div>
                 <div>
-                    <p className="text-2xs uppercase tracking-wide text-fg-5 mb-1">Latest gate decisions (engine memory)</p>
+                    <p className="text-2xs uppercase tracking-wide text-fg-5 mb-1">Latest gate decisions (engine memory) <DocLink to="dashboard#direction-confidence" /></p>
                     <DataTable dense maxHeight={240} rows={(live?.recent || []).slice(0, 12).map((d, i) => ({ ...d, _key: `${d.at}-${i}` }))}
                         empty={live ? 'No signals since the engine started' : 'Engine not running'}
                         columns={[
-                            { key: 'at', header: 'Time', render: r => istTime(r.at, { seconds: false }) },
+                            { key: 'at', header: 'When (IST)', render: r => istDateTime(r.at) },
                             { key: 'side', header: 'Side' },
                             { key: 'strategy', header: 'Strategy', render: r => r.strategy || '—' },
-                            { key: 'decision', header: 'Decision', render: r => <Chip tone={DECISION_TONE[r.decision] || 'neutral'} title={r.reason}>{r.decision}{r.enforced ? ' ✕' : ''}</Chip> },
+                            { key: 'decision', header: 'Decision', render: r => <Chip tone={DECISION_TONE[r.decision] || 'neutral'} title={[DECISION_MEANING[r.decision], r.enforced ? '✕ = enforced: this signal was actually rejected.' : null, r.reason ? `Engine: ${r.reason}` : null].filter(Boolean).join('\n')}>{r.decision}{r.enforced ? ' ✕' : ''}</Chip> },
                         ]} />
                 </div>
             </div>
@@ -210,7 +227,7 @@ export default function DirectionConfidencePanel() {
     };
 
     return (
-        <Card title={<span className="inline-flex items-center gap-2"><Compass className="w-4 h-4" aria-hidden="true" />Direction confidence — CE vs PE</span>}
+        <Card docs="dashboard#direction-confidence" title={<span className="inline-flex items-center gap-2"><Compass className="w-4 h-4" aria-hidden="true" />Direction confidence — CE vs PE</span>}
             subtitle="How much recent trades trust each side; the gate's verdict is stamped on every entry">
             {err && <Placeholder>Could not load direction confidence: {err}</Placeholder>}
             {!data && !err && <Spinner label="Loading direction confidence…" />}

@@ -85,3 +85,39 @@ describe('crossIndex helpers', () => {
     expect(weakestOf(result.aggregate[0], [N, B, F]).symbol).toBe(B);
   });
 });
+
+import { winnerAt, crownBlockedAt } from './crossIndex';
+
+describe('signal combiner crown (gates)', () => {
+  // The 2026-10-16 NIFTY+BANKNIFTY run: the combiner held up on 2 of 2, but beat its best member
+  // and random selection on 0 indexes — the server gave no shared crown; the page must not either.
+  const r2 = {
+    ...result, nEligible: 2, kDefault: 2, symbols: [N, B], sharedWinner: null,
+    combinerCrown: { gatePasses: 0, k: 2, blocked: true },
+    aggregate: [
+      row('signal_combiner', 1674, { 2: 0.56 }, 2, { [N]: cell('robust'), [B]: cell('robust') }),
+      row('inside_bar', 9, { 2: 0.31 }, 2, { [N]: cell('robust'), [B]: cell('robust') }),
+    ],
+  };
+  r2.aggregate.forEach(a => { a.label = a.strategy === 'signal_combiner' ? 'Signal Combiner' : 'Inside Bar'; });
+
+  it('a combiner that failed its gates is never the winner, and the banner says why', () => {
+    expect([...crownBlockedAt(r2, 2)]).toEqual(['signal_combiner']);
+    expect(winnerAt(r2, 2).strategy).toBe('inside_bar');
+    const s = bannerSentence(r2, 2);
+    expect(s).toMatch(/^Inside Bar held up/);
+    expect(s).toMatch(/Signal Combiner held up too, but is not crowned: .* on only 0 of 2 indexes \(needs 2\)/);
+  });
+
+  it('with nothing else held up, no crown at all', () => {
+    const only = { ...r2, aggregate: [r2.aggregate[0]] };
+    expect(winnerAt(only, 2)).toBeNull();
+    expect(bannerSentence(only, 2)).toMatch(/^No strategy can be crowned/);
+  });
+
+  it('passing on enough indexes lifts the block', () => {
+    const ok = { ...r2, combinerCrown: { gatePasses: 2, k: 2, blocked: false } };
+    expect(crownBlockedAt(ok, 2).size).toBe(0);
+    expect(winnerAt(ok, 2).strategy).toBe('signal_combiner');
+  });
+});

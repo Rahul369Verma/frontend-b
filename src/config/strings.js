@@ -65,6 +65,8 @@ export const STRINGS = {
         backtest: 'Backtest',
         optimizer: 'Optimizer',
         multiLeg: 'Multi-Leg',
+        delta: 'Delta Exchange',
+        goLive: 'Go Live',
         risk: 'Portfolio Risk',
         alerts: 'Stock Alerts',
         tickStrategies: 'Tick Strategies',
@@ -75,6 +77,7 @@ export const STRINGS = {
         marketRules: 'Market Rules',
         dataManager: 'Data Manager',
         settings: 'Settings',
+        docs: 'Docs',
         // Reachable pages that are deliberately not in the rail.
         strategyDetail: 'Strategy Detail',
         callback: 'Broker Callback',

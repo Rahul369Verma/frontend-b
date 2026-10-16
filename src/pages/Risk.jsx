@@ -10,6 +10,10 @@ import RiskLimitsPanel from '../components/risk/RiskLimitsPanel';
 import { inr, num, istTime, useChartTheme } from '../components/viz/tokens';
 import { pollInterval } from '../hooks/usePolling.js';
 import { API_URL } from '../config/api.js';
+import DocLink from '../components/DocLink.jsx';
+
+/** Risk tab → its documentation section. */
+const TAB_DOC = { book: 'live-book', stress: 'stress', attribution: 'attribution', portfolio: 'portfolio', limits: 'limits' };
 
 
 /**
@@ -92,7 +96,7 @@ export default function Risk() {
 
     return (
         <div className="p-6 space-y-4">
-            <PageHeader icon={Gauge} title="Portfolio Risk"
+            <PageHeader docs="risk" icon={Gauge} title="Portfolio Risk"
                 subtitle="Whole-account view across the single-leg and multi-leg engines. Read-only."
                 actions={(
                     <>
@@ -140,6 +144,7 @@ export default function Risk() {
                 <Tabs className="flex-1 border-b-0" ariaLabel="Risk views"
                     tabs={tabs.map((t) => ({ id: t.key, label: t.label, icon: t.icon }))}
                     value={tab} onChange={setTab} />
+                <DocLink to={`risk#${TAB_DOC[tab] || 'overview'}`} label="About this tab" className="self-center" />
                 {lastAt && <span className="ml-auto self-center text-2xs text-fg-5">
                     updated {istTime(lastAt)}
                 </span>}
@@ -210,7 +215,7 @@ function LiveBook({ greeks, margin }) {
                 <>
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                         {/* The correlated-stack detector — the reason this page exists. */}
-                        <Card title="Directional concentration"
+                        <Card docs="risk#live-book" title="Directional concentration"
                               subtitle="Are these separate bets, or one bet in many costumes?">
                             <Meter
                                 value={c.directionalConcentration || 0}
@@ -243,7 +248,7 @@ function LiveBook({ greeks, margin }) {
                         </Card>
 
                         {/* Proof the multileg book is actually being counted. */}
-                        <Card title="Which engine holds the risk"
+                        <Card docs="risk#live-book" title="Which engine holds the risk"
                               subtitle="Both books priced by one aggregator, one set of conventions."
                               right={greeks.providers?.length
                                   ? <StatusBadge level="good">{greeks.providers.length} provider(s)</StatusBadge>
@@ -269,7 +274,7 @@ function LiveBook({ greeks, margin }) {
                             </div>
                         </Card>
 
-                        <Card title="Exposure by underlying"
+                        <Card docs="risk#live-book" title="Exposure by underlying"
                               subtitle="₹ P&L per 1% move — comparable across indices.">
                             <DivergingBars
                                 data={underlyingRows.map(r => ({
@@ -283,7 +288,7 @@ function LiveBook({ greeks, margin }) {
                     </div>
 
                     {greeks.warnings?.length > 0 && (
-                        <Card title="Book warnings"
+                        <Card docs="risk#live-book" title="Book warnings"
                               subtitle="A leg that cannot be priced is still on the book — these mean the numbers above may understate risk.">
                             <ul className="space-y-1">
                                 {greeks.warnings.map((w, i) => (
@@ -297,7 +302,7 @@ function LiveBook({ greeks, margin }) {
                         </Card>
                     )}
 
-                    <Card title="Open legs" subtitle={`${greeks.legs?.length || 0} contracts across both engines`}>
+                    <Card docs="risk#live-book" title="Open legs" subtitle={`${greeks.legs?.length || 0} contracts across both engines`}>
                         <DataTable
                             maxHeight={460}
                             columns={[
@@ -377,7 +382,7 @@ function Stress({ stress, scenarios, greeks }) {
                           hint="floor for a long-only book" />
             </StatRow>
 
-            <Card
+            <Card docs="risk#stress"
                 title="Shock grid — full repricing"
                 subtitle="Every leg repriced with Black-Scholes under each shock, not a greek approximation: convexity is exactly what hurts in a tail."
                 right={<span className="text-2xs text-fg-5">+{stress.grid?.hoursForward}h decay applied</span>}
@@ -394,7 +399,7 @@ function Stress({ stress, scenarios, greeks }) {
                 />
             </Card>
 
-            <Card title="Named scenarios"
+            <Card docs="risk#stress" title="Named scenarios"
                   subtitle="Worst first. The rows anyone reads are the top three.">
                 <DataTable
                     columns={[
@@ -460,7 +465,7 @@ function Portfolio({ factors }) {
                           hint={factors.window?.from ? `${factors.window.from} → ${factors.window.to}` : ''} />
             </StatRow>
 
-            <Card title="The headline">
+            <Card docs="risk#portfolio" title="The headline">
                 <p className="text-sm text-fg-2">{cl.verdict}</p>
                 <p className="text-2xs text-fg-5 mt-1.5 leading-snug">
                     Two strategies with different names and different indicators are the SAME bet if their daily
@@ -470,7 +475,7 @@ function Portfolio({ factors }) {
             </Card>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <Card title="Clusters — what to keep, what to drop"
+                <Card docs="risk#portfolio" title="Clusters — what to keep, what to drop"
                       subtitle="Within each cluster, the member with the best risk-adjusted return is the keeper.">
                     <div className="space-y-3">
                         {cl.clusters.map(c => (
@@ -507,7 +512,7 @@ function Portfolio({ factors }) {
                 </Card>
 
                 <div className="space-y-4">
-                    <Card title="Capital allocation"
+                    <Card docs="risk#portfolio" title="Capital allocation"
                           subtitle={factors.allocation?.method}>
                         <DivergingBars
                             data={(factors.allocation?.allocations || []).map(a => ({
@@ -523,7 +528,7 @@ function Portfolio({ factors }) {
                     </Card>
 
                     {corr?.redundantPairs?.length > 0 && (
-                        <Card title="Most duplicated pairs" subtitle="r ≥ 0.7 on daily net P&L">
+                        <Card docs="risk#portfolio" title="Most duplicated pairs" subtitle="r ≥ 0.7 on daily net P&L">
                             <DataTable
                                 dense
                                 columns={[
@@ -539,7 +544,7 @@ function Portfolio({ factors }) {
             </div>
 
             {showMatrix && (
-                <Card title="Correlation matrix" subtitle="Daily net P&L. Blue = moves together, red = moves opposite.">
+                <Card docs="risk#portfolio" title="Correlation matrix" subtitle="Daily net P&L. Blue = moves together, red = moves opposite.">
                     <Heatmap
                         rows={names}
                         cols={names}
@@ -553,7 +558,7 @@ function Portfolio({ factors }) {
                 </Card>
             )}
 
-            <Card title="What each strategy is actually betting on"
+            <Card docs="risk#portfolio" title="What each strategy is actually betting on"
                   subtitle="Per-trade net P&L regressed on market factors. Needs ≥20 fully-decomposed trades.">
                 <DataTable
                     columns={[

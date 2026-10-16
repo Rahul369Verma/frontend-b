@@ -30,6 +30,7 @@ import { useConfirm } from '../components/confirmContext.js';
 import { toast } from '../components/toastStore.js';
 import { pollInterval, usePolling } from '../hooks/usePolling.js';
 import useRemWidth from '../hooks/useRemWidth.js';
+import DocLink from '../components/DocLink.jsx';
 import {
     ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Cell,
 } from 'recharts';
@@ -905,7 +906,7 @@ function ScreenerTab({ api, fields, presets, universes, draft, setDraft, onSaveA
 
     return (
         <div className="space-y-4">
-            <Card title="Starting points" subtitle="Ideas, not edges — each carries what a replay over stored history actually measured. Click one to load it into the editor; tick “Test” on several to compare them on history.">
+            <Card docs="alerts#starting-points" title="Starting points" subtitle="Ideas, not edges — each carries what a replay over stored history actually measured. Click one to load it into the editor; tick “Test” on several to compare them on history.">
                 <div className="rounded border border-line bg-surface-2 px-3 py-2 mb-3 space-y-1.5">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-2"><FlaskConical className="w-3.5 h-3.5" aria-hidden="true" /> Compare on history</span>
@@ -1000,7 +1001,7 @@ function ScreenerTab({ api, fields, presets, universes, draft, setDraft, onSaveA
 
             {batch && (
                 <div ref={batchRef} className="scroll-mt-4">
-                    <Card title="Starting points tested together" subtitle="New matches only, replayed over stored history — one row per starting point. Click a row for its full result."
+                    <Card docs="alerts#starting-points" title="Starting points tested together" subtitle="New matches only, replayed over stored history — one row per starting point. Click a row for its full result."
                         right={<button type="button" onClick={() => setBatch(null)} aria-label="Close comparison" className="text-fg-5 hover:text-fg p-1"><X className="w-4 h-4" aria-hidden="true" /></button>}>
                         <BatchReplayResult job={batch} api={api} />
                     </Card>
@@ -1008,7 +1009,7 @@ function ScreenerTab({ api, fields, presets, universes, draft, setDraft, onSaveA
             )}
 
             <div className="grid gap-4 xl:grid-cols-[1fr_22rem]">
-                <Card title="Query" subtitle="A condition over catalog fields, evaluated against every stock in the universe.">
+                <Card docs="alerts#query" title="Query" subtitle="A condition over catalog fields, evaluated against every stock in the universe.">
                     <div className="space-y-3">
                         <QueryInput inputRef={taRef} value={draft.query} fields={fields} invalid={!!qErr}
                             onChange={(q) => { set({ query: q, presetId: null }); setQErr(null); }}
@@ -1068,7 +1069,7 @@ function ScreenerTab({ api, fields, presets, universes, draft, setDraft, onSaveA
                         <div className="text-3xs text-fg-5">Ctrl/⌘ + Enter runs. Numbers are NSE's own files (bhavcopy + daily PE); nothing is scraped.</div>
                     </div>
                 </Card>
-                <Card title="Fields" subtitle="Click to insert." right={
+                <Card docs="alerts#query" title="Fields" subtitle="Click to insert." right={
                     <button type="button" className="xl:hidden text-2xs text-fg-4 underline" onClick={() => setShowRef(v => !v)}>{showRef ? 'hide' : 'show'}</button>
                 }>
                     <div className={`${showRef ? '' : 'hidden'} xl:block`}><FieldReference fields={fields} onPick={insert} /></div>
@@ -1076,13 +1077,13 @@ function ScreenerTab({ api, fields, presets, universes, draft, setDraft, onSaveA
             </div>
 
             {replay && (
-                <Card title="Would this have caught anything?" subtitle="New matches only (what an alert notifies), replayed over stored history."
+                <Card docs="alerts#replay" title="Would this have caught anything?" subtitle="New matches only (what an alert notifies), replayed over stored history."
                     right={<button type="button" onClick={() => setReplay(null)} aria-label="Close replay" className="text-fg-5 hover:text-fg p-1"><X className="w-4 h-4" aria-hidden="true" /></button>}>
                     <ReplayResult job={replay} side={replaySide} />
                 </Card>
             )}
             {res && res.marketOnly && (
-                <Card title="Market condition" subtitle="This query reads only market-wide fields (NIFTY, FII/DII, VIX…), so every stock shares the same values — it is a yes/no condition, not a stock list. Saved as an alert, it messages you when the condition turns true.">
+                <Card docs="alerts#query" title="Market condition" subtitle="This query reads only market-wide fields (NIFTY, FII/DII, VIX…), so every stock shares the same values — it is a yes/no condition, not a stock list. Saved as an alert, it messages you when the condition turns true.">
                     <div className="space-y-3">
                         <BasisLine b={res.basis} />
                         <div className="flex flex-wrap items-center gap-3">
@@ -1103,7 +1104,7 @@ function ScreenerTab({ api, fields, presets, universes, draft, setDraft, onSaveA
                 </Card>
             )}
             {res && !res.marketOnly && (
-                <Card title={`${fmt(res.totalMatched, 0)} match${res.totalMatched === 1 ? '' : 'es'}`}
+                <Card docs="alerts#results" title={`${fmt(res.totalMatched, 0)} match${res.totalMatched === 1 ? '' : 'es'}`}
                     subtitle={res.totalMatched > res.shown ? `showing the first ${res.shown}, sorted by ${res.sortBy}` : `sorted by ${res.sortBy} (${res.sortDir === 'asc' ? 'low → high' : 'high → low'}) · ${res.tookMs} ms`}>
                     <div className="space-y-3">
                         <BasisLine b={res.basis} />
@@ -1315,7 +1316,7 @@ function AlertsTab({ api, universes, editing, setEditing, onChanged, fields = []
                 </div>
             )}
             {batch && (
-                <Card title="Alerts tested together" subtitle="One row per alert — the numbers each gets when tested alone."
+                <Card docs="alerts#alerts" title="Alerts tested together" subtitle="One row per alert — the numbers each gets when tested alone."
                     right={<button type="button" onClick={() => setBatch(null)} aria-label="Close comparison" className="text-fg-5 hover:text-fg p-1"><X className="w-4 h-4" aria-hidden="true" /></button>}>
                     <BatchReplayResult job={batch} api={api} />
                 </Card>
@@ -1323,7 +1324,7 @@ function AlertsTab({ api, universes, editing, setEditing, onChanged, fields = []
             {alerts && alerts.length > 0 && (
                 <div className="grid gap-3 lg:grid-cols-2">
                     {alerts.map(a => (
-                        <Card key={a._id} title={<span className="flex items-center gap-2">{a.name}{!a.enabled && <Chip tone="muted">paused</Chip>}</span>}
+                        <Card docs="alerts#alerts" key={a._id} title={<span className="flex items-center gap-2">{a.name}{!a.enabled && <Chip tone="muted">paused</Chip>}</span>}
                             subtitle={a.lastRunAt ? `Last run ${istDateTime(a.lastRunAt)} · ${a.lastStatus === 'ok' ? `${a.lastMatchCount ?? 0} matched, ${a.lastNewCount ?? 0} new` : a.lastStatus}` : 'Never run'}
                             right={
                                 <label className="inline-flex items-center gap-1.5 text-2xs text-fg-4 cursor-pointer">
@@ -1396,7 +1397,7 @@ function ReferenceData({ api, s, busy, act }) {
         { k: 'amfi', label: 'AMFI size categories', gives: 'amfi_category, amfi_rank', stored: R.amfi ? `${fmt(R.amfi.companies, 0)} companies` : '—', range: R.amfi ? `list to ${R.amfi.halfYearEnd} (used from ${R.amfi.knownFrom})` : '—', refresh: 'January & July; only the newest list is online' },
     ];
     return (
-        <Card title="Ownership, disclosures & filings" subtitle="Who owns and trades each stock, what the company announced, what it reported — from NSE's disclosure APIs and filing archive, NSDL and AMFI. Every value is used only from the date it was published, so history replays cannot see ahead.">
+        <Card docs="alerts#data" title="Ownership, disclosures & filings" subtitle="Who owns and trades each stock, what the company announced, what it reported — from NSE's disclosure APIs and filing archive, NSDL and AMFI. Every value is used only from the date it was published, so history replays cannot see ahead.">
             <div className="space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
                     <button type="button" disabled={!!busy || job.running} title="24 months of disclosures, filings lists, NSDL history and AMFI, then the first batch of XBRL filings and insider-trade polls (F&O + NIFTY 500). About 1-2 hours; the nightly run keeps it current."
@@ -1466,7 +1467,7 @@ function DataTab({ api, status, reload }) {
                 <div className="text-2xs text-warning">Fewer than 200 sessions stored: 52-week, SMA-200 and 1-year PE fields are UNKNOWN for every stock until a backfill completes.</div>
             )}
 
-            <Card title="Supplementary NSE data" subtitle="What the broker (Fyers) does not provide: its market-data API is quotes, depth, candles and the option chain only — no fundamentals, no FII/DII, no deals. These come from NSE's own end-of-day files, fetched with the bhavcopy.">
+            <Card docs="alerts#data" title="Supplementary NSE data" subtitle="What the broker (Fyers) does not provide: its market-data API is quotes, depth, candles and the option chain only — no fundamentals, no FII/DII, no deals. These come from NSE's own end-of-day files, fetched with the bhavcopy.">
                 <DataTable dense
                     columns={[
                         { key: 'label', header: 'Dataset' }, { key: 'fields', header: 'Gives you', render: (x) => <span className="text-fg-5 whitespace-normal">{x.fields}</span> },
@@ -1489,7 +1490,7 @@ function DataTab({ api, status, reload }) {
 
             <ReferenceData api={api} s={s} busy={busy} act={act} />
 
-            <Card title="NSE ingest" subtitle="Bhavcopy (OHLC + delivery) and the daily PE file, fetched from NSE's archive at 07:05–09:05 and 18:15–22:15 IST on weekdays. Idempotent — stored days are skipped.">
+            <Card docs="alerts#data" title="NSE ingest" subtitle="Bhavcopy (OHLC + delivery) and the daily PE file, fetched from NSE's archive at 07:05–09:05 and 18:15–22:15 IST on weekdays. Idempotent — stored days are skipped.">
                 <div className="space-y-3">
                     <div className="flex flex-wrap items-center gap-2">
                         <button type="button" disabled={!!busy || ing.running} onClick={() => act('recent', () => api.post('/ingest/recent', { days: 7 }))} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-line text-xs text-fg-3 hover:bg-card-2 disabled:opacity-50"><RefreshCw className={`w-3.5 h-3.5 ${busy === 'recent' ? 'animate-spin' : ''}`} aria-hidden="true" /> Fetch last 7 days</button>
@@ -1522,7 +1523,7 @@ function DataTab({ api, status, reload }) {
                 </div>
             </Card>
 
-            <Card title="Your own fundamentals (optional CSV)" subtitle="Book value now comes from each company's NSE results filing (balance sheet). A CSV import fills gaps — stocks with no stored filing — and every other numeric column becomes a queryable f_… field. Symbol column: SYMBOL / NSE Code; book value: Book Value / BVPS.">
+            <Card docs="alerts#data" title="Your own fundamentals (optional CSV)" subtitle="Book value now comes from each company's NSE results filing (balance sheet). A CSV import fills gaps — stocks with no stored filing — and every other numeric column becomes a queryable f_… field. Symbol column: SYMBOL / NSE Code; book value: Book Value / BVPS.">
                 <div className="space-y-3">
                     <div className="text-2xs text-fg-4">
                         {s.fundamentals?.stocks ? <>Stored: {fmt(s.fundamentals.stocks, 0)} stocks, {fmt(s.fundamentals.withBookValue, 0)} with book value (as of {s.fundamentals.bookValueOldest ? String(s.fundamentals.bookValueOldest).slice(0, 10) : '—'} → {s.fundamentals.bookValueNewest ? String(s.fundamentals.bookValueNewest).slice(0, 10) : '—'}). NSE-filed book values take precedence.</> : 'Nothing imported — PB uses NSE results filings only.'}
@@ -1550,14 +1551,14 @@ function DataTab({ api, status, reload }) {
             </Card>
 
             {s.scanner?.eod?.peFileQuality && (s.scanner.eod.peFileQuality.setAside?.length > 0 || s.scanner.eod.peFileQuality.rebased?.length > 0) && (
-                <Card title="PE files the quality gate acted on" subtitle="Files that changed more than 30% of stocks' EPS at once. Set aside = ignored (EPS held at the last good file); re-based = the change held for 5 files and was accepted without counting as results.">
+                <Card docs="alerts#data" title="PE files the quality gate acted on" subtitle="Files that changed more than 30% of stocks' EPS at once. Set aside = ignored (EPS held at the last good file); re-based = the change held for 5 files and was accepted without counting as results.">
                     <DataTable dense
                         columns={[{ key: 'fileDate', header: 'File date' }, { key: 'what', header: 'Action', render: (f) => <Chip tone={f.what === 'set aside' ? 'warning' : 'info'}>{f.what}</Chip> }, { key: 'sharePct', header: "Stocks' EPS changed", align: 'right', render: (f) => `${fmt(f.sharePct, 1)}%` }]}
                         rows={[...(s.scanner.eod.peFileQuality.setAside || []).map(f => ({ ...f, what: 'set aside' })), ...(s.scanner.eod.peFileQuality.rebased || []).map(f => ({ ...f, what: 're-based' }))].sort((a, b) => (a.fileDate < b.fileDate ? 1 : -1)).map(f => ({ ...f, _key: f.fileDate }))} />
                 </Card>
             )}
 
-            <Card title="How the numbers are made" subtitle="Facts about NSE's files this screener corrects for.">
+            <Card docs="alerts#data" title="How the numbers are made" subtitle="Facts about NSE's files this screener corrects for.">
                 <ul className="list-disc pl-5 space-y-1 text-2xs text-fg-4">{(s.facts || []).map((f, i) => <li key={i}>{f}</li>)}</ul>
             </Card>
         </div>
@@ -1609,7 +1610,7 @@ export default function Alerts() {
     const noData = cov && cov.sessions === 0;
     return (
         <div className="p-6 space-y-6">
-            <PageHeader icon={BellRing} title="Stock Alerts"
+            <PageHeader docs="alerts#overview" icon={BellRing} title="Stock Alerts"
                 subtitle="Screen every NSE stock on NSE's own daily files, save screens as scheduled alerts, and get a Telegram message when a stock newly matches."
                 badges={cov ? <>
                     <Chip tone={cov.sessions >= 250 ? 'neutral' : 'warning'}>{cov.lastSession ? `EOD ${cov.lastSession}` : 'no data'}</Chip>
@@ -1624,8 +1625,11 @@ export default function Alerts() {
                 </EmptyState>
             )}
             {status?.error && <EmptyState icon={AlertTriangle} title="Screener API unreachable">{status.error}</EmptyState>}
-            <Tabs value={tab} onChange={setTab} ariaLabel="Stock alerts sections"
-                tabs={[{ id: 'screener', label: 'Screener', icon: Search }, { id: 'alerts', label: 'Alerts', icon: BellRing, badge: status?.alerts ? <Chip tone="muted">{status.alerts}</Chip> : null }, { id: 'data', label: 'Data', icon: Database }]} />
+            <div className="flex items-center gap-2">
+                <Tabs className="flex-1" value={tab} onChange={setTab} ariaLabel="Stock alerts sections"
+                    tabs={[{ id: 'screener', label: 'Screener', icon: Search }, { id: 'alerts', label: 'Alerts', icon: BellRing, badge: status?.alerts ? <Chip tone="muted">{status.alerts}</Chip> : null }, { id: 'data', label: 'Data', icon: Database }]} />
+                <DocLink to={tab === 'alerts' ? 'alerts#alerts' : tab === 'data' ? 'alerts#data' : 'alerts#query'} label="About this tab" />
+            </div>
             {tab === 'screener' && (
                 <ScreenerTab api={api} fields={fields} presets={presets} universes={universes} draft={draft} setDraft={setDraft} limits={status?.scanner?.limits}
                     onSaveAlert={(d) => { setEditing(blankAlert(d)); setTab('alerts'); }} />

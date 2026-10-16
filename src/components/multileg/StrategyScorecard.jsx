@@ -22,6 +22,7 @@ import { pnlTone, rupeeTick } from '../viz/tokens';
 import { useChartTheme } from '../../theme/chartTheme.js';
 import useRemWidth from '../../hooks/useRemWidth';
 import { fmt, num, rup, shortSym } from './builderFormat';
+import DocLink from '../DocLink.jsx';
 
 const TABLE_REM = 80;
 const COLLAPSED_ROWS = 15;
@@ -102,7 +103,7 @@ export function OpenNow({ sc, templates = [] }) {
     return (
         <div className="bg-surface rounded-xl border border-line p-3">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <h2 className="text-sm font-semibold text-fg">Open now</h2>
+                <h2 className="text-sm font-semibold text-fg">Open now <DocLink to="multi-leg#results-tab" /></h2>
                 {data.n ? (
                     <>
                         <span className="text-xs text-fg-3">{data.n} structure{data.n === 1 ? '' : 's'}</span>
@@ -266,6 +267,7 @@ export default function StrategyScorecard({ sc, templates = [], single = false }
                     <h2 className="text-sm font-semibold text-fg mr-auto">
                         Strategies {data ? `(${allRows.length})` : ''}
                         <span className="text-fg-5 font-normal text-2xs"> — booked results per deployment, and live vs the backtest it was deployed from</span>
+                        <DocLink to="multi-leg#results-tab" className="ml-2" />
                     </h2>
                     {!single && allRows.length > 0 && (
                         <div className="flex flex-wrap items-center gap-2">

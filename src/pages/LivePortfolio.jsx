@@ -311,7 +311,7 @@ function OpenNowSingle({ open, depById, linkForDeployment }) {
     if (!open) return null;
     const rows = Array.isArray(open.rows) ? open.rows : [];
     return (
-        <Card title="Open now" subtitle="Live engine positions, marked at the latest quote. Pre-cost — charges are booked at exit."
+        <Card docs="live-portfolio#open-now" title="Open now" subtitle="Live engine positions, marked at the latest quote. Pre-cost — charges are booked at exit."
             right={open.n > 0 ? (
                 <button type="button" onClick={() => setShow((v) => !v)} aria-expanded={show}
                     className="text-2xs px-2 py-0.5 rounded border border-line-2 text-fg-4 hover:text-fg">{show ? 'Hide list' : 'Show list'}</button>
@@ -416,7 +416,7 @@ function StrategyPanel({ g, color, depById, linkForDeployment, onClose }) {
     ];
 
     return (
-        <Card
+        <Card docs="live-portfolio#strategies"
             title={<span className="inline-flex items-center gap-2"><span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color }} aria-hidden="true" />{g.key}</span>}
             subtitle="This strategy alone, over the selected window. Same arithmetic as the header, same window."
             right={(
@@ -437,7 +437,7 @@ function StrategyPanel({ g, color, depById, linkForDeployment, onClose }) {
                 </StatRow>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                    <Card title="Daily net P&L" subtitle="By exit day IST. Drag to zoom.">
+                    <Card docs="live-portfolio#daily-equity" title="Daily net P&L" subtitle="By exit day IST. Drag to zoom.">
                         <ZoomableChart data={rows} height={180}>
                             <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                 <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
@@ -452,7 +452,7 @@ function StrategyPanel({ g, color, depById, linkForDeployment, onClose }) {
                             </ComposedChart>
                         </ZoomableChart>
                     </Card>
-                    <Card title="Equity curve" subtitle="Cumulative net with drawdown shaded beneath.">
+                    <Card docs="live-portfolio#daily-equity" title="Equity curve" subtitle="Cumulative net with drawdown shaded beneath.">
                         <ZoomableChart data={rows} height={180}>
                             <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                 <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
@@ -470,10 +470,10 @@ function StrategyPanel({ g, color, depById, linkForDeployment, onClose }) {
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                    <Card title="Exit reasons" subtitle="Net by how the trade ended. SL-heavy means a broken entry; TP-heavy with a negative total means the stop is too wide.">
+                    <Card docs="live-portfolio#breakdowns" title="Exit reasons" subtitle="Net by how the trade ended. SL-heavy means a broken entry; TP-heavy with a negative total means the stop is too wide.">
                         <DivergingBars data={exitRows} emptyText="No exits recorded." labelWidth={150} />
                     </Card>
-                    <Card title="Deployments running it" subtitle="Each row is one deployment of this strategy; the link opens its detail page.">
+                    <Card docs="live-portfolio#strategies" title="Deployments running it" subtitle="Each row is one deployment of this strategy; the link opens its detail page.">
                         <DataTable columns={depCols} rows={depRows} dense empty="No deployment carries this strategy — these trades were booked in symbol-config mode." />
                     </Card>
                 </div>
@@ -752,7 +752,7 @@ export default function LivePortfolio() {
     return (
         <div className="p-6 space-y-4">
             {/* ── Header ─────────────────────────────────────────────────── */}
-            <PageHeader
+            <PageHeader docs="live-portfolio"
                 icon={Wallet}
                 title="Live Portfolio"
                 subtitle={`Every deployment's results in one place — combined, and one card per strategy. ${viewMeta.hint}.`}
@@ -829,7 +829,7 @@ export default function LivePortfolio() {
                     <CostLine costs={summary.costs} />
 
                     {/* ── 2 · Strategies ─────────────────────────────────── */}
-                    <Card
+                    <Card docs="live-portfolio#strategies"
                         title="Strategies"
                         subtitle="One card per strategy, ranked by net. Compare overlays its curve below; Details opens its own P&L, exits and deployments."
                         right={hasGroups ? <span>{int(strategies.length)} strategies · {int(deployments.filter((d) => d.meta).length)} deployments</span> : null}
@@ -867,7 +867,7 @@ export default function LivePortfolio() {
 
                     {/* ── 4 · Compare ────────────────────────────────────── */}
                     {hasGroups && strategies.length > 0 && (
-                        <Card
+                        <Card docs="live-portfolio#compare"
                             title="Compare equity curves"
                             subtitle="Selected strategies against the combined book, on one axis. Each line's colour is its card's rail. Drag to zoom."
                             right={(
@@ -903,7 +903,7 @@ export default function LivePortfolio() {
 
                     {/* ── 5 · Combined daily + equity ────────────────────── */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                        <Card title="Daily net P&L — combined" subtitle="One bar per trading day, by exit day IST. Drag to zoom.">
+                        <Card docs="live-portfolio#daily-equity" title="Daily net P&L — combined" subtitle="One bar per trading day, by exit day IST. Drag to zoom.">
                             <ZoomableChart data={dailyRows} height={210}>
                                 <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
@@ -921,7 +921,7 @@ export default function LivePortfolio() {
                                 </ComposedChart>
                             </ZoomableChart>
                         </Card>
-                        <Card title="Equity curve — combined" subtitle="Cumulative net, with the drawdown from peak shaded beneath.">
+                        <Card docs="live-portfolio#daily-equity" title="Equity curve — combined" subtitle="Cumulative net, with the drawdown from peak shaded beneath.">
                             <ZoomableChart data={dailyRows} height={210}>
                                 <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
@@ -943,12 +943,12 @@ export default function LivePortfolio() {
                     </div>
 
                     {/* ── 6 · Calendar ───────────────────────────────────── */}
-                    <Card title="Daily P&L calendar" subtitle="Grey = no exits that day. The darkest shade is a day past ±₹5,000.">
+                    <Card docs="live-portfolio#calendar" title="Daily P&L calendar" subtitle="Grey = no exits that day. The darkest shade is a day past ±₹5,000.">
                         <PnlCalendar daily={daily} rangeDays={calendarDays} title={null} />
                     </Card>
 
                     {/* ── 7 · Breakdowns ─────────────────────────────────── */}
-                    <Card
+                    <Card docs="live-portfolio#breakdowns"
                         title="Breakdowns"
                         subtitle="Ranked by net over this window. Every tab sums to the header above — rows with no deployment or strategy are labelled, never dropped."
                     >
@@ -971,7 +971,7 @@ export default function LivePortfolio() {
                     </Card>
 
                     {/* ── 8 · How trades travelled ───────────────────────── */}
-                    <Card title="How trades travelled"
+                    <Card docs="live-portfolio#excursions" title="How trades travelled"
                         subtitle="Worst and best point while open, and what a stop or target at that level alone would have done.">
                         <ExcursionsPanel excursions={data?.excursions} basis="gross"
                             missingNote="the live engine started recording each trade's path on 7 Oct 2026" />

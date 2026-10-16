@@ -4,6 +4,7 @@ import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 import { INSTRUMENT_CONFIG } from '../constants';
 import { pollInterval } from '../hooks/usePolling.js';
 import { API_URL } from '../config/api.js';
+import DocLink from './DocLink.jsx';
 
 // --- MultiSelect Component ---
 const MultiSelect = ({ options, selectedValues, onChange, placeholder = "Select...", label = "Items" }) => {
@@ -406,6 +407,7 @@ const DataManager = () => {
             <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
                 <h2 className="text-xl font-bold flex items-center gap-2">
                     <FaDatabase className="text-purple-400" /> Live Option-Chain Archive
+                    <DocLink to="data-manager#option-archive" />
                     {oa && (
                         <span className={`text-2xs px-2 py-0.5 rounded border font-semibold ${oa.running ? 'border-green-600 text-success bg-green-900/25' : oa.active ? 'border-yellow-600 text-warning bg-yellow-900/20' : 'border-line-2 text-fg-4'}`}>
                             {oa.running ? '● RECORDING' : oa.active ? 'IDLE' : 'INACTIVE'}
@@ -509,6 +511,7 @@ const DataManager = () => {
         <div className="p-6 text-fg">
             <h1 className="text-xl font-bold text-fg flex items-center gap-2 mb-6">
                 <FaDatabase className="text-blue-400" /> Data Archivist
+                <DocLink to="data-manager" label="Guide" className="text-xs" />
             </h1>
 
             {OptionArchivePanel}
@@ -522,6 +525,7 @@ const DataManager = () => {
                     <div className="bg-gray-800 p-6 rounded-xl border border-line shadow-lg h-fit">
                         <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
                             <FaCloudDownloadAlt className="text-success" /> Futures & AI Dataset
+                            <DocLink to="data-manager#futures" />
                         </h2>
                         <div className="space-y-4">
                             <div>
@@ -578,6 +582,7 @@ const DataManager = () => {
                     <div className="bg-gray-800 p-6 rounded-xl border border-line shadow-lg h-fit text-warning border-orange-900/50">
                         <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
                              <FaDatabase className="text-warning" /> SPOT Data Archiver
+                             <DocLink to="data-manager#spot" />
                         </h2>
                         <p className="text-sm text-fg-4 mb-4">
                              Archive actual Index/Equity data for specific custom ranges.
@@ -654,6 +659,7 @@ const DataManager = () => {
                     <div className="bg-gray-800 p-6 rounded-xl border border-line shadow-lg h-fit text-purple-100 border-purple-900/50">
                         <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
                             <FaDatabase className="text-purple-400" /> Options Archiver
+                            <DocLink to="data-manager#options" />
                         </h2>
                          <p className="text-sm text-fg-4 mb-4">
                              Fetches 1-minute history for <b>Current Month</b> Options (CE/PE) around the ATM.
@@ -727,6 +733,7 @@ const DataManager = () => {
                 <div className="bg-gray-800 p-6 rounded-xl border border-line shadow-lg">
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
                         <FaFolderOpen className="text-warning" /> Local Archives
+                        <DocLink to="data-manager#archives" />
                     </h2>
                     
                     {Object.keys(archives).length === 0 ? (

@@ -1,5 +1,6 @@
 import React from 'react';
 import { nameOf } from './crossIndex';
+import DocLink from '../DocLink.jsx';
 
 // Saved optimizer runs: open a finished one, resume a paused / stopped / crashed
 // one from its checkpoint, delete any that isn't running. A crashed run says
@@ -20,7 +21,7 @@ export default function RecentRuns({ runs, onOpen, onResume, onDelete, onClearFi
   return (
     <section aria-label="Recent runs" className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-medium text-fg-3">Recent runs</h3>
+        <h3 className="text-sm font-medium text-fg-3">Recent runs <DocLink to="optimizer#recent-runs" /></h3>
         {finished > 0 && (
           <button type="button" onClick={onClearFinished} className="text-2xs text-fg-4 hover:text-danger hover:underline"
             title="Deletes finished runs (done, stopped, error). Paused and interrupted runs are kept so they can still resume.">

@@ -112,8 +112,8 @@ export function TradeDetailsView({ data }) {
                         <Row label="Exit">{t.exitTime ? istDateTime(t.exitTime, { seconds: true }) : '—'}</Row>
                         <Row label="Held">{holdText(t.entryTime, t.exitTime)}</Row>
                         <Row label="Qty / lots">{t.quantity ?? '—'}{pos.lots ? ` (${pos.lots} lot${pos.lots > 1 ? 's' : ''})` : ''}</Row>
-                        <Row label="Entry price">{premium(t.entryPrice ?? t.price)}{n(pos.entryPrice) != null && n(pos.entryPrice) !== n(t.entryPrice) ? ` (fill ${premium(pos.entryPrice)})` : ''}</Row>
-                        <Row label="Exit price">{premium(t.exitPrice)}</Row>
+                        <Row label="Entry price">{premium(t.entryPrice ?? t.price, t.symbol)}{n(pos.entryPrice) != null && n(pos.entryPrice) !== n(t.entryPrice) ? ` (fill ${premium(pos.entryPrice, t.symbol)})` : ''}</Row>
+                        <Row label="Exit price">{premium(t.exitPrice, t.symbol)}</Row>
                         <Row label="Gross P&L"><span className={pnlTone(gross)}>{inr(gross, { sign: true })}</span></Row>
                         <Row label="Charges">{inr(charges)}</Row>
                         <Row label="Net P&L"><span className={`font-semibold ${pnlTone(net)}`}>{inr(net, { sign: true })}</span></Row>

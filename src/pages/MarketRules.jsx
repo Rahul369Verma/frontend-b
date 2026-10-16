@@ -20,6 +20,7 @@ import {
     PageHeader, Card, StatRow, StatTile, DataTable, Tabs, Chip, StatusBadge,
     Spinner, EmptyState, Placeholder,
 } from '../components/viz/primitives';
+import DocLink from '../components/DocLink.jsx';
 import { istDateTime } from '../components/viz/tokens';
 import { STATUS_META, formatValue, describeKey } from '../components/marketRules/format.js';
 import { toast } from '../components/toastStore.js';
@@ -282,7 +283,7 @@ export default function MarketRules() {
 
     return (
         <div className="p-6 space-y-4">
-            <PageHeader
+            <PageHeader docs="market-rules#overview"
                 icon={ScrollText}
                 title="Market Rules"
                 subtitle="Lots, ticks, sessions, holidays and MCX margins, checked against NSE, Fyers, Upstox and Zerodha twice a day. A value is applied only when sources agree, the exchange says so, or it is the only source — anything else is held and shown here."
@@ -322,7 +323,7 @@ export default function MarketRules() {
                     </StatRow>
 
                     <div className="grid gap-4 lg:grid-cols-2">
-                        <Card title="Sources" subtitle={last ? `As of the last sync (${istDateTime(last.startedAt)}). MCX's and BSE's own sites refuse scripted access, so their rules come from broker feeds.` : 'No sync yet.'}
+                        <Card docs="market-rules#sources" title="Sources" subtitle={last ? `As of the last sync (${istDateTime(last.startedAt)}). MCX's and BSE's own sites refuse scripted access, so their rules come from broker feeds.` : 'No sync yet.'}
                             right={failed.length ? <StatusBadge level="critical">{failed.length} failed</StatusBadge> : last ? <StatusBadge level="good">all answered</StatusBadge> : null}>
                             {sources.length ? (
                                 <DataTable dense rows={sources.map(s => ({ ...s, _key: s.source }))} columns={[
@@ -341,7 +342,7 @@ export default function MarketRules() {
                             )}
                         </Card>
 
-                        <Card title="Where the code disagrees with the market"
+                        <Card docs="market-rules#drift" title="Where the code disagrees with the market"
                             subtitle="Static settings (INSTRUMENT_CONFIG lots, session constants, holiday lists) against confirmed facts. Holidays and MCX margins are already applied at run time from the synced facts; a lot here needs a code change.">
                             {drift.length ? (
                                 <ul className="space-y-1.5">
@@ -363,12 +364,15 @@ export default function MarketRules() {
 
                     <Card>
                         <div className="pt-3">
-                            <Tabs value={tab} onChange={setTab} ariaLabel="Market rules sections" tabs={[
-                                { id: 'facts', label: 'Facts' },
-                                { id: 'changes', label: 'Changes' },
-                                { id: 'notices', label: 'Circulars', badge: st.unreviewedAlerts ? <Chip tone="warning">{st.unreviewedAlerts}</Chip> : null },
-                                { id: 'runs', label: 'Sync history' },
-                            ]} />
+                            <div className="flex items-center gap-2">
+                                <Tabs className="flex-1" value={tab} onChange={setTab} ariaLabel="Market rules sections" tabs={[
+                                    { id: 'facts', label: 'Facts' },
+                                    { id: 'changes', label: 'Changes' },
+                                    { id: 'notices', label: 'Circulars', badge: st.unreviewedAlerts ? <Chip tone="warning">{st.unreviewedAlerts}</Chip> : null },
+                                    { id: 'runs', label: 'Sync history' },
+                                ]} />
+                                <DocLink to="market-rules#tabs" label="About these tabs" />
+                            </div>
                         </div>
                         <div className="pt-3" key={epoch}>
                             {tab === 'facts' && <FactsTab />}

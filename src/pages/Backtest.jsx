@@ -5,7 +5,10 @@ import PriceChart from '../components/charts/PriceChart';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useGlobalState } from '../context/GlobalContext';
 import CollapsibleCard from '../components/CollapsibleCard';
-import { PageHeader, Spinner, Chip } from '../components/viz/primitives';
+import { PageHeader, Spinner, Chip, Segmented } from '../components/viz/primitives';
+import DeltaInstrumentPicker from '../components/delta/DeltaInstrumentPicker';
+import DeltaParams from '../components/delta/DeltaParams';
+import { isDeltaSymbol } from '../components/delta/deltaFormat.js';
 import { FlaskConical as BacktestIcon } from 'lucide-react';
 import AttributionPanel from '../components/viz/AttributionPanel';
 import VixBreakdownPanel from '../components/viz/VixBreakdownPanel';
@@ -35,6 +38,7 @@ const STRATEGY_PARAM_OPTIONS = {
     open_drive_trend:    { htf_mode: ['off', 'veto', 'align60'], exit_mode: ['range_reentry', 'none'] },
     ichimoku_kumo:       { speed_preset: ['half', 'classic', 'custom'], signal_mode: ['trend', 'fade'], sl_mode: ['kijun', 'cloud'], exit_mode: ['kijun', 'none'] },
     rl_agent:            { signal_type: ['BUY', 'SELL'] },
+    signal_combiner:     { rule: ['quorum', 'weighted', 'primary_confirm', 'primary_veto', 'priority'], sl_mode: ['widest', 'latest', 'tightest', 'primary'], tp_mode: ['voter', 'rr'] },
 };
 
 // Council Ensemble `members` is a comma-separated list of member strategy ids —
@@ -57,6 +61,22 @@ import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { useConfirm } from '../components/confirmContext.js';
 import { toast } from '../components/toastStore.js';
 import { pnlTone } from '../components/viz/tokens';
+import DocLink from '../components/DocLink.jsx';
+import MemberBuilder from '../components/combiner/MemberBuilder.jsx';
+import CombinerReport from '../components/combiner/CombinerReport.jsx';
+import PortfolioRunPanel from '../components/combiner/PortfolioRunPanel.jsx';
+import ConsistencyPanel from '../components/viz/ConsistencyPanel.jsx';
+import { consistencyVerdict } from '../components/viz/consistencyFormat.js';
+import useLocalStorage from '../hooks/useLocalStorage.js';
+import useColumnOrder, { useColumnDrag } from '../hooks/useColumnOrder.js';
+import ReorderableTh from '../components/table/ReorderableTh.jsx';
+import ColumnOrderMenu from '../components/table/ColumnOrderMenu.jsx';
+import AiTrialCard from '../components/backtest/AiTrialCard.jsx';
+import {
+  buildEvidence, holdoutSplit, settingsCatalog, assumptionsOf, checkSuggestions,
+  attributionSummary, vixSummary, summarize as summarizeTrades,
+} from '../utils/strategyReviewPack.js';
+import { ASSUMPTION_KEYS, withFormFallbacks } from '../utils/settingGuide.js';
 
 // Fallback model list — used only if /api/ai-confirmation/models fails.
 // Live list comes from Python's MODEL_REGISTRY via the API.
@@ -134,14 +154,24 @@ function modelBadgeFor(id) {
     return { short: id, cls: 'bg-slate-800 text-fg-3', vendor: 'other' };
 }
 
+/** The trades table's columns in their default left-to-right order (the user can re-order them). */
+const TRADE_COLUMNS = ['chart', 'entry_time', 'symbol', 'volume', 'avg_vol', 'type', 'ai', 'model', 'entry', 'sl', 'tp', 'invested', 'exit_time', 'exit', 'pnl', 'reason', 'gate'];
+
 export default function Backtest() {
   const confirm = useConfirm();
   // Chart colours for the ACTIVE theme. Recharts writes them into SVG
   // attributes and into plain style objects, so they cannot be var().
   const ct = useChartTheme();
   const { backtestParams: params, setBacktestParams: setParams, backtestResult: result, setBacktestResult: setResult } = useGlobalState();
+  // Trades table: drag a header (or use the Columns menu) to re-order; remembered in this browser.
+  const hasGateColumn = !!result?.trades?.some(t => t.dir_gate);
+  const tradeColumnKeys = useMemo(() => TRADE_COLUMNS.filter(k => k !== 'gate' || hasGateColumn), [hasGateColumn]);
+  const tradeCols = useColumnOrder('backtest:trade-columns', tradeColumnKeys);
+  const tradeColDnd = useColumnDrag(tradeCols.move);
   const location = useLocation();
   const [loading, setLoading] = useState(false);
+  // One strategy, or several run together on the same underlying (PortfolioRunPanel).
+  const [btMode, setBtMode] = useLocalStorage('backtest:mode', 'single', { validate: v => v === 'single' || v === 'together' });
   // Collapse the left Configuration panel so the chart/results take the full width.
   // Persisted so a backtest re-run keeps the same layout.
   const [configCollapsed, setConfigCollapsed] = useState(() => {
@@ -191,14 +221,30 @@ export default function Backtest() {
       applyMap: {},             // { paramKey: true/false } — toggle per-row in diff view
       error: null,
       elapsedMs: 0,
+      holdout: true,            // review: hide the most recent ~30% of trades from the AI
+      sent: null,               // review: { catalog, cutoffMs, cutoffDate } the answer is checked against
   });
+  // "Ask AI to Improve": the strategy's settings space (types + allowed ranges +
+  // its own edge/fails-when note) from the backend, fetched once per strategy.
+  const [askTuning, setAskTuning] = useState({ id: null, data: null });
+  // "Apply & re-test": the run before the AI's settings, kept to compare against.
+  const [aiTrial, setAiTrial] = useState(null);
   // Escape closes the Ask-AI modal. The hook has to live at the component's top
   // level — the `onClose` used by the markup is defined inside a render block,
   // where a hook call would be conditional and illegal.
   useEscapeKey(
-      () => setAskAiModal({ open: false, step: 'config', mode: 'params', model: '', result: null, applyMap: {}, error: null, elapsedMs: 0 }),
+      () => setAskAiModal(m => ({ ...m, open: false, step: 'config', mode: 'params', model: '', result: null, applyMap: {}, error: null, elapsedMs: 0, sent: null })),
       askAiModal.open,
   );
+  useEffect(() => {
+      if (!askAiModal.open || askAiModal.mode !== 'review' || askTuning.id === params.strategy) return undefined;
+      let alive = true;
+      const id = params.strategy;
+      axios.get(`${API_URL}/strategies/${encodeURIComponent(id)}/tuning-space`)
+          .then(r => { if (alive) setAskTuning({ id, data: r.data }); })
+          .catch(() => { if (alive) setAskTuning({ id, data: null }); });
+      return () => { alive = false; };
+  }, [askAiModal.open, askAiModal.mode, params.strategy, askTuning.id]);
   const [showAiSim, setShowAiSim] = useState(false);
   const [backtestResultId, setBacktestResultId] = useState(null);
   // ── Per-trade candle chart ────────────────────────────────────────────────
@@ -627,9 +673,15 @@ export default function Backtest() {
    */
   const buildAskAiPayload = () => {
       const tunable = {};
-      Object.keys(params).forEach(k => {
+      // Include what the form SHOWS for settings never explicitly set (their
+      // fallbacks), or the AI is never told about them.
+      const shown = withFormFallbacks(params);
+      Object.keys(shown).forEach(k => {
           if (ASKAI_EXCLUDE_KEYS.has(k)) return;
-          const v = params[k];
+          // Modelling assumptions (slippage, brokerage, capital…) are context, not
+          // settings — "improving" a backtest by assuming cheaper fills is not real.
+          if (ASSUMPTION_KEYS.includes(k)) return;
+          const v = shown[k];
           if (v === undefined || v === null) return;
           // Only include primitives — arrays/objects get skipped (the AI won't
           // know how to suggest a new array of ensemble models, etc.)
@@ -645,9 +697,9 @@ export default function Backtest() {
    * trades — NOT every trade (web models 403/truncate on huge prompts).
    * Returns null when no backtest results are on screen.
    */
-  const buildStrategyReviewSummary = () => {
+  const buildStrategyReviewSummary = (subset = null) => {
       if (!result?.metrics) return null;
-      const trades = Array.isArray(result.trades) ? result.trades : [];
+      const trades = subset || (Array.isArray(result.trades) ? result.trades : []);
       const pnlOf = t => Number(t.net_pnl ?? t.pnl ?? 0);
       // Exit-reason breakdown (normalize the "(Intra)" suffix into one bucket)
       const exit_breakdown = {};
@@ -662,6 +714,16 @@ export default function Backtest() {
           pnl: Number(pnlOf(t).toFixed(2)),
           reason: t.reason,
       });
+      if (subset) {
+          // A hidden-period review must not leak the hidden trades through the totals.
+          const s = summarizeTrades(subset);
+          return {
+              metrics: { totalPnL: s.net, avgPnL: s.avg, winRate: s.win_pct, totalTrades: s.trades, maxDrawdownRupees: s.max_drawdown_rupees },
+              exit_breakdown,
+              best_trades: sorted.slice(0, 5).map(slim),
+              worst_trades: sorted.slice(-5).reverse().map(slim),
+          };
+      }
       return {
           metrics: {
               totalPnL: result.metrics.totalPnL,
@@ -675,6 +737,37 @@ export default function Backtest() {
           exit_breakdown,
           best_trades: sorted.slice(0, 5).map(slim),
           worst_trades: sorted.slice(-5).reverse().map(slim),
+      };
+  };
+
+  /**
+   * Everything "Improve This Strategy" sends: every breakdown, the attribution
+   * and VIX tables, all trades (when few enough), and every setting with what it
+   * does and what it may be set to. With `useHoldout`, the most recent ~30% of
+   * trades are kept back — the AI sees only the earlier part, and whole-period
+   * tables (attribution, VIX) are left out because they would leak the hidden part.
+   */
+  const buildReviewPayload = (useHoldout) => {
+      const trades = Array.isArray(result?.trades) ? result.trades : [];
+      const split = useHoldout ? holdoutSplit(trades) : null;
+      const shown = split ? split.seen : trades;
+      const tunable = buildAskAiPayload();
+      const tuning = askTuning.id === params.strategy ? askTuning.data : null;
+      const catalog = settingsCatalog(tunable, tuning);
+      return {
+          split,
+          catalog,
+          fields: {
+              results_summary: buildStrategyReviewSummary(split ? shown : null),
+              evidence: buildEvidence(shown),
+              settings_catalog: catalog.map(({ _space, ...c }) => c),
+              assumptions: assumptionsOf(withFormFallbacks(params)),
+              strategy_profile: tuning ? { label: tuning.label, edge: tuning.profile?.edge || null, fails_when: tuning.profile?.fails_when || null } : null,
+              ...(split ? { holdout: { hidden_from: split.cutoffDate, hidden_trades: split.hidden.length } } : {
+                  attribution: attributionSummary(result?.attribution),
+                  vix: vixSummary(result?.vix),
+              }),
+          },
       };
   };
 
@@ -701,7 +794,8 @@ export default function Backtest() {
       const modelId = resolveAskAiModel(chosenModel);
       const currentTunable = buildAskAiPayload();
       const isReview = mode === 'review';
-      const reviewSummary = isReview ? buildStrategyReviewSummary() : null;
+      const review = isReview ? buildReviewPayload(askAiModal.holdout) : null;
+      const reviewSummary = review ? review.fields.results_summary : null;
 
       if (Object.keys(currentTunable).length === 0) {
           setAskAiModal(m => ({ ...m, error: 'No tunable parameters found for this strategy.' }));
@@ -713,6 +807,7 @@ export default function Backtest() {
       }
       setAskAiModal(m => ({
           ...m, step: 'running', model: modelId, error: null, result: null, elapsedMs: 0,
+          sent: review ? { catalog: review.catalog, cutoffMs: review.split?.cutoffMs ?? null, cutoffDate: review.split?.cutoffDate ?? null } : null,
       }));
       const startedAt = Date.now();
 
@@ -726,7 +821,7 @@ export default function Backtest() {
           start_date: params.start_date,
           end_date: params.end_date,
           current_params: currentTunable,
-          ...(isReview && reviewSummary ? { results_summary: reviewSummary } : {}),
+          ...(review ? review.fields : {}),
           // Empty arrays so the Python builder doesn't crash on missing keys
           candles: [],
       };
@@ -771,8 +866,14 @@ export default function Backtest() {
           }
           if (!finalResult) throw new Error('AI timeout — no response within 5 min');
 
-          const suggested = finalResult.suggested_params;
           const analysis = finalResult.analysis || null;
+          // A review lists each change with its reasons in analysis.changes; take
+          // the values from there too, so a change the model forgot to copy into
+          // suggested_params is not silently lost.
+          const fromChanges = Array.isArray(analysis?.changes)
+              ? Object.fromEntries(analysis.changes.filter(c => c && c.param && c.to !== undefined).map(c => [c.param, c.to]))
+              : {};
+          const suggested = { ...fromChanges, ...(finalResult.suggested_params || {}) };
           const hasSuggested = suggested && typeof suggested === 'object' && Object.keys(suggested).length > 0;
           const hasAnalysis = analysis && (typeof analysis === 'object' ? Object.keys(analysis).length > 0 : String(analysis).trim().length > 0);
           // A review can be valuable even with zero param changes (pure critique),
@@ -803,7 +904,11 @@ export default function Backtest() {
           // Pre-populate applyMap: default = all keys ON (so "Apply All" works
           // and the user can de-select rows they don't trust)
           const applyMap = {};
-          if (hasSuggested) Object.keys(suggested).forEach(k => { applyMap[k] = true; });
+          if (hasSuggested && review) {
+              checkSuggestions(suggested, review.catalog).forEach(c => { if (c.status !== 'invalid') applyMap[c.key] = c.status === 'ok'; });
+          } else if (hasSuggested) {
+              Object.keys(suggested).forEach(k => { applyMap[k] = true; });
+          }
 
           setAskAiModal(m => ({
               ...m,
@@ -832,11 +937,18 @@ export default function Backtest() {
    * toggled ON in applyMap are pushed; rest are skipped. Preserves the type
    * of the current value when the AI sent a string number / int vs float.
    */
-  const applyAskAiSuggestions = () => {
-      const { result, applyMap } = askAiModal;
-      if (!result?.suggested_params) return;
+  /** The ticked suggestions as { key: value } — checked against the settings the AI was shown (review) or type-coerced (params mode). */
+  const selectedAskAiUpdates = () => {
+      const { result: aiRes, applyMap, sent } = askAiModal;
+      if (!aiRes?.suggested_params) return {};
       const updates = {};
-      Object.entries(result.suggested_params).forEach(([k, v]) => {
+      if (sent?.catalog) {
+          checkSuggestions(aiRes.suggested_params, sent.catalog).forEach((c) => {
+              if (c.status !== 'invalid' && applyMap[c.key]) updates[c.key] = c.value;
+          });
+          return updates;
+      }
+      Object.entries(aiRes.suggested_params).forEach(([k, v]) => {
           if (!applyMap[k]) return;
           const cur = params[k];
           // Type-coerce to match current type. Catches AI mistakes like
@@ -844,19 +956,49 @@ export default function Backtest() {
           if (typeof cur === 'number' && typeof v !== 'number') {
               const parsed = parseFloat(v);
               if (!isNaN(parsed)) updates[k] = parsed;
-              else return;  // skip un-coerceable
           } else if (typeof cur === 'boolean' && typeof v !== 'boolean') {
               updates[k] = !!(v && v !== 'false' && v !== 0);
           } else {
               updates[k] = v;
           }
       });
+      return updates;
+  };
+
+  const applyAskAiSuggestions = () => {
+      const updates = selectedAskAiUpdates();
       if (Object.keys(updates).length === 0) {
           toast.warning('No suggestions selected — nothing to apply.');
           return;
       }
       setParams(prev => ({ ...prev, ...updates }));
       setAskAiModal(m => ({ ...m, open: false }));
+  };
+
+  /**
+   * Apply the ticked suggestions and re-run the backtest straight away, keeping
+   * the current run to compare against (AiTrialCard). The new settings are passed
+   * to runBacktest directly — setParams has not landed yet when it starts.
+   */
+  const applyAndRetest = () => {
+      const updates = selectedAskAiUpdates();
+      if (Object.keys(updates).length === 0) {
+          toast.warning('No suggestions selected — nothing to test.');
+          return;
+      }
+      const next = { ...params, ...updates };
+      setAiTrial({
+          beforeResult: result,
+          beforeTrades: Array.isArray(result?.trades) ? result.trades : [],
+          cutoffMs: askAiModal.sent?.cutoffMs ?? null,
+          cutoffDate: askAiModal.sent?.cutoffDate ?? null,
+          changes: Object.entries(updates).map(([key, to]) => ({ key, from: params[key], to })),
+          prevParams: params,
+          model: askAiModal.model,
+      });
+      setParams(next);
+      setAskAiModal(m => ({ ...m, open: false }));
+      runBacktest(next);
   };
 
   const handleSaveDefault = async () => {
@@ -949,7 +1091,7 @@ export default function Backtest() {
         if (!proceed) return;
     }
 
-    const ok = await confirm(`Are you sure you want to DEPLOY this configuration for ${params.symbol} to the Live Bot?`);
+    const ok = await confirm(`Deploy this configuration for ${params.symbol} to the bot on PAPER?\n\nIt trades simulated fills. Real money only after you promote it on the Go-Live page (broker drill, evidence, canary).`);
     if (!ok) return;
 
     // MERGE DEFAULTS: Ensure we save the EXACT snapshot of what the user sees
@@ -973,21 +1115,21 @@ export default function Backtest() {
                 strategyName: params.strategy,
                 params: cleanParams,
                 isActive: true,
-                tradeMode: 'LIVE',
+                tradeMode: 'PAPER',
             });
         } catch (depErr) {
             const code = depErr.response?.status;
             if (code !== 409 && code !== 404) throw depErr;
-            // Duplicate tuple or old backend — upsert via the legacy route.
+            // Duplicate tuple or old backend — upsert via the legacy route. No tradeMode:
+            // an existing deployment keeps its mode (a LIVE one is not demoted by a re-save).
             await axios.post(`${API_URL}/config/symbols`, {
                 symbol: params.symbol,
                 strategy: params.strategy,
                 params: cleanParams,
                 isActive: true,
-                tradeMode: 'LIVE'
             });
         }
-        toast.success(`🚀 Deployed to Live Bot for ${params.symbol}! Check the Multi-Strategy Deployments panel on the Dashboard.`);
+        toast.success(`Deployed on PAPER for ${params.symbol}. Promote it to LIVE on the Go-Live page when it has earned it.`);
     } catch (err) {
         toast.error("❌ Deploy Failed: " + (err.response?.data?.error || err.message));
     }
@@ -1026,7 +1168,7 @@ export default function Backtest() {
   // saved into a config or a live deployment (the live gate is a global setting).
   const [dirGate, setDirGate] = useState(GATE_DEFAULTS);
 
-  const runBacktest = async () => {
+  const runBacktest = async (overrideParams = null) => {
     setLoading(true);
     setResult(null);
     setBacktestJobId(null);
@@ -1045,7 +1187,7 @@ export default function Backtest() {
     backtestAbortRef.current = aborter;
 
     try {
-      const cleanParams = { ...preparePayload(params), ...gateParams(dirGate) };   // gate OFF adds nothing
+      const cleanParams = { ...preparePayload(overrideParams || params), ...gateParams(dirGate) };   // gate OFF adds nothing
       const res = await axios.post(`${API_URL}/engine/backtest/run`, cleanParams, { signal: aborter.signal });
       if (res.data.cancelled) {
         // Server confirmed clean cancel — no error, just bail.
@@ -1250,7 +1392,9 @@ export default function Backtest() {
   const SYSTEM_KEYS = [
       'symbol', 'start_date', 'end_date', 'capital', 'resolution', 
       'lot_size', 'trade_start_time', 'trade_end_time', 
-      'backtest_mode', 'dataSource', 'broker', 'futures_expiry', 'trade_mode'
+      'backtest_mode', 'dataSource', 'broker', 'futures_expiry', 'trade_mode',
+      // Delta Exchange: venue settings survive a strategy change like the symbol does
+      'lots', 'holding_enabled', 'delta_leverage', 'delta_mode', 'delta_option_min_hours', 'delta_option_iv', 'delta_slippage_ticks',
   ];
 
   // Helper: Get only system params from current state
@@ -1286,7 +1430,7 @@ export default function Backtest() {
 
   return (
     <div className="p-6 space-y-6">
-      <PageHeader icon={BacktestIcon} title="Backtest Strategy"
+      <PageHeader docs="backtest#overview" icon={BacktestIcon} title="Backtest Strategy"
         subtitle="Replay a single-leg strategy over archived candles — every trade, the equity curve, the AI overlay."
         actions={(
           <>
@@ -1323,6 +1467,8 @@ export default function Backtest() {
         >
             <span className="font-mono text-xs">{`{ }`}</span> Import JSON
         </button>
+        <Segmented value={btMode} onChange={setBtMode} size="md"
+          options={[{ v: 'single', label: 'One strategy', hint: 'Backtest the strategy in the form' }, { v: 'together', label: 'Run together', hint: 'Several strategies on the same underlying, one combined book' }]} />
           </>
         )} />
       
@@ -1347,7 +1493,7 @@ export default function Backtest() {
         ) : (
         <div className="bg-surface p-6 rounded-xl border border-line space-y-6 sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto">
           <div className="flex items-center justify-between">
-            <h2 className="text-xl font-bold">Configuration</h2>
+            <h2 className="text-xl font-bold flex items-center gap-2">Configuration <DocLink to="backtest#strategy-market" /></h2>
             <button
               onClick={toggleConfigCollapsed}
               title="Collapse Configuration"
@@ -1463,6 +1609,7 @@ export default function Backtest() {
                 <option value="quantum_qho">Quantum QHO Mean-Reversion ⚛️</option>
                 <option value="volume_surge">Volume Surge (Climax Fade) 📊</option>
                 <option value="council_ensemble">Council Ensemble (Multi-Strategy Vote) 🏛️</option>
+                <option value="signal_combiner">Signal Combiner (any members, any rule) 🧩</option>
                 <option value="rsi2_reversion">RSI-2 Deep Pullback Reversion (Connors) 🎣</option>
                 <option value="gap_edge">Opening Gap Edge (Fade / Follow) 🌅</option>
                 <option value="intraday_momentum">Intraday Momentum (Session Persistence) ⏱️</option>
@@ -1611,6 +1758,34 @@ export default function Backtest() {
             </div>
             
             <div>
+              <div className="block text-sm font-medium text-fg-4 mb-1">Exchange</div>
+              <Segmented
+                options={[{ v: 'FYERS', label: 'NSE / BSE / MCX' }, { v: 'DELTA', label: 'Delta Exchange' }]}
+                value={isDeltaSymbol(params.symbol) ? 'DELTA' : 'FYERS'}
+                onChange={(v) => {
+                  if (v === 'DELTA' && !isDeltaSymbol(params.symbol)) {
+                    // 24×7 venue: no session window, positional by default, one contract to start.
+                    setParams({ ...params, symbol: 'DELTA:BTCUSD', trade_start_time: '00:00', trade_end_time: '23:59', holding_enabled: true, lots: params.lots || 1, delta_leverage: params.delta_leverage ?? 10 });
+                  } else if (v === 'FYERS' && isDeltaSymbol(params.symbol)) {
+                    const first = Object.keys(instrumentConfig).find(k => k.endsWith('-INDEX')) || 'NSE:NIFTY50-INDEX';
+                    setParams({ ...params, symbol: first, lot_size: instrumentConfig[first]?.lotSize || params.lot_size,
+                      trade_start_time: marketTimings['NSE']?.strategyStart || '09:30', trade_end_time: marketTimings['NSE']?.strategyEnd || '15:15' });
+                  }
+                }}
+              />
+            </div>
+
+            {isDeltaSymbol(params.symbol) ? (
+              <div className="space-y-3">
+                <DeltaInstrumentPicker id="backtest-delta-symbol" value={params.symbol} onChange={(sym) => setParams({ ...params, symbol: sym })} />
+                <label htmlFor="backtest-delta-contracts" className="block text-xs text-fg-4">Contracts
+                  <input id="backtest-delta-contracts" type="number" min="1" step="1" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
+                    value={params.lots || 1} onChange={e => setParams({ ...params, lots: Math.max(1, parseInt(e.target.value, 10) || 1) })} />
+                </label>
+                <DeltaParams symbol={params.symbol} params={params} onChange={setParams} idPrefix="backtest-delta" />
+              </div>
+            ) : (
+            <div>
               <label htmlFor="backtest-symbol-7" className="block text-sm font-medium text-fg-4 mb-1">Symbol</label>
               <select id="backtest-symbol-7" 
                 className="w-full bg-slate-900 border border-line rounded p-2 text-fg"
@@ -1674,9 +1849,10 @@ export default function Backtest() {
                   onChange={(e) => setParams({...params, symbol: e.target.value})}
               />
             </div>
+            )}
 
-            {/* Broker / Data Source Selector */}
-            <div className="bg-slate-800 p-3 rounded border border-blue-900/50">
+            {/* Broker / Data Source Selector (Delta contracts always come from Delta's own history) */}
+            {!isDeltaSymbol(params.symbol) && <div className="bg-slate-800 p-3 rounded border border-blue-900/50">
               <label htmlFor="backtest-data-broker-8" className="block text-xs font-bold text-blue-300 mb-2">
                 📡 Data Broker
               </label>
@@ -1695,7 +1871,7 @@ export default function Backtest() {
                     ? '✅ Angel One SmartAPI — free, no gaps, MCX supported'
                     : '🔵 Fyers API — requires active subscription'}
               </p>
-            </div>
+            </div>}
 
 
             {/* 1. General Settings */}
@@ -1883,7 +2059,7 @@ export default function Backtest() {
 
             {/* 2. Risk & Sizing */}
             <div className="border-t border-line pt-4 space-y-4">
-                <h3 className="text-sm font-bold text-fg-3">🛡️ Risk & Sizing</h3>
+                <h3 className="text-sm font-bold text-fg-3">🛡️ Risk & Sizing <DocLink to="backtest#capital-risk" /></h3>
                 
                 <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -1892,7 +2068,7 @@ export default function Backtest() {
                             value={params.capital}
                             onChange={e => setParams({...params, capital: e.target.value})} />
                     </div>
-                    <div>
+                    {!isDeltaSymbol(params.symbol) && <div>
                         <label htmlFor="backtest-lot-size-total-qty-16" className="block text-xs text-fg-4 mb-1">Lot Size (Total Qty)</label>
                         <input id="backtest-lot-size-total-qty-16" type="number" 
                             step={instrumentConfig[params.symbol]?.lotSize || 1} 
@@ -1903,7 +2079,7 @@ export default function Backtest() {
                         <span className="text-3xs text-fg-5">
                            Multiple of {instrumentConfig[params.symbol]?.lotSize || '1'}
                         </span>
-                    </div>
+                    </div>}
                     <div>
                         <label htmlFor="backtest-max-daily-loss-17" className="block text-xs text-fg-4 mb-1">Max Daily Loss (₹)</label>
                         <input id="backtest-max-daily-loss-17" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
@@ -1952,7 +2128,7 @@ export default function Backtest() {
 
             {/* 3. Exit & SL/TP (ATR) */}
             <div className="border-t border-line pt-4 space-y-4">
-                <h3 className="text-sm font-bold text-fg-3">🎯 Exit & SL/TP (ATR)</h3>
+                <h3 className="text-sm font-bold text-fg-3">🎯 Exit & SL/TP (ATR) <DocLink to="backtest#stops-targets" /></h3>
                 
                 {params.strategy === 'rl_agent' && (
                     <div className="col-span-2 flex items-start gap-2 bg-violet-900/20 border border-violet-700/40 rounded p-3 mb-2">
@@ -2128,6 +2304,7 @@ export default function Backtest() {
                         <h3 className="text-sm font-bold text-fg-3 flex items-center gap-2">
                             <Activity className="w-4 h-4 text-purple-400" />
                             AI Confirmation
+                            <DocLink to="backtest#ai-options" />
                             <span className="text-3xs bg-purple-900/40 text-purple-300 px-1 rounded ml-1">Beta</span>
                         </h3>
                         <input
@@ -2179,6 +2356,7 @@ export default function Backtest() {
                         <div>
                             <h3 className="text-sm font-bold text-purple-300 flex items-center gap-1">
                                 ✨ AI Risk Filter
+                                <DocLink to="backtest#ai-options" className="ml-1" />
                                 <span className="text-3xs bg-purple-900/50 text-purple-400 px-1 rounded ml-1">Multi-Model</span>
                             </h3>
                             <p className="text-3xs text-fg-5 mt-0.5 leading-tight">
@@ -2803,7 +2981,7 @@ export default function Backtest() {
 
             {/* 4. Strategy Specific Params */}
             <div className="border-t border-line pt-4 space-y-4">
-                <h3 className="text-sm font-bold text-fg-3">⚡ Strategy Parameters</h3>
+                <h3 className="text-sm font-bold text-fg-3">⚡ Strategy Parameters <DocLink to="backtest#extra-filters" /></h3>
                 
                 <div className="grid grid-cols-2 gap-4">
                     {/* Explicit ORB Inputs for Better UX (Dropdown) */}
@@ -3048,6 +3226,18 @@ export default function Backtest() {
                         // in a flat text field; per-member overrides belong to the optimizer/API.
                         if (params.strategy === 'council_ensemble' && ['member_params'].includes(key)) return null;
 
+                        // Signal Combiner: the optimizer-only pool and the data flags the member
+                        // builder sets itself are not hand-edited here.
+                        if (params.strategy === 'signal_combiner' && ['member_pool', 'use_15m_filter', 'use_1h_filter', 'max_replay_bars'].includes(key)) return null;
+                        if (params.strategy === 'signal_combiner' && key === 'members') {
+                            return (
+                                <div key={key} className="col-span-2">
+                                    <MemberBuilder value={params.members ?? val} resolution={params.resolution || '5'}
+                                        onChange={(members, needs) => setParams(prev => ({ ...prev, members, ...(needs || {}) }))} />
+                                </div>
+                            );
+                        }
+
                         // sl_type / strike_selection have dedicated dropdowns in the
                         // Exit & SL/TP section above — don't double-render them here.
                         if (['sl_type', 'strike_selection'].includes(key)) return null;
@@ -3142,9 +3332,9 @@ export default function Backtest() {
             <button 
                 onClick={handleDeployLive}
                 className="bg-green-800 hover:bg-green-800 text-xs py-2 rounded text-success border border-green-700 shadow-sm"
-                title="Configure Live Bot for this symbol"
+                title="Deploy to the bot on PAPER — promote to LIVE on the Go-Live page"
             >
-                🚀 Deploy Live
+                🚀 Deploy (paper)
             </button>
         </div>
           </div>
@@ -3152,9 +3342,9 @@ export default function Backtest() {
         )}
 
         {/* Results */}
-        <div className={`${configCollapsed ? '' : 'lg:col-span-2'} bg-surface p-6 rounded-xl border border-line min-h-[500px]`}>
+        <div className={`${btMode === 'together' ? 'hidden' : ''} ${configCollapsed ? '' : 'lg:col-span-2'} bg-surface p-6 rounded-xl border border-line min-h-[500px]`}>
           <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-bold">Results</h2>
+            <h2 className="text-xl font-bold flex items-center gap-2">Results <DocLink to="backtest#results" /></h2>
             {loading ? (
                 <button
                     onClick={stopBacktest}
@@ -3166,7 +3356,7 @@ export default function Backtest() {
                 </button>
             ) : (
                 <button
-                    onClick={runBacktest}
+                    onClick={() => { setAiTrial(null); runBacktest(); }}
                     className="bg-primary hover:bg-blue-600 text-on-primary font-bold py-2 px-5 rounded-lg flex items-center gap-2 transition-colors text-sm"
                 >
                     <Play className="w-4 h-4" /> Run Backtest
@@ -3189,13 +3379,30 @@ export default function Backtest() {
                 </div>
               )}
 
+              {/* Consistency: does it make money THROUGHOUT the range, or only in one stretch?
+                  (Sharpe and total P&L summarise the whole range and cannot tell.) */}
+              {result.consistency && (
+                <CollapsibleCard docs="backtest#consistency"
+                  title="Consistency across the range"
+                  icon={Activity}
+                  storageKey="backtest:consistency"
+                  defaultOpen
+                  bodyClassName="px-4 pb-4 pt-0"
+                  summary={<span className="text-xs text-fg-5">
+                    {Math.round(result.consistency.score ?? 0)} / 100 — {consistencyVerdict(result.consistency.score)}
+                  </span>}
+                >
+                  <ConsistencyPanel data={result.consistency} />
+                </CollapsibleCard>
+              )}
+
               {/* P&L attribution + transaction-cost analysis over the simulated
                   trades. Surfaced HERE, not only on the live risk page, because
                   a take-profit sitting below its round-trip break-even books
                   "wins" that are net losses — and that is discoverable before
                   deployment instead of afterwards with real money. */}
               {result.attribution && (
-                <CollapsibleCard
+                <CollapsibleCard docs="backtest#attribution"
                   title="Cost & greek attribution"
                   icon={Activity}
                   storageKey="backtest:attribution"
@@ -3214,7 +3421,7 @@ export default function Backtest() {
                   filter on or off; the filter itself is the VIX params at the
                   bottom of the strategy form. */}
               {result.vix && (
-                <CollapsibleCard
+                <CollapsibleCard docs="backtest#vix-breakdown"
                   title="India VIX breakdown"
                   icon={Activity}
                   storageKey="backtest:vix"
@@ -3230,7 +3437,7 @@ export default function Backtest() {
 
               {/* The live engine's CE/PE direction-confidence gate, run on this backtest's own trades */}
               {result.directionGate && (
-                <CollapsibleCard
+                <CollapsibleCard docs="backtest#direction-gate"
                   title="Direction confidence gate (live engine)"
                   icon={Activity}
                   storageKey="backtest:dirgate"
@@ -3245,6 +3452,22 @@ export default function Backtest() {
                   </span>}
                 >
                   <DirectionGateBacktestPanel data={result.directionGate} onApply={(g) => setDirGate(prev => ({ ...prev, ...g }))} />
+                </CollapsibleCard>
+              )}
+
+              {/* Signal combiner: where every member signal went, P&L by voter set, co-fire. */}
+              {result.strategyReport && result.strategyReport.kind === 'signal_combiner' && (
+                <CollapsibleCard docs="signal-combiner#report"
+                  title="Signal combiner — where every member signal went"
+                  icon={Activity}
+                  storageKey="backtest:combiner"
+                  defaultOpen
+                  bodyClassName="px-4 pb-4 pt-0"
+                  summary={<span className="text-xs text-fg-5">
+                    {result.strategyReport.rule} · {result.strategyReport.entries} entries from {(result.strategyReport.members || []).reduce((a, m) => a + m.fired, 0)} member signals
+                  </span>}
+                >
+                  <CombinerReport report={result.strategyReport} />
                 </CollapsibleCard>
               )}
 
@@ -3280,6 +3503,10 @@ export default function Backtest() {
                   </p>
                 </div>
               </div>
+
+              <AiTrialCard trial={aiTrial} result={result} loading={loading}
+                onDismiss={() => setAiTrial(null)}
+                onUndo={() => { const prev = aiTrial.prevParams; setAiTrial(null); setParams(prev); toast.info('Previous settings restored — press Run Backtest to see their results again.'); }} />
 
               {/* Ask AI to critique + improve the strategy USING these results */}
               <div className="flex justify-end">
@@ -3379,7 +3606,7 @@ export default function Backtest() {
                 return (
                 <div className="bg-slate-800 rounded-lg p-4">
                   <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-fg-4">Equity Curve</h3>
+                    <h3 className="text-fg-4">Equity Curve <DocLink to="backtest#results" /></h3>
                     <div className="flex items-center gap-2">
                       {showAiSim && hasAiSimAvail && (
                         <div className="flex items-center rounded border border-line-2 overflow-hidden text-xs">
@@ -3516,10 +3743,239 @@ export default function Backtest() {
               {(() => {
                 const hasSpotData = result.trades.length > 0 && result.trades[0].spot_sl != null;
                 const isSwingMode = result.trades.length > 0 && result.trades[0].sl_tp_type === 'SPOT_SWING';
+                // Every reorderable column: header + cell, keyed like useColumnOrder's keys.
+                // The AI re-sim block stays pinned at the right (it is one linked group).
+                const colDefs = {
+                  chart: {
+                    label: 'Chart', thClass: 'px-2 py-3 bg-slate-800', title: 'Plot this trade on candles with its SL/TP',
+                    header: <><CandlestickChart className="w-3.5 h-3.5 inline" aria-hidden="true" /><span className="sr-only">Chart</span></>,
+                    cell: (trade, idx) => (
+                    <td className="px-2 py-3">
+                      <button
+                        type="button"
+                        onClick={() => openTradeChart(idx)}
+                        disabled={!backtestResultId}
+                        title={backtestResultId ? 'Plot this trade on candles with its SL/TP' : 'Re-run the backtest to enable charting'}
+                        className="p-1 rounded text-fg-5 hover:text-blue-400 hover:bg-slate-700/60 disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <CandlestickChart className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span className="sr-only">Chart trade {idx + 1}</span>
+                      </button>
+                    </td>
+                    ),
+                  },
+                  entry_time: {
+                    label: 'Entry Time', thClass: 'px-4 py-3 bg-slate-800',
+                    header: 'Entry Time',
+                    cell: (trade) => (
+                    <td className="px-4 py-3 text-xs">{new Date(trade.entryTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</td>
+                    ),
+                  },
+                  symbol: {
+                    label: 'Symbol', thClass: 'px-4 py-3 bg-slate-800',
+                    header: 'Symbol',
+                    cell: (trade) => (
+                    <td className="px-4 py-3 font-mono text-xs">{trade.option_symbol || '-'}</td>
+                    ),
+                  },
+                  volume: {
+                    label: 'Volume', thClass: 'px-4 py-3 bg-slate-800',
+                    header: 'Volume',
+                    cell: (trade) => (
+                    <td className="px-4 py-3 text-fg-4 text-xs">{trade.volume || '-'}</td>
+                    ),
+                  },
+                  avg_vol: {
+                    label: 'Avg Vol', thClass: 'px-4 py-3 bg-slate-800',
+                    header: 'Avg Vol',
+                    cell: (trade) => (
+                    <td className="px-4 py-3 text-fg-5 text-xs">{trade.avg_volume ? Math.round(trade.avg_volume) : '-'}</td>
+                    ),
+                  },
+                  type: {
+                    label: 'Type', thClass: 'px-4 py-3 bg-slate-800',
+                    header: 'Type',
+                    cell: (trade) => (
+                    <td className={`px-4 py-3 font-bold text-xs ${trade.type === 'CE' || trade.type === 'BUY' ? 'text-success' : 'text-danger'}`}>
+                      {trade.type}
+                    </td>
+                    ),
+                  },
+                  ai: {
+                    label: 'AI', thClass: 'px-4 py-3 bg-slate-800',
+                    header: 'AI',
+                    cell: (trade, idx) => (
+                    <td className="px-4 py-3 text-xs max-w-[9.375rem]">
+                      {trade.ai_decision ? (
+                        <div className="flex flex-col items-start gap-0.5">
+                          <span className={`px-1.5 py-0.5 rounded font-bold whitespace-nowrap ${trade.ai_decision === 'CONFIRM' ? 'bg-green-900/50 text-success' : 'bg-red-900/50 text-danger'}`}>
+                            {trade.ai_decision === 'CONFIRM' ? '✓' : '✗'} {trade.ai_decision}
+                            {trade.ai_confidence ? <span className="font-normal ml-1 opacity-70">{(trade.ai_confidence * 100).toFixed(0)}%</span> : null}
+                          </span>
+                          {trade.aiConfirmation?.reasoning && (
+                            <span
+                              className={`italic leading-tight cursor-help ${trade.ai_decision === 'CONFIRM' ? 'text-success/70' : 'text-danger/70'}`}
+                              style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                              title={trade.aiConfirmation.reasoning}
+                            >
+                              {trade.aiConfirmation.reasoning}
+                            </span>
+                          )}
+                          {(trade.ai_spot_sl || trade.ai_spot_tp) && (
+                            <span className="text-purple-400/70 text-3xs mt-0.5"
+                              title="AI-suggested index levels for SL and TP">
+                              SL {trade.ai_spot_sl ? Number(trade.ai_spot_sl).toFixed(0) : '–'} / TP {trade.ai_spot_tp ? Number(trade.ai_spot_tp).toFixed(0) : '–'}
+                            </span>
+                          )}
+                          {backtestResultId && (
+                            <div className="flex gap-1 mt-1 flex-wrap">
+                              <button
+                                onClick={() => copyPrompt(idx, 'first')}
+                                title="Copy the exact prompt sent to the AI for this trade"
+                                className="flex items-center gap-0.5 text-4xs px-1 py-0.5 rounded bg-slate-700/60 text-fg-4 hover:text-fg-2 hover:bg-slate-600/60 transition-colors"
+                              >
+                                {promptCopyState[`first_${idx}`] === 'done'
+                                  ? <><Check size={9} className="text-success" /> Copied</>
+                                  : promptCopyState[`first_${idx}`] === 'copying'
+                                  ? <><Copy size={9} className="animate-pulse" /> …</>
+                                  : <><Copy size={9} /> Prompt</>}
+                              </button>
+                              {trade.aiConfirmation?.raw_response && (
+                                <button
+                                  onClick={() => copyResponse(idx, trade.aiConfirmation.raw_response)}
+                                  title="Copy the raw AI response for this trade"
+                                  className="flex items-center gap-0.5 text-4xs px-1 py-0.5 rounded bg-slate-700/60 text-fg-4 hover:text-fg-2 hover:bg-slate-600/60 transition-colors"
+                                >
+                                  {responseCopyState[idx] === 'done'
+                                    ? <><Check size={9} className="text-success" /> Copied</>
+                                    : <><Copy size={9} /> Response</>}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ) : aiPolling ? (
+                        <span className="text-fg-5 animate-pulse text-xs">analyzing…</span>
+                      ) : '-'}
+                    </td>
+                    ),
+                  },
+                  model: {
+                    label: 'Model', thClass: 'px-4 py-3 bg-slate-800', title: 'Which AI model produced this decision',
+                    header: 'Model',
+                    cell: (trade) => (
+                    <td className="px-3 py-3 text-xs">
+                      {(() => {
+                        const mid = trade.aiConfirmation?.model_id;
+                        if (!mid) return aiPolling ? <span className="text-fg-5 text-3xs">…</span> : <span className="text-fg-5 text-3xs">-</span>;
+                        const b = modelBadgeFor(mid);
+                        if (!b) return <span className="text-fg-5 text-3xs">{mid}</span>;
+                        return (
+                          <span
+                            className={`px-1.5 py-0.5 rounded font-mono text-3xs ${b.cls}`}
+                            title={mid}
+                          >
+                            {b.short}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                    ),
+                  },
+                  entry: {
+                    label: showSpotView && hasSpotData ? 'Spot Entry' : 'Prem Entry', thClass: 'px-4 py-3 bg-slate-800',
+                    header: <>{showSpotView && hasSpotData ? <span className="text-blue-400">Spot Entry</span> : 'Prem Entry'}</>,
+                    cell: (trade) => (
+                    <td className="px-4 py-3 font-bold text-fg text-xs">
+                      {showSpotView && hasSpotData
+                        ? (trade.spot_entry ? Number(trade.spot_entry).toFixed(2) : '-')
+                        : Number(trade.entryPrice).toFixed(2)}
+                    </td>
+                    ),
+                  },
+                  sl: {
+                    label: 'Spot SL', thClass: 'px-4 py-3 bg-slate-800',
+                    header: <>{showSpotView && hasSpotData ? <span className="text-blue-400">Spot SL</span> : 'Spot SL'}</>,
+                    cell: (trade) => (
+                    <td className="px-4 py-3 text-danger text-xs cursor-help border-b border-dashed border-red-500/30"
+                      title={trade.slDetails
+                        ? trade.slDetails.chosen === 'SWING'
+                          ? `Mode: Swing | Extreme: ${trade.slDetails.swingExtreme ?? 'N/A'} | Dist: ${trade.slDetails.slDist ?? 'N/A'} | R:R: ${trade.slDetails.rrRatio ?? 'N/A'}`
+                          : `ATR: ${trade.slDetails.atr} | Strat: ${trade.slDetails.strategy ?? 'N/A'} | Fixed: ${trade.slDetails.fixed ?? 'N/A'} | Chosen: ${trade.slDetails.chosen}`
+                        : 'No Details'}>
+                      {(showSpotView && hasSpotData ? trade.spot_sl : trade.sl)
+                        ? Number(showSpotView && hasSpotData ? trade.spot_sl : trade.sl).toFixed(2)
+                        : '-'}
+                    </td>
+                    ),
+                  },
+                  tp: {
+                    label: 'Spot TP', thClass: 'px-4 py-3 bg-slate-800',
+                    header: <>{showSpotView && hasSpotData ? <span className="text-blue-400">Spot TP</span> : 'Spot TP'}</>,
+                    cell: (trade) => (
+                    <td className="px-4 py-3 text-success text-xs">
+                      {(showSpotView && hasSpotData ? trade.spot_tp : trade.tp)
+                        ? Number(showSpotView && hasSpotData ? trade.spot_tp : trade.tp).toFixed(2)
+                        : '-'}
+                    </td>
+                    ),
+                  },
+                  invested: {
+                    label: 'Invested', thClass: 'px-4 py-3 bg-slate-800',
+                    header: 'Invested',
+                    cell: (trade) => (
+                    <td className="px-4 py-3 text-xs">₹{trade.invested_amount ? Number(trade.invested_amount).toFixed(2) : '-'}</td>
+                    ),
+                  },
+                  exit_time: {
+                    label: 'Exit Time', thClass: 'px-4 py-3 bg-slate-800',
+                    header: 'Exit Time',
+                    cell: (trade) => (
+                    <td className="px-4 py-3 text-xs">{new Date(trade.exitTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</td>
+                    ),
+                  },
+                  exit: {
+                    label: showSpotView && hasSpotData ? 'Spot Exit' : 'Prem Exit', thClass: 'px-4 py-3 bg-slate-800',
+                    header: <>{showSpotView && hasSpotData ? <span className="text-blue-400">Spot Exit</span> : 'Prem Exit'}</>,
+                    cell: (trade) => (
+                    <td className="px-4 py-3 text-xs">
+                      {showSpotView && hasSpotData
+                        ? (trade.spot_exit ? Number(trade.spot_exit).toFixed(2) : '-')
+                        : Number(trade.exitPrice).toFixed(2)}
+                    </td>
+                    ),
+                  },
+                  pnl: {
+                    label: 'P&L', thClass: 'px-4 py-3 bg-slate-800',
+                    header: 'P&L',
+                    cell: (trade) => (
+                    <td className={`px-4 py-3 font-bold text-xs ${pnlTone(trade.pnl)}`}>
+                      {Number(trade.pnl).toFixed(2)}
+                    </td>
+                    ),
+                  },
+                  reason: {
+                    label: 'Reason', thClass: 'px-4 py-3 bg-slate-800',
+                    header: 'Reason',
+                    cell: (trade) => (
+                    <td className="px-4 py-3 text-fg-4 text-xs">{trade.reason}</td>
+                    ),
+                  },
+                  gate: {
+                    label: 'Gate', thClass: 'px-4 py-3 bg-slate-800', title: "Direction-confidence gate verdict at entry (confidence of this trade's side)",
+                    header: 'Gate',
+                    cell: (trade) => (
+                    <td className="px-4 py-3 text-xs whitespace-nowrap" title={trade.dir_gate?.reason || ''}>
+                        {trade.dir_gate ? <><Chip tone={DECISION_TONE[trade.dir_gate.decision] || 'muted'}>{trade.dir_gate.decision}</Chip> <span className="text-fg-5">{gatePct(trade.dir_gate.confidence)}</span></> : '—'}
+                      </td>
+                    ),
+                  },
+                };
                 return (
                 <div className="bg-slate-800 rounded-lg p-4 overflow-hidden">
                   <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-fg-4">All Trades ({result.trades.length})</h3>
+                    <h3 className="text-fg-4">All Trades ({result.trades.length}) <DocLink to="backtest#trades-table" /></h3>
+                    <div className="flex items-center gap-2 flex-wrap justify-end">
                     {hasSpotData && (
                       <div className="flex items-center gap-2">
                         {isSwingMode && (
@@ -3539,6 +3995,10 @@ export default function Backtest() {
                         </div>
                       </div>
                     )}
+                    <ColumnOrderMenu
+                      columns={tradeCols.order.map(k => ({ key: k, label: colDefs[k].label }))}
+                      onStep={tradeCols.step} onReset={tradeCols.reset} isCustom={tradeCols.isCustom} />
+                    </div>
                   </div>
                   {showSpotView && hasSpotData && (
                     <p className="text-3xs text-blue-400/70 mb-2">
@@ -3549,31 +4009,12 @@ export default function Backtest() {
                   <table className="w-full text-sm text-left text-fg-3">
                     <thead className="text-xs text-fg-4 uppercase bg-slate-700/50 sticky top-0 z-10">
                       <tr>
-                        <th className="px-2 py-3 bg-slate-800" title="Plot this trade on candles with its SL/TP"><span className="sr-only">Chart</span></th>
-                        <th className="px-4 py-3 bg-slate-800">Entry Time</th>
-                        <th className="px-4 py-3 bg-slate-800">Symbol</th>
-                        <th className="px-4 py-3 bg-slate-800">Volume</th>
-                        <th className="px-4 py-3 bg-slate-800">Avg Vol</th>
-                        <th className="px-4 py-3 bg-slate-800">Type</th>
-                        <th className="px-4 py-3 bg-slate-800">AI</th>
-                        <th className="px-4 py-3 bg-slate-800" title="Which AI model produced this decision">Model</th>
-                        <th className="px-4 py-3 bg-slate-800">
-                          {showSpotView && hasSpotData ? <span className="text-blue-400">Spot Entry</span> : 'Prem Entry'}
-                        </th>
-                        <th className="px-4 py-3 bg-slate-800">
-                          {showSpotView && hasSpotData ? <span className="text-blue-400">Spot SL</span> : 'Spot SL'}
-                        </th>
-                        <th className="px-4 py-3 bg-slate-800">
-                          {showSpotView && hasSpotData ? <span className="text-blue-400">Spot TP</span> : 'Spot TP'}
-                        </th>
-                        <th className="px-4 py-3 bg-slate-800">Invested</th>
-                        <th className="px-4 py-3 bg-slate-800">Exit Time</th>
-                        <th className="px-4 py-3 bg-slate-800">
-                          {showSpotView && hasSpotData ? <span className="text-blue-400">Spot Exit</span> : 'Prem Exit'}
-                        </th>
-                        <th className="px-4 py-3 bg-slate-800">P&L</th>
-                        <th className="px-4 py-3 bg-slate-800">Reason</th>
-                        {result.trades.some(t => t.dir_gate) && <th className="px-4 py-3 bg-slate-800" title="Direction-confidence gate verdict at entry (confidence of this trade's side)">Gate</th>}
+                        {tradeCols.order.map((k) => (
+                          <ReorderableTh key={k} colKey={k} label={colDefs[k].label} dnd={tradeColDnd} onStep={tradeCols.step}
+                            className={colDefs[k].thClass} title={colDefs[k].title}>
+                            {colDefs[k].header}
+                          </ReorderableTh>
+                        ))}
                         {showAiSim && aiSimData && <>
                           <th className="px-4 py-3 bg-green-900/20 text-success/80 border-l border-green-700/30" title="AI-suggested stop-loss index level">AI SL</th>
                           <th className="px-4 py-3 bg-green-900/20 text-success/80" title="AI-suggested take-profit index level">AI TP</th>
@@ -3589,135 +4030,7 @@ export default function Backtest() {
                     <tbody>
                       {result.trades.map((trade, idx) => (
                         <tr key={idx} className="border-b border-line hover:bg-slate-700/30">
-                          <td className="px-2 py-3">
-                            <button
-                              type="button"
-                              onClick={() => openTradeChart(idx)}
-                              disabled={!backtestResultId}
-                              title={backtestResultId ? 'Plot this trade on candles with its SL/TP' : 'Re-run the backtest to enable charting'}
-                              className="p-1 rounded text-fg-5 hover:text-blue-400 hover:bg-slate-700/60 disabled:opacity-30 disabled:cursor-not-allowed"
-                            >
-                              <CandlestickChart className="w-3.5 h-3.5" aria-hidden="true" />
-                              <span className="sr-only">Chart trade {idx + 1}</span>
-                            </button>
-                          </td>
-                          <td className="px-4 py-3 text-xs">{new Date(trade.entryTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</td>
-                          <td className="px-4 py-3 font-mono text-xs">{trade.option_symbol || '-'}</td>
-                          <td className="px-4 py-3 text-fg-4 text-xs">{trade.volume || '-'}</td>
-                          <td className="px-4 py-3 text-fg-5 text-xs">{trade.avg_volume ? Math.round(trade.avg_volume) : '-'}</td>
-                          <td className={`px-4 py-3 font-bold text-xs ${trade.type === 'CE' || trade.type === 'BUY' ? 'text-success' : 'text-danger'}`}>
-                            {trade.type}
-                          </td>
-                          <td className="px-4 py-3 text-xs max-w-[9.375rem]">
-                            {trade.ai_decision ? (
-                              <div className="flex flex-col items-start gap-0.5">
-                                <span className={`px-1.5 py-0.5 rounded font-bold whitespace-nowrap ${trade.ai_decision === 'CONFIRM' ? 'bg-green-900/50 text-success' : 'bg-red-900/50 text-danger'}`}>
-                                  {trade.ai_decision === 'CONFIRM' ? '✓' : '✗'} {trade.ai_decision}
-                                  {trade.ai_confidence ? <span className="font-normal ml-1 opacity-70">{(trade.ai_confidence * 100).toFixed(0)}%</span> : null}
-                                </span>
-                                {trade.aiConfirmation?.reasoning && (
-                                  <span
-                                    className={`italic leading-tight cursor-help ${trade.ai_decision === 'CONFIRM' ? 'text-success/70' : 'text-danger/70'}`}
-                                    style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
-                                    title={trade.aiConfirmation.reasoning}
-                                  >
-                                    {trade.aiConfirmation.reasoning}
-                                  </span>
-                                )}
-                                {(trade.ai_spot_sl || trade.ai_spot_tp) && (
-                                  <span className="text-purple-400/70 text-3xs mt-0.5"
-                                    title="AI-suggested index levels for SL and TP">
-                                    SL {trade.ai_spot_sl ? Number(trade.ai_spot_sl).toFixed(0) : '–'} / TP {trade.ai_spot_tp ? Number(trade.ai_spot_tp).toFixed(0) : '–'}
-                                  </span>
-                                )}
-                                {backtestResultId && (
-                                  <div className="flex gap-1 mt-1 flex-wrap">
-                                    <button
-                                      onClick={() => copyPrompt(idx, 'first')}
-                                      title="Copy the exact prompt sent to the AI for this trade"
-                                      className="flex items-center gap-0.5 text-4xs px-1 py-0.5 rounded bg-slate-700/60 text-fg-4 hover:text-fg-2 hover:bg-slate-600/60 transition-colors"
-                                    >
-                                      {promptCopyState[`first_${idx}`] === 'done'
-                                        ? <><Check size={9} className="text-success" /> Copied</>
-                                        : promptCopyState[`first_${idx}`] === 'copying'
-                                        ? <><Copy size={9} className="animate-pulse" /> …</>
-                                        : <><Copy size={9} /> Prompt</>}
-                                    </button>
-                                    {trade.aiConfirmation?.raw_response && (
-                                      <button
-                                        onClick={() => copyResponse(idx, trade.aiConfirmation.raw_response)}
-                                        title="Copy the raw AI response for this trade"
-                                        className="flex items-center gap-0.5 text-4xs px-1 py-0.5 rounded bg-slate-700/60 text-fg-4 hover:text-fg-2 hover:bg-slate-600/60 transition-colors"
-                                      >
-                                        {responseCopyState[idx] === 'done'
-                                          ? <><Check size={9} className="text-success" /> Copied</>
-                                          : <><Copy size={9} /> Response</>}
-                                      </button>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            ) : aiPolling ? (
-                              <span className="text-fg-5 animate-pulse text-xs">analyzing…</span>
-                            ) : '-'}
-                          </td>
-                          {/* Model: which AI produced the decision (helps spot per-model bias) */}
-                          <td className="px-3 py-3 text-xs">
-                            {(() => {
-                              const mid = trade.aiConfirmation?.model_id;
-                              if (!mid) return aiPolling ? <span className="text-fg-5 text-3xs">…</span> : <span className="text-fg-5 text-3xs">-</span>;
-                              const b = modelBadgeFor(mid);
-                              if (!b) return <span className="text-fg-5 text-3xs">{mid}</span>;
-                              return (
-                                <span
-                                  className={`px-1.5 py-0.5 rounded font-mono text-3xs ${b.cls}`}
-                                  title={mid}
-                                >
-                                  {b.short}
-                                </span>
-                              );
-                            })()}
-                          </td>
-                          {/* Entry price: spot or premium depending on view */}
-                          <td className="px-4 py-3 font-bold text-fg text-xs">
-                            {showSpotView && hasSpotData
-                              ? (trade.spot_entry ? Number(trade.spot_entry).toFixed(2) : '-')
-                              : Number(trade.entryPrice).toFixed(2)}
-                          </td>
-                          {/* SL: always spot level; tooltip shows source details */}
-                          <td className="px-4 py-3 text-danger text-xs cursor-help border-b border-dashed border-red-500/30"
-                            title={trade.slDetails
-                              ? trade.slDetails.chosen === 'SWING'
-                                ? `Mode: Swing | Extreme: ${trade.slDetails.swingExtreme ?? 'N/A'} | Dist: ${trade.slDetails.slDist ?? 'N/A'} | R:R: ${trade.slDetails.rrRatio ?? 'N/A'}`
-                                : `ATR: ${trade.slDetails.atr} | Strat: ${trade.slDetails.strategy ?? 'N/A'} | Fixed: ${trade.slDetails.fixed ?? 'N/A'} | Chosen: ${trade.slDetails.chosen}`
-                              : 'No Details'}>
-                            {(showSpotView && hasSpotData ? trade.spot_sl : trade.sl)
-                              ? Number(showSpotView && hasSpotData ? trade.spot_sl : trade.sl).toFixed(2)
-                              : '-'}
-                          </td>
-                          {/* TP: always spot level */}
-                          <td className="px-4 py-3 text-success text-xs">
-                            {(showSpotView && hasSpotData ? trade.spot_tp : trade.tp)
-                              ? Number(showSpotView && hasSpotData ? trade.spot_tp : trade.tp).toFixed(2)
-                              : '-'}
-                          </td>
-                          <td className="px-4 py-3 text-xs">₹{trade.invested_amount ? Number(trade.invested_amount).toFixed(2) : '-'}</td>
-                          <td className="px-4 py-3 text-xs">{new Date(trade.exitTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</td>
-                          {/* Exit price: spot or premium depending on view */}
-                          <td className="px-4 py-3 text-xs">
-                            {showSpotView && hasSpotData
-                              ? (trade.spot_exit ? Number(trade.spot_exit).toFixed(2) : '-')
-                              : Number(trade.exitPrice).toFixed(2)}
-                          </td>
-                          <td className={`px-4 py-3 font-bold text-xs ${pnlTone(trade.pnl)}`}>
-                            {Number(trade.pnl).toFixed(2)}
-                          </td>
-                          <td className="px-4 py-3 text-fg-4 text-xs">{trade.reason}</td>
-                          {result.trades.some(t => t.dir_gate) && (
-                            <td className="px-4 py-3 text-xs whitespace-nowrap" title={trade.dir_gate?.reason || ''}>
-                              {trade.dir_gate ? <><Chip tone={DECISION_TONE[trade.dir_gate.decision] || 'muted'}>{trade.dir_gate.decision}</Chip> <span className="text-fg-5">{gatePct(trade.dir_gate.confidence)}</span></> : '—'}
-                            </td>
-                          )}
+                          {tradeCols.order.map((k) => <React.Fragment key={k}>{colDefs[k].cell(trade, idx)}</React.Fragment>)}
                           {showAiSim && aiSimData && (() => {
                             const sim = aiSimData.trades[idx];
                             const isReject = trade.ai_decision === 'REJECT';
@@ -3820,13 +4133,20 @@ export default function Backtest() {
             </div>
           )}
         </div>
+        {btMode === 'together' && (
+          <div className={`${configCollapsed ? '' : 'lg:col-span-2'} min-w-0`}>
+            <PortfolioRunPanel baseParams={params} presets={strategyPresets}
+              strategyOptions={Object.keys(strategyDefaults).sort().map(id => ({ id, label: id.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') }))} />
+          </div>
+        )}
       </div>
 
       {/* ─── Ask AI for Parameter Suggestions Modal ──────────────────── */}
       {askAiModal.open && (() => {
-          const onClose = () => setAskAiModal({ open: false, step: 'config', mode: 'params', model: '', result: null, applyMap: {}, error: null, elapsedMs: 0 });
+          const onClose = () => setAskAiModal(m => ({ ...m, open: false, step: 'config', mode: 'params', model: '', result: null, applyMap: {}, error: null, elapsedMs: 0, sent: null }));
           const isReviewMode = askAiModal.mode === 'review';
-          const reviewSummary = isReviewMode ? buildStrategyReviewSummary() : null;
+          const reviewPreview = isReviewMode && askAiModal.step === 'config' ? buildReviewPayload(askAiModal.holdout) : null;
+          const canHoldout = isReviewMode && !!holdoutSplit(result?.trades || []);
           const tunableCount = Object.keys(buildAskAiPayload()).length;
           const resolvedModel = resolveAskAiModel(askAiModal.model);
           const isWebSession = resolvedModel.startsWith('claude-web/') || resolvedModel.startsWith('gemini-web/');
@@ -3837,7 +4157,7 @@ export default function Backtest() {
               <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-[2px]" onClick={onClose}>
                   {/* Presentational: exists only to stop the click bubbling to the
                       backdrop — it is not itself an control. */}
-                  <div className="bg-surface border border-violet-700/50 rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}> role="presentation"
+                  <div className="bg-surface border border-violet-700/50 rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()} role="presentation">
                       {/* Header */}
                       <div className="p-4 border-b border-violet-700/30 bg-violet-950/20 flex justify-between items-center">
                           <div>
@@ -3907,21 +4227,38 @@ export default function Backtest() {
                                   </div>
                               )}
 
-                              {isReviewMode && (
-                                  <div className="bg-violet-950/20 border border-violet-700/30 rounded p-3 text-2xs text-fg-3">
-                                      📊 Sending your <b>backtest results</b> (metrics, exit-reason breakdown,
-                                      5 best &amp; 5 worst trades) + the current params, and asking for a
-                                      strengths/weaknesses critique and concrete improvements — not just param values.
+                              {isReviewMode && reviewPreview && (
+                                  <div className="bg-violet-950/20 border border-violet-700/30 rounded p-3 text-2xs text-fg-3 space-y-2">
+                                      <p>
+                                          📊 The AI gets <b>everything on this page</b> and is asked which of your settings to change, with the evidence for each:
+                                      </p>
+                                      <ul className="list-disc pl-5 space-y-0.5">
+                                          <li><b>{reviewPreview.catalog.length} settings</b> — current value, what each does, and the values it may take{askTuning.data ? ` (strategy ranges from the optimizer for ${askTuning.data.label})` : askTuning.id === params.strategy ? '' : ' (loading strategy ranges…)'}.</li>
+                                          <li><b>{reviewPreview.fields.evidence?.metrics?.trades ?? 0} trades</b>{reviewPreview.fields.evidence?.trades_csv ? ' (every trade)' : ' (too many to list — breakdowns only)'} broken down by entry hour, weekday, CE/PE, exit reason, hold time, entry premium{reviewPreview.fields.evidence?.breakdowns?.volume_ratio ? ', volume' : ''} and month, plus first-half vs second-half.</li>
+                                          {!reviewPreview.split && <li>Cost &amp; greek attribution, the automatic findings (like the 15:00 note) and the India VIX bands.</li>}
+                                          <li>Fixed assumptions it must not change: {Object.keys(reviewPreview.fields.assumptions).join(', ') || '—'}.</li>
+                                      </ul>
+                                      <label className={`flex items-start gap-2 pt-1 border-t border-violet-800/30 ${canHoldout ? 'cursor-pointer' : 'opacity-60'}`}>
+                                          <input type="checkbox" className="mt-0.5 accent-violet-500" disabled={!canHoldout}
+                                              checked={canHoldout && !!askAiModal.holdout}
+                                              onChange={e => setAskAiModal(m => ({ ...m, holdout: e.target.checked }))} />
+                                          <span>
+                                              <b>Hide the most recent 30% from the AI</b> (recommended)
+                                              {canHoldout && askAiModal.holdout && reviewPreview.split
+                                                  ? <> — it sees trades before <b>{reviewPreview.split.cutoffDate}</b>; the {reviewPreview.split.hidden.length} later trades are kept back so &ldquo;Apply &amp; re-test&rdquo; shows whether its advice works on data it never saw. Whole-period tables (attribution, VIX) are left out for the same reason.</>
+                                                  : canHoldout ? ' — untick only if you want advice from every trade (it cannot then be tested honestly).' : ' — needs at least 20 trades.'}
+                                          </span>
+                                      </label>
                                   </div>
                               )}
 
                               {/* Brief summary of what we're sending */}
                               <details className="text-2xs">
                                   <summary className="cursor-pointer text-fg-4 hover:text-fg-2">
-                                      Preview: {isReviewMode ? 'payload' : 'parameters'} being sent to AI ({tunableCount} param keys{isReviewMode ? ' + results' : ''})
+                                      Preview: exactly what is sent to the AI ({tunableCount} settings{isReviewMode ? ' + results' : ''})
                                   </summary>
                                   <pre className="mt-2 bg-slate-900 p-3 rounded text-fg-3 overflow-x-auto max-h-60 text-3xs">
-{JSON.stringify(isReviewMode ? { current_params: buildAskAiPayload(), results_summary: reviewSummary } : buildAskAiPayload(), null, 2)}
+{JSON.stringify(isReviewMode && reviewPreview ? { current_params: buildAskAiPayload(), ...reviewPreview.fields } : buildAskAiPayload(), null, 2)}
                                   </pre>
                               </details>
 
@@ -3967,11 +4304,18 @@ export default function Backtest() {
                       {/* Step: review — diff view + apply */}
                       {askAiModal.step === 'review' && askAiModal.result && (() => {
                           const suggested = askAiModal.result.suggested_params || {};
-                          const keys = Object.keys(suggested);
                           const conf = askAiModal.result.confidence || 0;
                           const reasoning = askAiModal.result.reasoning || '';
                           const analysis = askAiModal.result.analysis || null;
                           const asArr = v => Array.isArray(v) ? v.filter(Boolean) : (v ? [v] : []);
+                          const catalog = askAiModal.sent?.catalog || null;
+                          const labelOf = Object.fromEntries((catalog || []).map(c => [c.key, c.label]));
+                          const checks = catalog
+                              ? checkSuggestions(suggested, catalog)
+                              : Object.keys(suggested).map(k => ({ key: k, value: suggested[k], current: params[k], status: 'ok', note: null }));
+                          const why = Object.fromEntries(asArr(analysis && analysis.changes).filter(c => c && c.param).map(c => [c.param, c]));
+                          const keys = checks.filter(c => c.status !== 'invalid').map(c => c.key);
+                          const selectedCount = keys.filter(k => askAiModal.applyMap[k]).length;
                           const allOn = keys.every(k => askAiModal.applyMap[k]);
                           const toggleAll = () => {
                               const next = {};
@@ -3984,7 +4328,8 @@ export default function Backtest() {
                                   <div className="flex items-center justify-between flex-wrap gap-2 bg-violet-950/20 border border-violet-700/30 rounded p-3">
                                       <div className="flex items-center gap-3 text-xs">
                                           <span className="text-violet-200 font-bold">
-                                              {keys.length} parameter{keys.length !== 1 ? 's' : ''} suggested
+                                              {keys.length} setting change{keys.length !== 1 ? 's' : ''} suggested
+                                              {checks.length > keys.length && <span className="text-danger font-normal"> · {checks.length - keys.length} rejected</span>}
                                           </span>
                                           <span className="text-fg-5">·</span>
                                           <span className="text-fg-3">Confidence: <span className={`font-bold ${conf >= 70 ? 'text-success' : conf >= 50 ? 'text-warning' : 'text-danger'}`}>{conf}%</span></span>
@@ -4034,10 +4379,11 @@ export default function Backtest() {
                                       )
                                   )}
 
-                                  {/* Diff table — only when the AI returned param changes */}
-                                  {keys.length === 0 ? (
+                                  {/* Setting changes — each with the AI's reason, evidence and risk,
+                                      checked against what the setting may actually be set to. */}
+                                  {checks.length === 0 ? (
                                       <div className="text-2xs text-fg-4 bg-slate-900 border border-line-0 rounded p-3">
-                                          No parameter-value changes suggested{analysis ? ' — see the critique above.' : '.'}
+                                          No setting changes suggested{analysis ? ' — see the critique above.' : '.'}
                                       </div>
                                   ) : (
                                   <div className="border border-line-0 rounded overflow-hidden">
@@ -4045,35 +4391,45 @@ export default function Backtest() {
                                           <thead className="bg-slate-900/80 text-fg-5 uppercase tracking-wider text-3xs">
                                               <tr>
                                                   <th className="p-2 text-left w-12">Apply</th>
-                                                  <th className="p-2 text-left">Parameter</th>
-                                                  <th className="p-2 text-right">Current</th>
-                                                  <th className="p-2 text-center w-6">→</th>
-                                                  <th className="p-2 text-right">Suggested</th>
+                                                  <th className="p-2 text-left">Setting</th>
+                                                  <th className="p-2 text-right whitespace-nowrap">Now → Suggested</th>
+                                                  <th className="p-2 text-left">Why</th>
                                               </tr>
                                           </thead>
                                           {/* divide-line, not the neutral-800 divider rule 5 would pick: a
                                               row rule painted in the card's own shade is a 1.00:1 no-op in
                                               all 12 themes, and midnight pins `line-0` to that same hex. */}
                                           <tbody className="divide-y divide-line">
-                                              {keys.map(k => {
-                                                  const cur = params[k];
-                                                  const sug = suggested[k];
-                                                  const sameValue = String(cur) === String(sug);
+                                              {checks.map(c => {
+                                                  const w = why[c.key] || {};
+                                                  const invalid = c.status === 'invalid';
                                                   return (
-                                                      <tr key={k} className={`text-fg-2 ${askAiModal.applyMap[k] ? 'bg-violet-950/10' : ''}`}>
+                                                      <tr key={c.key} className={`align-top text-fg-2 ${askAiModal.applyMap[c.key] ? 'bg-violet-950/10' : ''} ${invalid ? 'opacity-60' : ''}`}>
                                                           <td className="p-2">
                                                               <input
                                                                   type="checkbox"
                                                                   className="w-4 h-4 accent-violet-500"
-                                                                  checked={!!askAiModal.applyMap[k]}
-                                                                  onChange={e => setAskAiModal(m => ({ ...m, applyMap: { ...m.applyMap, [k]: e.target.checked } }))}
+                                                                  disabled={invalid}
+                                                                  aria-label={`Apply ${c.key}`}
+                                                                  checked={!invalid && !!askAiModal.applyMap[c.key]}
+                                                                  onChange={e => setAskAiModal(m => ({ ...m, applyMap: { ...m.applyMap, [c.key]: e.target.checked } }))}
                                                               />
                                                           </td>
-                                                          <td className="p-2 font-mono text-fg-3">{k}</td>
-                                                          <td className="p-2 text-right font-mono text-fg-4">{String(cur)}</td>
-                                                          <td className="p-2 text-center text-fg-5">→</td>
-                                                          <td className={`p-2 text-right font-mono font-bold ${sameValue ? 'text-fg-5' : 'text-success'}`}>
-                                                              {String(sug)}{sameValue && <span className="text-fg-5 text-3xs ml-1">(no change)</span>}
+                                                          <td className="p-2">
+                                                              <div className="text-fg-2">{labelOf[c.key] || c.key}</div>
+                                                              <div className="font-mono text-3xs text-fg-5">{c.key}</div>
+                                                          </td>
+                                                          <td className="p-2 text-right font-mono whitespace-nowrap">
+                                                              <span className="text-fg-4">{String(c.current ?? params[c.key] ?? '—')}</span>
+                                                              <span className="text-fg-5"> → </span>
+                                                              <span className={`font-bold ${invalid ? 'line-through text-danger' : 'text-success'}`}>{String(c.value)}</span>
+                                                          </td>
+                                                          <td className="p-2 text-2xs space-y-0.5">
+                                                              {w.why && <div className="text-fg-2">{w.why}</div>}
+                                                              {w.evidence && <div className="text-fg-4">📊 {w.evidence}</div>}
+                                                              {w.expected_effect && <div className="text-fg-4">🎯 {w.expected_effect}</div>}
+                                                              {w.risk && <div className="text-warning/90">⚠ {w.risk}</div>}
+                                                              {c.note && <div className={invalid ? 'text-danger' : 'text-warning'}>{invalid ? '✕' : '!'} {c.note}</div>}
                                                           </td>
                                                       </tr>
                                                   );
@@ -4081,6 +4437,21 @@ export default function Backtest() {
                                           </tbody>
                                       </table>
                                   </div>
+                                  )}
+
+                                  {asArr(analysis && analysis.left_alone).length > 0 && (
+                                      <details className="text-2xs bg-slate-900 border border-line-0 rounded p-3">
+                                          <summary className="cursor-pointer text-fg-4">Looked at and left alone ({asArr(analysis.left_alone).length})</summary>
+                                          <ul className="list-disc pl-5 mt-1 text-fg-3 space-y-0.5">{asArr(analysis.left_alone).map((x, i) => <li key={i}>{typeof x === 'string' ? x : JSON.stringify(x)}</li>)}</ul>
+                                      </details>
+                                  )}
+
+                                  {keys.length > 0 && (
+                                      <p className="text-3xs text-fg-5">
+                                          {askAiModal.sent?.cutoffDate
+                                              ? <>The AI did not see trades from {askAiModal.sent.cutoffDate} on. <b>Apply &amp; re-test</b> re-runs the backtest with the ticked settings and shows whether they helped on that hidden period.</>
+                                              : <>The AI saw every trade, so a re-test can only show an in-sample improvement. Ask again with &ldquo;Hide the most recent 30%&rdquo; for an honest test.</>}
+                                      </p>
                                   )}
 
                                   <div className="flex justify-end gap-2 pt-2 border-t border-line-0">
@@ -4096,9 +4467,21 @@ export default function Backtest() {
                                       {keys.length > 0 && (
                                       <button
                                           onClick={applyAskAiSuggestions}
-                                          className="px-4 py-2 rounded text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white"
+                                          disabled={selectedCount === 0}
+                                          className="px-4 py-2 rounded text-sm bg-slate-700 hover:bg-slate-600 text-fg-2 disabled:opacity-40"
+                                          title="Change the settings without re-running"
                                       >
-                                          ✓ Apply Selected
+                                          Apply only
+                                      </button>
+                                      )}
+                                      {keys.length > 0 && result && (
+                                      <button
+                                          onClick={applyAndRetest}
+                                          disabled={selectedCount === 0}
+                                          className="px-4 py-2 rounded text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-40"
+                                          title="Change the ticked settings, re-run the backtest and compare before vs after"
+                                      >
+                                          ✓ Apply &amp; re-test ({selectedCount})
                                       </button>
                                       )}
                                   </div>
@@ -4126,7 +4509,7 @@ export default function Backtest() {
         >
           {/* Presentational: exists only to stop the click bubbling to the
               backdrop — it is not itself an control. */}
-          <div className="w-full max-w-5xl rounded-lg border border-line bg-slate-900 shadow-xl" onClick={(e) => e.stopPropagation()}> role="presentation"
+          <div className="w-full max-w-5xl rounded-lg border border-line bg-slate-900 shadow-xl" onClick={(e) => e.stopPropagation()} role="presentation">
             <div className="flex items-start justify-between gap-4 border-b border-line px-4 py-3">
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-fg-2">

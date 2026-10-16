@@ -3,6 +3,7 @@ import axios from 'axios';
 import { API_URL } from '../../config/api.js';
 import { usePolling } from '../../hooks/usePolling.js';
 import { PAGE, buildQuery, journalReducer, JOURNAL_EMPTY } from './journalQuery.js';
+import DocLink from '../DocLink.jsx';
 
 /**
  * Engine journal for the Deploy tab — pages the DURABLE multileg journal
@@ -139,7 +140,7 @@ export default function EngineJournal({ deployments = [], repeats = {}, focus = 
     return (
         <div ref={panelRef} className="bg-surface rounded-xl border border-line p-4 flex flex-col max-h-[40rem]">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 mb-2">
-                <div className="text-sm font-semibold text-fg">Engine events</div>
+                <div className="text-sm font-semibold text-fg">Engine events <DocLink to="multi-leg#engine-journal" /></div>
                 <div className="text-3xs text-fg-5">
                     {total != null ? `${nf(rows.length)} of ${nf(total)} shown` : rows.length ? `${nf(rows.length)} shown` : ''}
                     {summary ? ` · ${nf(summary.total)} today` : ''}

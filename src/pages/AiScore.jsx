@@ -91,7 +91,7 @@ export default function AiScore() {
 
     return (
         <div className="p-6 space-y-4">
-            <PageHeader
+            <PageHeader docs="ai-score#overview"
                 icon={Brain}
                 title="AI Score"
                 subtitle="Verdict → outcome. What the AI gate has actually done to the book."
@@ -111,7 +111,7 @@ export default function AiScore() {
             {data && (
                 <>
                     {/* ── the headline, with its control ──────────────────────── */}
-                    <Card
+                    <Card docs="ai-score#gate"
                         title="Is the gate adding anything?"
                         subtitle="AI-confirmed trades against trades taken with the gate switched off. Both populations traded, so both have real outcomes."
                         right={<Chip tone="warning">observational, not randomised</Chip>}
@@ -127,7 +127,7 @@ export default function AiScore() {
                     </Card>
 
                     {/* ── calibration: the sharpest test available ────────────── */}
-                    <Card
+                    <Card docs="ai-score#confidence"
                         title="Is confidence informative?"
                         subtitle="If the score carries signal, expectancy should rise with it. Flat or falling means it is noise and should not gate anything."
                         right={
@@ -167,7 +167,7 @@ export default function AiScore() {
 
                     <div className="grid gap-4 lg:grid-cols-2">
                         {/* ── the one clean A/B ──────────────────────────────── */}
-                        <Card
+                        <Card docs="ai-score#inflight"
                             title="In-flight reviews"
                             subtitle="Reviews the engine applied vs. ones it ran and refused. Both groups traded — this is the closest thing here to a controlled comparison."
                         >
@@ -186,7 +186,7 @@ export default function AiScore() {
                         </Card>
 
                         {/* ── rejects: counted, never scored ─────────────────── */}
-                        <Card title="Rejects" subtitle="Counted, deliberately not scored.">
+                        <Card docs="ai-score#rejects" title="Rejects" subtitle="Counted, deliberately not scored.">
                             <StatRow cols={3}>
                                 <StatTile label="REJECT" value={data.rejects?.n ?? 0} hint="no order placed" />
                                 <StatTile label="SKIPPED" value={data.rejects?.skipped ?? 0} hint="gate not reached" />
@@ -201,7 +201,7 @@ export default function AiScore() {
                     </div>
 
                     {/* ── per model ──────────────────────────────────────────── */}
-                    <Card title="By model" subtitle="Same question, split by which model answered. Small n on the tail — read the counts.">
+                    <Card docs="ai-score#by-model" title="By model" subtitle="Same question, split by which model answered. Small n on the tail — read the counts.">
                         <DataTable
                             columns={[
                                 { key: 'label', header: 'Model' },
@@ -218,7 +218,7 @@ export default function AiScore() {
                     </Card>
 
                     {/* ── coverage: what this report could not see ───────────── */}
-                    <Card title="Coverage" subtitle="What this report could not join, and why. Nothing is dropped silently.">
+                    <Card docs="ai-score#coverage" title="Coverage" subtitle="What this report could not join, and why. Nothing is dropped silently.">
                         <StatRow cols={4}>
                             <StatTile label="Closed trades" value={data.coverage?.closedTrades ?? 0} />
                             <StatTile label="With a verdict" value={data.coverage?.withAVerdict ?? 0} />

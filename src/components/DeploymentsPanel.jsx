@@ -35,6 +35,13 @@ import { API_URL } from '../config/api.js';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { useConfirm } from './confirmContext.js';
 import { toast } from './toastStore.js';
+import DeltaInstrumentPicker from './delta/DeltaInstrumentPicker';
+import DeltaParams from './delta/DeltaParams';
+import { isDeltaSymbol } from './delta/deltaFormat.js';
+import { Segmented } from './viz/primitives';
+import { PromoteDialog } from './golive/goLiveShared.jsx';
+import { GOLIVE } from './golive/goLiveApi.js';
+import DocLink from './DocLink.jsx';
 
 
 // Fallback list — used only if /api/strategies/registry doesn't respond
@@ -65,6 +72,7 @@ const KNOWN_STRATEGIES_FALLBACK = [
     { id: 'quantum_qho', label: 'Quantum QHO Mean-Reversion' },
     { id: 'volume_surge', label: 'Volume Surge (Climax Fade)' },
     { id: 'council_ensemble', label: 'Council Ensemble (Multi-Strategy Vote)' },
+    { id: 'signal_combiner', label: 'Signal Combiner (Any Members, Any Rule)' },
     { id: 'rsi2_reversion', label: 'RSI-2 Deep Pullback Reversion (Connors)' },
     { id: 'gap_edge', label: 'Opening Gap Edge (Fade / Follow)' },
     { id: 'intraday_momentum', label: 'Intraday Momentum (Session Persistence)' },
@@ -250,15 +258,15 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
             await _mutate('Toggle', () => axios.post(`${API_URL}/deployments/${d._id}/toggle`, { isActive: !(d.isActive !== false) }));
         } finally { setBusyId(null); }
     };
+    // PAPER → LIVE is the go-live gate's (broker drill, evidence, risk, canary): the
+    // switch opens its dialog. LIVE → PAPER is a plain demotion, also recorded there.
+    const [promote, setPromote] = useState(null);
     const toggleMode = async (d) => {
+        if (d.tradeMode !== 'LIVE') { setPromote({ kind: 'single', id: d._id, name: d.name }); return; }
+        if (!await confirm(`Switch "${d.name}" to PAPER? New entries become simulated; an open live position stays live and exits at the broker.`)) return;
         setBusyId(d._id);
         try {
-            const newMode = d.tradeMode === 'LIVE' ? 'PAPER' : 'LIVE';
-            const confirmMsg = newMode === 'LIVE'
-                ? `Switch "${d.name}" to LIVE? Real orders will be placed at the broker.`
-                : `Switch "${d.name}" to PAPER?`;
-            if (!await confirm(confirmMsg)) return;
-            await _mutate('Mode', () => axios.post(`${API_URL}/deployments/${d._id}/toggle-mode`, { tradeMode: newMode }));
+            await _mutate('Mode', () => axios.post(`${GOLIVE}/deployments/single/${d._id}/demote`, { reason: 'manual (Deployments panel)' }));
         } finally { setBusyId(null); }
     };
     // AI confirmation on/off for THIS deployment. The engine gate is an OR over
@@ -358,6 +366,7 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                     </span>
                 </button>
                 <div className="flex items-center gap-2">
+                    <DocLink to="dashboard#deployments" label="Guide" />
                     {/* The combined view: every deployment's results on one page,
                         so nobody has to open the cards one by one to compare. */}
                     <Link to={ROUTES.livePortfolio}
@@ -517,6 +526,10 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
                     onCreated={() => { setShowCreate(false); fetchAll(); }}
                 />
             )}
+
+            <PromoteDialog open={!!promote} kind="single" id={promote?.id} name={promote?.name}
+                onClose={() => setPromote(null)}
+                onDone={(res) => { toast.success(`"${promote?.name}" is LIVE — canary: first ${res.canary.trades} trades at ${res.canary.lots} lot(s)`); setPromote(null); fetchAll(); }} />
         </div>
     );
 }
@@ -1114,12 +1127,16 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
     const [strategyName, setStrategyName] = useState(stratList[0]?.id || stratList[0]);
     const [resolution, setResolution] = useState('5');
     const [name, setName] = useState('');
-    const [tradeMode, setTradeMode] = useState('PAPER');
+    // Always created PAPER: going live is the Go-Live page's promotion (the backend refuses LIVE here).
+    const tradeMode = 'PAPER';
     const [isActive, setIsActive] = useState(false);
     const [paramsJson, setParamsJson] = useState('{}');
     const [submitting, setSubmitting] = useState(false);
     const [err, setErr] = useState(null);
     const [sourceConfigId, setSourceConfigId] = useState('');
+    // Delta Exchange: venue settings kept apart from the free-form JSON so they are always valid.
+    const [deltaParams, setDeltaParams] = useState({ lots: 1, delta_leverage: 10, delta_mode: 'DIRECT', holding_enabled: true });
+    const isDelta = isDeltaSymbol(symbol);
 
     // "Start from Saved Config" — prefill the whole form from a SavedStrategy
     // doc (the configs the user saved from Backtest). This is the PRIMARY
@@ -1146,7 +1163,8 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
         let extraParams = {};
         try { extraParams = paramsJson.trim() ? JSON.parse(paramsJson) : {}; }
         catch (e) { setErr('Invalid params JSON: ' + e.message); return; }
-        const params = { ...extraParams, resolution };
+        // Delta: contracts (lots), leverage, mode and the 24×7 positional default go in with the deployment.
+        const params = { ...(isDelta ? deltaParams : {}), ...extraParams, resolution };
         const payload = {
             name: name.trim() || `${symbol} · ${strategyName} · ${resolution}m`,
             symbol, strategyName, params, tradeMode, isActive,
@@ -1169,7 +1187,7 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
                 onClick={(e) => e.stopPropagation()}
             >
                 <div className="flex items-center justify-between mb-3">
-                    <h4 className="font-bold text-lg">New Deployment</h4>
+                    <h4 className="font-bold text-lg">New Deployment <DocLink to="dashboard#deployments" /></h4>
                     <button onClick={onClose} className="text-fg-4 hover:text-fg">×</button>
                 </div>
                 {err && <div className="mb-2 px-2 py-1 rounded bg-rose-950/40 border border-rose-700 text-danger text-xs">{err}</div>}
@@ -1191,12 +1209,31 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
                             </select>
                         </label>
                     )}
+                    <div>
+                        <span className="text-xs text-fg-4">Exchange</span>
+                        <Segmented
+                            options={[{ v: 'FYERS', label: 'NSE / BSE' }, { v: 'DELTA', label: 'Delta Exchange' }]}
+                            value={isDelta ? 'DELTA' : 'FYERS'}
+                            onChange={(v) => setSymbol(v === 'DELTA' ? (isDelta ? symbol : 'DELTA:BTCUSD') : (isDelta ? KNOWN_SYMBOLS[0] : symbol))}
+                        />
+                    </div>
+                    {isDelta ? (
+                        <div className="space-y-2">
+                            <DeltaInstrumentPicker id="deploy-delta-symbol" value={symbol} onChange={(sym) => setSymbol(sym)} />
+                            <label htmlFor="deploy-delta-contracts" className="block text-xs text-fg-4">Contracts per entry
+                                <input id="deploy-delta-contracts" type="number" min="1" step="1" className="mt-0.5 w-full bg-slate-900 border border-line rounded px-2 py-1 text-fg"
+                                    value={deltaParams.lots} onChange={(e) => setDeltaParams({ ...deltaParams, lots: Math.max(1, parseInt(e.target.value, 10) || 1) })} />
+                            </label>
+                            <DeltaParams symbol={symbol} params={deltaParams} onChange={setDeltaParams} showBacktestFields={false} idPrefix="deploy-delta" />
+                        </div>
+                    ) : (
                     <label className="block">
                         <span className="text-xs text-fg-4">Symbol</span>
                         <select className="mt-0.5 w-full bg-slate-900 border border-line rounded px-2 py-1 text-fg" value={symbol} onChange={(e) => setSymbol(e.target.value)}>
                             {KNOWN_SYMBOLS.map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
                     </label>
+                    )}
                     <label className="block">
                         <span className="text-xs text-fg-4">Strategy</span>
                         <select className="mt-0.5 w-full bg-slate-900 border border-line rounded px-2 py-1 text-fg" value={strategyName} onChange={(e) => setStrategyName(e.target.value)}>
@@ -1217,13 +1254,10 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
                         <span className="text-xs text-fg-4">Display name (optional)</span>
                         <input className="mt-0.5 w-full bg-slate-900 border border-line rounded px-2 py-1 text-fg" placeholder={`${symbol} · ${strategyName} · ${resolution}m`} value={name} onChange={(e) => setName(e.target.value)} />
                     </label>
-                    <label className="block">
-                        <span className="text-xs text-fg-4">Mode</span>
-                        <select className="mt-0.5 w-full bg-slate-900 border border-line rounded px-2 py-1 text-fg" value={tradeMode} onChange={(e) => setTradeMode(e.target.value)}>
-                            <option value="PAPER">PAPER</option>
-                            <option value="LIVE">LIVE</option>
-                        </select>
-                    </label>
+                    <p className="text-3xs text-fg-5">
+                        Starts on <span className="text-fg-3 font-semibold">PAPER</span>. To trade real money, promote it on the{' '}
+                        <Link to={ROUTES.goLive} className="underline text-primary-ink">Go-Live page</Link> once the broker drill and the evidence pass.
+                    </p>
                     <label className="flex items-center gap-2">
                         <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
                         <span className="text-xs">Activate immediately</span>

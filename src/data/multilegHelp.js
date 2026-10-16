@@ -251,7 +251,7 @@ export const HELP = {
     "exit-leg-sl": {
         label: "LEG_SL",
         short: "One sold leg was bought back on its own after its price ran against you.",
-        detail: "Fires before the structure-level stop. The single leg is closed, its loss is realised into the position, and the remaining legs keep running. If this leaves a credit structure with no sold legs left, the rest is flattened and the trade books as LEG_SL_FLATTEN (or LEG_SL_ALL if everything closed leg by leg).",
+        detail: "Fires before the structure-level stop. The single leg is closed, its loss is realised into the position, and the remaining legs keep running. If this leaves a credit structure with no sold legs left (or no legs at all), the rest is flattened and the trade books as LEG_SL_FLATTEN — in live trading and in backtests alike. (Backtests saved before 16-Oct-2026 called the all-legs case LEG_SL_ALL.)",
         gotcha: "Seeing LEG_SL does not mean the trade ended — it may only be a partial unwind, and the position keeps running with a different risk shape.",
     },
     "exit-dte": {
@@ -273,10 +273,10 @@ export const HELP = {
         gotcha: "It is a hard clock rule, not a profit decision — a winning intraday structure gets closed at the bell regardless.",
     },
     "exit-expiry": {
-        label: "EXPIRY_DAY / EXPIRY_SETTLE",
+        label: "EXPIRY_DAY / EXPIRY_SETTLED",
         short: "Closed on the expiry date rather than being left to settle.",
-        detail: "Live: if any leg expires today, the engine force-closes at 15:00 IST (EXPIRY_DAY). Backtest: legs past their expiry are valued at their intrinsic worth and the trade is settled (EXPIRY_SETTLE). Both exist so a structure never disappears into physical settlement with an unknown result.",
-        gotcha: "You will see EXPIRY_SETTLE in backtest results and EXPIRY_DAY in live results for what is essentially the same situation — do not treat them as different behaviours.",
+        detail: "If any leg expires today, the structure is closed at 15:00 IST (EXPIRY_DAY) — live, paper and backtests all follow this one rule. EXPIRY_SETTLED is the fallback: the 15:00 close was missed (engine down, no quotes, or a backtest with no data at/after 15:00), so the expired legs are valued at their intrinsic worth against the spot. Both exist so a structure never disappears into physical settlement with an unknown result.",
+        gotcha: "Backtests saved before 16-Oct-2026 never closed at 15:00 on expiry day and called the settlement EXPIRY_SETTLE — re-run them to compare with live results.",
     },
     "exit-signal-reverse": {
         label: "SIGNAL_REVERSE",

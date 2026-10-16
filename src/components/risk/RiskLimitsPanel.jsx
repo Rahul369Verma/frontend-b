@@ -96,7 +96,7 @@ export default function RiskLimitsPanel() {
     const greekOn = greekKeys.filter(k => data.effective?.[k] != null).length;
 
     return (
-        <Card
+        <Card docs="risk#limits"
             title="Portfolio risk controls"
             subtitle={data.precedence}
             right={

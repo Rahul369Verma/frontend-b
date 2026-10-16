@@ -11,6 +11,7 @@ import { API_BASE } from '../config/api.js';
 import { useConfirm } from './confirmContext.js';
 import { toast } from './toastStore.js';
 import { istDateTime, pnlTone } from './viz/tokens';
+import DocLink from './DocLink.jsx';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -588,7 +589,7 @@ const AiManager = () => {
                         <FaRobot className="w-8 h-8 text-indigo-400" />
                     </div>
                     <div>
-                        <h1 className="text-xl font-bold text-fg">AI Strategy Manager</h1>
+                        <h1 className="text-xl font-bold text-fg flex items-center gap-2">AI Strategy Manager <DocLink to="ai-manager" label="Guide" className="text-xs" /></h1>
                         <div className="flex items-center gap-2 text-sm text-fg-4">
                             <span className={`w-2 h-2 rounded-full ${(activeTab === 'rl' ? rlModelExists : status.model_trained) ? 'bg-emerald-500' : 'bg-rose-500'}`} />
                             {activeTab === 'rl'
@@ -628,6 +629,7 @@ const AiManager = () => {
                                 <FaRobot className="inline mr-2" />RL Agent
                                 {hasActiveJobs && <span className="ml-1.5 text-3xs px-1.5 py-0.5 rounded-full bg-indigo-500 text-white font-bold">{rlJobs.filter(j => isActive(j.status)).length}</span>}
                             </button>
+                            <DocLink to={activeTab === 'rl' ? 'ai-manager#rl' : 'ai-manager#static'} label="About this tab" className="ml-auto self-center pb-2" />
                         </div>
 
                         {/* ── Static Model Form ── */}
@@ -677,7 +679,7 @@ const AiManager = () => {
                                 </button>
                                 {trainMetrics && (
                                     <div className="mt-4 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
-                                        <h3 className="text-success font-bold mb-2">Training Results</h3>
+                                        <h3 className="text-success font-bold mb-2">Training Results <DocLink to="ai-manager#static" /></h3>
                                         <div className="grid grid-cols-2 gap-4 text-sm">
                                             <div className="flex justify-between"><span className="text-fg-4">Accuracy:</span><span className="text-fg font-mono">{(trainMetrics.val_accuracy * 100).toFixed(1)}%</span></div>
                                             <div className="flex justify-between"><span className="text-fg-4">F1 Score:</span><span className="text-fg font-mono">{(trainMetrics.val_f1 * 100).toFixed(1)}%</span></div>
@@ -1245,6 +1247,7 @@ const AiManager = () => {
                                     <div className="flex justify-between items-center mb-4">
                                         <h2 className="text-sm font-bold text-fg-3 flex items-center gap-2">
                                             <FaBrain className="text-indigo-400" /> Saved RL Models
+                                            <DocLink to="ai-manager#models" />
                                         </h2>
                                         <div className="flex gap-2 items-center">
                                             {/* The file button was the Tailwind-docs pale chip (bg-indigo-50 +
@@ -1379,6 +1382,7 @@ const AiManager = () => {
                     <div className="bg-slate-800/50 border border-line rounded-xl p-6">
                         <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
                             <FaChartLine className="text-success" /> AI Backtest
+                            <DocLink to="ai-manager#backtest" />
                         </h2>
                         <div className="space-y-4">
                             <div className="grid grid-cols-2 gap-4">
@@ -1443,6 +1447,7 @@ const AiManager = () => {
                         <h2 className="text-base font-bold text-fg-3 flex items-center gap-2">
                             <FaRobot className="text-indigo-400" />
                             Training Jobs
+                            <DocLink to="ai-manager#jobs" />
                             <span className="text-xs text-fg-5 font-normal">({rlJobs.length} total · {rlJobs.filter(j => isActive(j.status)).length} running)</span>
                         </h2>
                         <button onClick={fetchRlStatus} className="text-xs text-fg-4 hover:text-fg-2 flex items-center gap-1.5 transition-colors">
@@ -1470,6 +1475,7 @@ const AiManager = () => {
                         <h2 className="text-base font-bold text-fg-3 flex items-center gap-2">
                             <FaSync className="text-warning" />
                             Resumable Training
+                            <DocLink to="ai-manager#jobs" />
                             <span className="text-xs text-fg-5 font-normal">({checkpoints.length} interrupted)</span>
                         </h2>
                         <button onClick={fetchCheckpoints} className="text-xs text-fg-4 hover:text-fg-2 flex items-center gap-1.5 transition-colors">
@@ -1511,7 +1517,7 @@ const AiManager = () => {
             {/* ── Backtest Results ── */}
             {backtestResult && (
                 <div className="mt-8 bg-slate-800/50 border border-line rounded-xl p-6">
-                    <h2 className="text-xl font-bold mb-6">Backtest Performance</h2>
+                    <h2 className="text-xl font-bold mb-6 flex items-center gap-2">Backtest Performance <DocLink to="ai-manager#backtest" /></h2>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
                         <ResultCard label="Total Return"  value={`₹${backtestResult.total_pnl?.toFixed(2)}`}    color={pnlTone(backtestResult.total_pnl)} />
                         <ResultCard label="Win Rate"      value={`${(backtestResult.win_rate * 100).toFixed(1)}%`} color="text-blue-400" />

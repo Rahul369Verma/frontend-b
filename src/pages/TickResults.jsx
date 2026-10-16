@@ -234,7 +234,7 @@ function CostReality({ cost, basis }) {
     const winners = n(cost.winnersOnUnderlying) ?? 0;
 
     return (
-        <Card
+        <Card docs="tick-results#cost-reality"
             title={<span className="inline-flex items-center gap-2"><Scissors className="w-4 h-4 text-fg-4" aria-hidden="true" />Cost reality</span>}
             subtitle="Independent of the basis switch above — changing the lens does not change what trading cost. This is the whole tick question: does the move outrun the fee?"
         >
@@ -265,10 +265,10 @@ function CostReality({ cost, basis }) {
                 </StatRow>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                    <Card title="From signal to settlement" subtitle="Each step is a real deduction, in order.">
+                    <Card docs="tick-results#cost-reality" title="From signal to settlement" subtitle="Each step is a real deduction, in order.">
                         <Waterfall steps={steps} total={{ label: 'Options net', value: n(cost.optionsNet) ?? 0 }} />
                     </Card>
-                    <Card
+                    <Card docs="tick-results#cost-reality"
                         title="Break-even distance by symbol"
                         subtitle="How far the index must move for one option leg to clear its own costs, against how far it typically moves."
                     >
@@ -317,7 +317,7 @@ function StrategyPanel({ g, color, onClose }) {
     const meta = g?.meta || {};
 
     return (
-        <Card
+        <Card docs="tick-results#strategies"
             title={(
                 <span className="inline-flex items-center gap-2">
                     <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color }} aria-hidden="true" />
@@ -357,7 +357,7 @@ function StrategyPanel({ g, color, onClose }) {
                 </StatRow>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                    <Card title="Daily net P&L" subtitle="By exit day IST. Drag to zoom.">
+                    <Card docs="tick-results#strategies" title="Daily net P&L" subtitle="By exit day IST. Drag to zoom.">
                         <ZoomableChart data={rows} height={180}>
                             <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                 <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
@@ -374,7 +374,7 @@ function StrategyPanel({ g, color, onClose }) {
                             </ComposedChart>
                         </ZoomableChart>
                     </Card>
-                    <Card title="Equity curve" subtitle="Cumulative net with drawdown shaded beneath.">
+                    <Card docs="tick-results#strategies" title="Equity curve" subtitle="Cumulative net with drawdown shaded beneath.">
                         <ZoomableChart data={rows} height={180}>
                             <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                 <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
@@ -389,7 +389,7 @@ function StrategyPanel({ g, color, onClose }) {
                     </Card>
                 </div>
 
-                <Card title="Exit reasons" subtitle="Net by how the trade ended. SL-heavy means a broken entry; TP-heavy with a negative total means the target is smaller than the cost of reaching it.">
+                <Card docs="tick-results#strategies" title="Exit reasons" subtitle="Net by how the trade ended. SL-heavy means a broken entry; TP-heavy with a negative total means the target is smaller than the cost of reaching it.">
                     <DivergingBars data={exitRows} emptyText="No exits recorded." labelWidth={170} />
                 </Card>
             </div>
@@ -569,7 +569,7 @@ export default function TickResults() {
 
     return (
         <div className="p-6 space-y-4">
-            <PageHeader
+            <PageHeader docs="tick-results"
                 icon={Zap}
                 title="Tick Results"
                 subtitle="Every tick strategy's realised book. The management page shows what is running; this shows what it earned."
@@ -603,7 +603,7 @@ export default function TickResults() {
 
             {/* ── The basis switch. Every total is shown BEFORE you flip, so the
                  choice is informed rather than exploratory. ─────────────────── */}
-            <Card
+            <Card docs="tick-results#basis"
                 title="P&L basis"
                 subtitle="A tick trade can be priced three ways and they disagree by more than the whole loss. Pick the lens; the header and every breakdown below follow it."
             >
@@ -682,7 +682,7 @@ export default function TickResults() {
                     <CostReality cost={data.costModel} basis={basis} />
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                        <Card title="Daily net P&L" subtitle="By exit day IST. Drag to zoom.">
+                        <Card docs="tick-results#summary" title="Daily net P&L" subtitle="By exit day IST. Drag to zoom.">
                             <ZoomableChart data={daily} height={200}>
                                 <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
@@ -699,7 +699,7 @@ export default function TickResults() {
                                 </ComposedChart>
                             </ZoomableChart>
                         </Card>
-                        <Card title="Equity curve" subtitle="Cumulative net with drawdown shaded beneath.">
+                        <Card docs="tick-results#summary" title="Equity curve" subtitle="Cumulative net with drawdown shaded beneath.">
                             <ZoomableChart data={daily} height={200}>
                                 <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
@@ -714,7 +714,7 @@ export default function TickResults() {
                         </Card>
                     </div>
 
-                    <Card
+                    <Card docs="tick-results#calendar"
                         title="Per-day calendar"
                         subtitle="Every session at a glance — a run of red is a regime, a single red is a day."
                         right={(
@@ -727,7 +727,7 @@ export default function TickResults() {
                     </Card>
 
                     {/* ── Per strategy ─────────────────────────────────────── */}
-                    <Card
+                    <Card docs="tick-results#strategies"
                         title="By strategy"
                         subtitle="One row per tick strategy. Click a name for its own curve; tick the box to overlay it on the compare chart."
                     >
@@ -735,7 +735,7 @@ export default function TickResults() {
                     </Card>
 
                     {compareSeries.members.length > 0 && (
-                        <Card title="Compare equity curves" subtitle="Cumulative net per strategy on the selected basis. Default is the four with the most trades — a one-trade strategy is noise on a curve.">
+                        <Card docs="tick-results#strategies" title="Compare equity curves" subtitle="Cumulative net per strategy on the selected basis. Default is the four with the most trades — a one-trade strategy is noise on a curve.">
                             <Legend items={compareSeries.members.map((m) => ({ label: m.name, color: m.color }))} />
                             <ResponsiveContainer width="100%" height={240}>
                                 <ComposedChart data={compareSeries.rows} margin={{ top: 8, right: 10, bottom: 2, left: 4 }}>
@@ -761,7 +761,7 @@ export default function TickResults() {
                     )}
 
                     {/* ── Breakdowns ───────────────────────────────────────── */}
-                    <Card
+                    <Card docs="tick-results#breakdowns"
                         title="Breakdowns"
                         subtitle="Every tab sums to the header above it — a row with a missing key is bucketed, never dropped."
                     >

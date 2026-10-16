@@ -123,7 +123,7 @@ export default function ZoneFinderPanel({ symbol, lots = 1, currentLegs = [], on
     const candidateRows = useMemo(() => (pick?.candidates || []).map((c, i) => ({ ...c, _key: `${c.pe}-${c.ce}-${i}` })), [pick]);
 
     return (
-        <Card
+        <Card docs="multi-leg#builder-tab"
             title={<span className="inline-flex items-center gap-2"><Target className="w-4 h-4 text-primary-ink" aria-hidden="true" />Zone finder — strikes from the market's distribution</span>}
             subtitle="The smile across strikes IS the market's forecast. The finder reprices every candidate pair at the planned exit, sold at bid with real charges, and picks by expected P&L per rupee of tail. It declines when nothing clears zero."
             right={(

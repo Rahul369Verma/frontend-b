@@ -5,6 +5,7 @@ import { pnlTone } from '../viz/tokens';
 import { fmt, num, pfText, pfValue, shortSym } from './builderFormat';
 import useRemWidth from '../../hooks/useRemWidth';
 import useLocalStorage from '../../hooks/useLocalStorage';
+import DocLink from '../DocLink.jsx';
 
 /**
  * Deploy tab → Saved strategies.
@@ -43,8 +44,8 @@ const SORT_BY_KEY = Object.fromEntries(SORTS.map(s => [s.key, s]));
 const validSort = (v) => !!(v && SORT_BY_KEY[v.key] && (v.dir === 'asc' || v.dir === 'desc'));
 
 const GROUPS = {
-    oos: { label: 'Out-of-sample', title: 'The validation window the optimizer never tuned on. Only Auto-optimize saves have one — a plain backtest save shows —' },
-    train: { label: 'Train', title: 'The in-sample window the optimizer tuned on' },
+    oos: { label: 'Out-of-sample', title: 'The validation window: the last 30% of the backtest. On an Auto-optimize save the optimizer never tuned on it; on a backtest-split save the settings were not tuned on either part, so it is a consistency check. A plain backtest save shows —' },
+    train: { label: 'Train', title: 'The first 70% of the window (on an Auto-optimize save, the part the optimizer tuned on)' },
     full: { label: 'Full window', title: 'The whole backtest window (what a plain backtest save records)' },
 };
 
@@ -52,6 +53,17 @@ function Verdict({ opt }) {
     const r = opt?.robustness;
     if (!r || r.robust == null) return <span className="text-fg-5" title={opt ? 'Out-of-sample check inconclusive' : 'No out-of-sample check — not from Auto-optimize'}>—</span>;
     const title = `val/train ${r.ratio ?? '?'} — ${r.note || ''}`;
+    // A split of one backtest of hand-set settings: nothing was fitted, so
+    // "overfit" would be the wrong word — the question is only whether the
+    // edge was still there in the most recent 30%.
+    if (opt.isSplit) {
+        const t = `Last 30% vs first 70% of one backtest (settings not tuned on either) — ${title}`;
+        // Positive lately after a losing first part is improvement, not "held up".
+        if (r.robust && !(Number(opt.train?.netPnl) > 0)) return <Chip tone="info" title={t}>↗ Better lately</Chip>;
+        return r.robust
+            ? <Chip tone="good" title={t}>✓ Held up</Chip>
+            : <Chip tone="warning" title={t}>⚠ Faded</Chip>;
+    }
     return r.robust
         ? <Chip tone="good" title={title}>✓ Holds</Chip>
         : <Chip tone="critical" title={title}>⚠ Overfit</Chip>;
@@ -256,6 +268,11 @@ function StrategyCard({ r, open, onToggle, renderDetails, actionProps }) {
                     <Metric label="ROI/margin" value={pctText(m.roiOnMarginPct)} />
                     <Metric label="Full PF" value={pfText(m)} />
                     <Metric label="Trades" value={num(m.n) == null ? '—' : fmt(m.n)} />
+                    {opt.isSplit && (
+                        <p className="col-span-full text-3xs text-fg-5">
+                            Backtest {s.backtest.from} → {s.backtest.to}: Val = its last {Math.round((opt.ratio ?? 0.3) * 100)}%, Train = the rest. The settings were not tuned on either part.
+                        </p>
+                    )}
                 </dl>
             ) : s.backtest?.metrics ? (
                 <>
@@ -302,7 +319,9 @@ export default function SavedStrategiesPanel({
         const all = (list || []).map((s, i) => ({
             s, i,
             m: s.backtest?.metrics || {},
-            opt: s.optimizer || null,
+            // An Auto-optimize split first; else the 70/30 split saved with a plain
+            // backtest (marked isSplit so it is never presented as optimizer evidence).
+            opt: s.optimizer || (s.backtest?.split?.val ? { ...s.backtest.split, isSplit: true } : null),
             live: (live && live.get(String(s._id))) || null,
             tplName: templates.find(t => t.key === s.template)?.name || s.template,
             sym: shortSym(s.symbol),
@@ -334,13 +353,14 @@ export default function SavedStrategiesPanel({
     return (
         <div ref={ref} className="bg-surface rounded-xl border border-line p-4 mb-4">
             <div className={`flex flex-wrap items-center gap-x-4 gap-y-2 ${expanded ? 'mb-3' : ''}`}>
-                <h2 className="text-sm font-semibold text-fg mr-auto">
+                <h2 className="text-sm font-semibold text-fg mr-auto flex items-center gap-2">
                     <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-controls={bodyId}
                         className="flex items-center gap-2 hover:text-sky-300" title={expanded ? 'Collapse' : 'Expand'}>
                         {expanded ? <ChevronDown className="w-4 h-4 text-fg-4" aria-hidden="true" /> : <ChevronRight className="w-4 h-4 text-fg-4" aria-hidden="true" />}
                         <Save className="w-4 h-4 text-sky-400" aria-hidden="true" /> Saved strategies ({total})
                         {!expanded && deployedCount > 0 && <span className="text-2xs font-normal text-fg-5">· {deployedCount} deployed</span>}
                     </button>
+                    <DocLink to="multi-leg#deploy-saved-strategies" />
                 </h2>
                 {expanded && total > 0 && (
                     <div className="flex flex-wrap items-center justify-end gap-2 grow min-w-0 max-w-full">

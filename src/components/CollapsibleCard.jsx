@@ -5,6 +5,7 @@
 // Data, etc. all fold away).
 import React, { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import DocLink from './DocLink.jsx';
 
 export default function CollapsibleCard({
     title,
@@ -16,6 +17,7 @@ export default function CollapsibleCard({
     children,
     className = '',
     bodyClassName = 'px-6 pb-6 pt-0',
+    docs = null,         // documentation target ("page#section") — 📖 link beside the header
 }) {
     const [open, setOpen] = useState(() => {
         if (!storageKey) return defaultOpen;
@@ -33,11 +35,13 @@ export default function CollapsibleCard({
 
     return (
         <div className={`bg-surface rounded-xl border border-line ${className}`}>
+            {/* The docs link sits BESIDE the toggle — a link inside a button is invalid. */}
+            <div className="flex items-center">
             <button
                 type="button"
                 onClick={toggle}
                 aria-expanded={open}
-                className="w-full flex items-center justify-between gap-3 p-4 text-left rounded-xl hover:bg-slate-800/40 transition-colors"
+                className="flex-1 min-w-0 flex items-center justify-between gap-3 p-4 text-left rounded-xl hover:bg-slate-800/40 transition-colors"
             >
                 <span className="flex items-center gap-2 min-w-0">
                     {open
@@ -52,6 +56,8 @@ export default function CollapsibleCard({
                 </span>
                 {right && <span className="flex items-center gap-2 flex-shrink-0">{right}</span>}
             </button>
+            {docs && <DocLink to={docs} className="pr-4" />}
+            </div>
             {open && <div className={bodyClassName}>{children}</div>}
         </div>
     );
