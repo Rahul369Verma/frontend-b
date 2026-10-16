@@ -56,7 +56,9 @@ Everything new should run in PAPER first. The results pages show PAPER and LIVE 
 | [Data Manager](data-manager) | Historical price data stored for research. |
 | [Settings](settings) | Global switches, limits and broker login. |
 
-At the bottom of the rail are the **Appearance** settings (theme, text size, contrast) and a status light showing whether the app is connected to the server.`,
+At the bottom of the rail are the **Appearance** settings (theme, text size, contrast) and a status light showing whether the app is connected to the server.
+
+**Folding sections.** Long pages are built from sections that fold like an accordion. Click a section's title (the **›** arrow) to fold or unfold it. A folded section keeps its title, its one-line description and its controls, and sometimes shows a short summary, such as today's regime read or how many signals are waiting. Each section remembers how you left it, in this browser. **Collapse all** / **Expand all** at the top right of a long page (Dashboard, Multi-Leg, Live Portfolio, Risk, Alerts, Tick Results, Go Live…) folds or opens every section at once. A few panels stop refreshing while folded, such as the multi-leg Engine events, the Dashboard activity feed and the market-regime read, and catch up as soon as you open them.`,
         },
         {
             id: 'using-docs',

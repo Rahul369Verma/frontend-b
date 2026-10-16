@@ -311,7 +311,7 @@ export default function Charts() {
 
     return (
         <div className="p-6 space-y-4">
-            <PageHeader docs="charts"
+            <PageHeader foldAll docs="charts"
                 icon={CandlestickChart}
                 title="Charts"
                 subtitle="Any index, equity or traded option — with this desk's own entries, exits, stops, targets, strikes and break-evens drawn on the price."
@@ -419,7 +419,7 @@ export default function Charts() {
             )}
 
             {err ? (
-                <Card title="No price data"><EmptyState icon={CandlestickChart} title={String(err)}>
+                <Card collapsible={false} title="No price data"><EmptyState icon={CandlestickChart} title={String(err)}>
                     <div className="space-y-2 text-left">
                         <div>
                             {/* The single most common cause, and the one the old copy never named:

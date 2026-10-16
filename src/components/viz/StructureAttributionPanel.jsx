@@ -21,11 +21,11 @@ export default function StructureAttributionPanel({ data }) {
     const ct = useChartTheme();
     if (!data) return null;
     if (data.error) {
-        return <Card title="Structure attribution"><Placeholder>Unavailable: {data.error}</Placeholder></Card>;
+        return <Card collapsible={false} title="Structure attribution"><Placeholder>Unavailable: {data.error}</Placeholder></Card>;
     }
     const t = data.totals;
     if (!t || !t.trades) {
-        return <Card title="Structure attribution"><Placeholder>No trades to decompose.</Placeholder></Card>;
+        return <Card collapsible={false} title="Structure attribution"><Placeholder>No trades to decompose.</Placeholder></Card>;
     }
 
     const steps = [];

@@ -91,7 +91,7 @@ export default function AiScore() {
 
     return (
         <div className="p-6 space-y-4">
-            <PageHeader docs="ai-score#overview"
+            <PageHeader foldAll docs="ai-score#overview"
                 icon={Brain}
                 title="AI Score"
                 subtitle="Verdict → outcome. What the AI gate has actually done to the book."

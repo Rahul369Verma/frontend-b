@@ -59,6 +59,8 @@ import {
 } from '../../utils/vixOverlay.js';
 import useLocalStorage from '../../hooks/useLocalStorage.js';
 import useVixDays from '../../hooks/useVixDays.js';
+import useCollapse, { deriveFoldKey } from '../../hooks/useCollapse.js';
+import { ChevronRight } from 'lucide-react';
 
 /** Days rendered before the "Show N more" button. */
 const DAY_PAGE = 30;
@@ -634,6 +636,9 @@ export default function DayEquityCurves({ days, excluded, title = 'Day by day', 
     const [open, setOpen] = useState(() => new Set());
     const [shown, setShown] = useState(DAY_PAGE);
     const [vixOn, setVixOn] = useLocalStorage(VIX_PREF_KEY, false, { validate: (v) => typeof v === 'boolean' });
+    // the whole section folds behind its heading (and answers the page's "Collapse all")
+    const { open: sectionOpen, toggle: toggleSection } = useCollapse({ storageKey: deriveFoldKey({ title: `day-curves ${title}` }), defaultOpen: true });
+    const bodyId = `${idBase}-body`;
 
     const list = useMemo(() => (Array.isArray(days) ? days : []), [days]);
     const dropped = useMemo(() => excludedEntries(excluded), [excluded]);
@@ -671,7 +676,15 @@ export default function DayEquityCurves({ days, excluded, title = 'Day by day', 
     return (
         <section aria-label={title}>
             <div className="flex items-baseline justify-between flex-wrap gap-2 mb-1">
-                <h2 className="text-sm font-semibold text-fg">{title}</h2>
+                <h2 className="text-sm font-semibold text-fg">
+                    <button type="button" onClick={toggleSection} aria-expanded={sectionOpen} aria-controls={bodyId}
+                        title={sectionOpen ? 'Fold this section' : 'Unfold this section'}
+                        className="inline-flex items-start gap-1 text-left rounded hover:text-primary-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
+                        <ChevronRight aria-hidden="true"
+                            className={`w-4 h-4 mt-px flex-shrink-0 text-fg-4 transition-transform motion-reduce:transition-none ${sectionOpen ? 'rotate-90' : ''}`} />
+                        {title}
+                    </button>
+                </h2>
                 {list.length > 0 && (
                     <div className="flex items-baseline flex-wrap gap-x-3 gap-y-1">
                         <span className="text-2xs text-fg-5">
@@ -686,6 +699,7 @@ export default function DayEquityCurves({ days, excluded, title = 'Day by day', 
                     </div>
                 )}
             </div>
+            {sectionOpen && <div id={bodyId}>
             <p className="text-3xs text-fg-5 mb-2">
                 Each day&apos;s running P&amp;L against IST time. Open trades move with their per-minute marks; a trade with
                 no path appears as one step at its exit. {EXIT_STEP_NOTE[markBasis] || EXIT_STEP_DEFAULT} A position
@@ -722,6 +736,7 @@ export default function DayEquityCurves({ days, excluded, title = 'Day by day', 
                     )}
                 </>
             )}
+            </div>}
         </section>
     );
 }

@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { num, fmt, sgnNum, shortSym } from './builderFormat';
+import { Panel } from '../viz/primitives';
 
 /**
  * CHAIN LADDER — the strike picker, in three readings of the same rows.
@@ -146,10 +147,8 @@ export default function ChainLadder({
     };
 
     return (
-        <div className="bg-surface rounded-xl border border-line p-4">
-            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                <span className="text-sm font-semibold text-fg">Chain — {shortSym(symbol)} {chain?.expiry || ''}</span>
-                <div className="flex items-center gap-1.5 text-3xs">
+        <Panel title={`Chain — ${shortSym(symbol)} ${chain?.expiry || ''}`} storageKey="fold:builder|chain"
+            right={<div className="flex items-center gap-1.5 text-3xs">
                     <span className="text-fg-5">click a cell to</span>
                     {hasActiveLeg ? (
                         <>
@@ -171,8 +170,7 @@ export default function ChainLadder({
                         className="bg-slate-800 border border-line rounded px-1 py-0.5 text-fg-3 ml-1" title="Strikes each side of ATM">
                         {[6, 12, 20, 30].map(c => <option key={c} value={c}>±{c}</option>)}
                     </select>
-                </div>
-            </div>
+                </div>}>
 
             {/* VIEW TOGGLE — the same rows, three readings. */}
             <div className="flex items-center gap-1 mb-1.5 text-3xs">
@@ -351,6 +349,6 @@ export default function ChainLadder({
                     </div>
                 </>
             )}
-        </div>
+        </Panel>
     );
 }

@@ -1324,7 +1324,7 @@ function AlertsTab({ api, universes, editing, setEditing, onChanged, fields = []
             {alerts && alerts.length > 0 && (
                 <div className="grid gap-3 lg:grid-cols-2">
                     {alerts.map(a => (
-                        <Card docs="alerts#alerts" key={a._id} title={<span className="flex items-center gap-2">{a.name}{!a.enabled && <Chip tone="muted">paused</Chip>}</span>}
+                        <Card collapsible={false} docs="alerts#alerts" key={a._id} title={<span className="flex items-center gap-2">{a.name}{!a.enabled && <Chip tone="muted">paused</Chip>}</span>}
                             subtitle={a.lastRunAt ? `Last run ${istDateTime(a.lastRunAt)} · ${a.lastStatus === 'ok' ? `${a.lastMatchCount ?? 0} matched, ${a.lastNewCount ?? 0} new` : a.lastStatus}` : 'Never run'}
                             right={
                                 <label className="inline-flex items-center gap-1.5 text-2xs text-fg-4 cursor-pointer">
@@ -1610,7 +1610,7 @@ export default function Alerts() {
     const noData = cov && cov.sessions === 0;
     return (
         <div className="p-6 space-y-6">
-            <PageHeader docs="alerts#overview" icon={BellRing} title="Stock Alerts"
+            <PageHeader foldAll docs="alerts#overview" icon={BellRing} title="Stock Alerts"
                 subtitle="Screen every NSE stock on NSE's own daily files, save screens as scheduled alerts, and get a Telegram message when a stock newly matches."
                 badges={cov ? <>
                     <Chip tone={cov.sessions >= 250 ? 'neutral' : 'warning'}>{cov.lastSession ? `EOD ${cov.lastSession}` : 'no data'}</Chip>

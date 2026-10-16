@@ -291,7 +291,7 @@ export default function GoLive() {
 
     return (
         <div className="p-4 md:p-6 space-y-5 max-w-7xl mx-auto">
-            <PageHeader docs="go-live#overview" icon={Rocket} title="Go Live"
+            <PageHeader foldAll docs="go-live#overview" icon={Rocket} title="Go Live"
                 subtitle="PAPER → LIVE goes through here and nowhere else: prove the broker accepts your orders, show the strategy makes money, then promote with a canary that demotes itself on losses."
                 badges={verdict && <StatusBadge level={verdict.level}>{verdict.text}</StatusBadge>}
                 actions={(

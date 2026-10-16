@@ -752,7 +752,7 @@ export default function LivePortfolio() {
     return (
         <div className="p-6 space-y-4">
             {/* ── Header ─────────────────────────────────────────────────── */}
-            <PageHeader docs="live-portfolio"
+            <PageHeader foldAll docs="live-portfolio"
                 icon={Wallet}
                 title="Live Portfolio"
                 subtitle={`Every deployment's results in one place — combined, and one card per strategy. ${viewMeta.hint}.`}
@@ -789,7 +789,7 @@ export default function LivePortfolio() {
 
             {/* ══════════════════ SINGLE-LEG BOOK ══════════════════ */}
             {view === 'single' && (err ? (
-                <Card title="Portfolio unavailable">
+                <Card collapsible={false} title="Portfolio unavailable">
                     <p className="text-xs text-danger">{String(err)}</p>
                 </Card>
             ) : !summary ? (

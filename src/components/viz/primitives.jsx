@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useId, useState } from 'react';
 import DocLink from '../DocLink.jsx';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Loader2, X } from 'lucide-react';
+import { ArrowLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Loader2, X } from 'lucide-react';
+import useCollapse, { deriveFoldKey, setAllFolded } from '../../hooks/useCollapse.js';
 import { STATUS_ICON, inr, useChartTheme } from './tokens';
 
 /**
@@ -32,24 +33,99 @@ import { STATUS_ICON, inr, useChartTheme } from './tokens';
  * and would only pay for a subscription they cannot use.
  */
 
-// ── Card ─────────────────────────────────────────────────────────────────────
+// ── Card / Panel — foldable sections (the platform's accordion) ──────────────
 
 // `docs` = a documentation target ("page#section") — renders the 📖 link that
 // opens this section's explanation (see components/DocLink.jsx).
-export function Card({ title, subtitle, right, children, className = '', docs = null }) {
+//
+// FOLDING. Pages here run long (Deploy, Live Portfolio, Risk, Alerts…), so every
+// titled Card folds behind its header by default: a chevron button in the
+// heading (WAI-ARIA accordion: <h2><button aria-expanded aria-controls>), open
+// on first visit, remembered per panel (hooks/useCollapse.js), and reached by
+// the page's "Collapse all / Expand all" (CollapseAllControl). The body
+// UNMOUNTS while folded — a folded chart costs nothing and re-measures its
+// width when it comes back.
+//   collapsible  false for a card that must always show (default: any titled card)
+//   defaultOpen  first-visit state (false for detail most people do not need)
+//   storageKey   where to remember it (default: page + docs anchor + title text)
+//   open/onOpenChange  controlled — e.g. pause a poll while folded
+//   summary      one line shown in the header ONLY while folded
+//   variant      'card' (default) | 'panel' — the rounded-xl, p-4 page panel | 'inset' — a section inside a panel
+export function Card({
+    title, subtitle, right, children, className = '', docs = null, icon = null, iconClassName = 'text-primary-ink',
+    collapsible = undefined, defaultOpen = true, storageKey = undefined, open: openProp, onOpenChange,
+    summary = null, bodyClassName = '', variant = 'card', ref = undefined,   // React 19: ref is a plain prop
+    titleAfter = null,   // beside the toggle, inside the heading — help popovers, counts (never inside the button)
+}) {
+    const Icon = icon;
+    const fold = collapsible ?? !!title;
+    const key = storageKey !== undefined ? storageKey : (fold ? deriveFoldKey({ docs, title }) : null);
+    // controlled → the owner remembers it; uncontrolled → remembered here
+    const { open: openState, toggle } = useCollapse({ storageKey: fold && typeof openProp !== 'boolean' ? key : null, defaultOpen, open: openProp, onOpenChange });
+    const open = fold ? openState : true;
+    const bodyId = useId();
+    const roomy = variant === 'panel' || variant === 'inset';
+    const shell = variant === 'panel' ? 'bg-surface rounded-xl border border-line'
+        : variant === 'inset' ? 'bg-slate-800 rounded-lg'          // a section inside a panel (Backtest results)
+        : 'bg-surface border border-line/60 rounded-lg';
+    const head = roomy ? `px-4 pt-4 ${open ? 'pb-2' : 'pb-4'}` : `px-4 pt-3 ${open ? 'pb-2' : 'pb-3'}`;
+    const heading = (
+        <span className="inline-flex items-center gap-2 min-w-0">
+            {Icon && <Icon className={`w-4 h-4 flex-shrink-0 ${iconClassName}`} aria-hidden="true" />}
+            <span className="min-w-0">{title}</span>
+        </span>
+    );
     return (
-        <div className={`bg-surface border border-line/60 rounded-lg ${className}`}>
+        <div ref={ref} className={`${shell} ${className}`}>
             {(title || right) && (
-                <div className="flex items-start justify-between gap-3 px-4 pt-3 pb-2">
+                <div className={`flex items-start justify-between gap-x-3 gap-y-2 flex-wrap ${head}`}>
                     <div className="min-w-0">
-                        {title && <h2 className="text-sm font-semibold text-fg">{title}{docs && <DocLink to={docs} className="ml-2" />}</h2>}
+                        {title && (
+                            <h2 className="text-sm font-semibold text-fg">
+                                {fold ? (
+                                    <button type="button" onClick={toggle} aria-expanded={open} aria-controls={bodyId}
+                                        title={open ? 'Fold this section' : 'Unfold this section'}
+                                        className="inline-flex items-start gap-1 text-left rounded hover:text-primary-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
+                                        <ChevronRight aria-hidden="true"
+                                            className={`w-4 h-4 mt-px flex-shrink-0 text-fg-4 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} />
+                                        {heading}
+                                    </button>
+                                ) : heading}
+                                {titleAfter}
+                                {docs && <DocLink to={docs} className="ml-2" />}
+                            </h2>
+                        )}
                         {subtitle && <p className="text-xs text-fg-5 mt-0.5">{subtitle}</p>}
+                        {!open && summary && <p className="text-xs text-fg-4 mt-0.5 truncate">{summary}</p>}
                     </div>
-                    {right && <div className="flex-shrink-0 text-xs text-fg-4">{right}</div>}
+                    {right && <div className="min-w-0 max-w-full text-xs text-fg-4">{right}</div>}
                 </div>
             )}
-            <div className="px-4 pb-4">{children}</div>
+            {open && <div id={bodyId} className={`px-4 pb-4 ${bodyClassName}`}>{children}</div>}
         </div>
+    );
+}
+
+/** The page panel (rounded-xl, p-4) — a Card with the look the hand-built panels had. Folds the same way. */
+export function Panel(props) {
+    return <Card variant="panel" {...props} />;
+}
+
+/**
+ * "Collapse all / Expand all" for a long page. Every foldable Card/Panel/
+ * CollapsibleCard mounted on the page answers it (and remembers the choice).
+ */
+export function CollapseAllControl({ className = '' }) {
+    const btn = 'inline-flex items-center gap-1 px-2 py-1 rounded border border-line-2 bg-card-2 text-2xs text-fg-4 hover:text-fg';
+    return (
+        <span className={`inline-flex items-center gap-1 ${className}`} role="group" aria-label="Fold sections">
+            <button type="button" className={btn} onClick={() => setAllFolded(false)} title="Fold every section on this page">
+                <ChevronsDownUp className="w-3.5 h-3.5" aria-hidden="true" />Collapse all
+            </button>
+            <button type="button" className={btn} onClick={() => setAllFolded(true)} title="Unfold every section on this page">
+                <ChevronsUpDown className="w-3.5 h-3.5" aria-hidden="true" />Expand all
+            </button>
+        </span>
     );
 }
 
@@ -522,7 +598,7 @@ export function Findings({ findings = [], emptyText = 'No issues detected in thi
  * invisible to no-unused-vars, and renaming it `_Icon` to silence the rule is
  * exactly what produced two `ReferenceError: Icon is not defined` crashes.
  */
-export function PageHeader({ icon, title, subtitle, badges, actions, backTo, backLabel = 'Back', className = '', docs = null }) {
+export function PageHeader({ icon, title, subtitle, badges, actions, backTo, backLabel = 'Back', className = '', docs = null, foldAll = false }) {
     const Icon = icon;
     return (
         <header className={`flex items-start justify-between flex-wrap gap-3 ${className}`}>
@@ -543,7 +619,12 @@ export function PageHeader({ icon, title, subtitle, badges, actions, backTo, bac
                     {subtitle && <p className="text-xs text-fg-5 mt-1 max-w-3xl">{subtitle}</p>}
                 </div>
             </div>
-            {actions && <div className="flex items-center gap-2 flex-wrap min-w-0 max-w-full">{actions}</div>}
+            {(actions || foldAll) && (
+                <div className="flex items-center gap-2 flex-wrap min-w-0 max-w-full">
+                    {actions}
+                    {foldAll && <CollapseAllControl />}
+                </div>
+            )}
         </header>
     );
 }

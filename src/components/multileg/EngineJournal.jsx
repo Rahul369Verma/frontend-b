@@ -4,6 +4,8 @@ import { API_URL } from '../../config/api.js';
 import { usePolling } from '../../hooks/usePolling.js';
 import { PAGE, buildQuery, journalReducer, JOURNAL_EMPTY } from './journalQuery.js';
 import DocLink from '../DocLink.jsx';
+import { Panel } from '../viz/primitives';
+import useCollapse from '../../hooks/useCollapse.js';
 
 /**
  * Engine journal for the Deploy tab — pages the DURABLE multileg journal
@@ -43,6 +45,8 @@ export default function EngineJournal({ deployments = [], repeats = {}, focus = 
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const panelRef = useRef(null);
+    // folded: no polling, and a deployment focused from elsewhere unfolds it
+    const { open, setOpen } = useCollapse({ storageKey: 'fold:multi-leg|journal', defaultOpen: true });
     const filterRef = useRef(filter);                 // latest filter, for in-flight staleness checks
     useEffect(() => { filterRef.current = filter; }, [filter]);   // declared BEFORE the loader effect below
 
@@ -70,8 +74,11 @@ export default function EngineJournal({ deployments = [], repeats = {}, focus = 
     // tab with an old focus must not yank the page down to the journal
     const mountFocus = useRef(focus);
     useEffect(() => {
-        if (focus?.id && focus !== mountFocus.current) panelRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-    }, [focus]);
+        if (focus?.id && focus !== mountFocus.current) {
+            setOpen(true);
+            panelRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+        }
+    }, [focus]); // eslint-disable-line react-hooks/exhaustive-deps -- setOpen identity is irrelevant here
 
     // head page: loaded on filter change, merged on every poll
     const loadHead = useCallback((f, reset) => axios.get(`${API_URL}/multileg/events?${buildQuery(f)}`)
@@ -89,7 +96,14 @@ export default function EngineJournal({ deployments = [], repeats = {}, focus = 
         loadHead(filter, true).finally(() => { if (filterRef.current === filter) setLoading(false); });
     }, [filter, active, loadHead]);
     useEffect(() => { if (active) loadSummary(); }, [active, loadSummary]);
-    usePolling(() => { loadHead(filterRef.current, false); loadSummary(); }, active ? 10000 : null, { immediate: false });
+    usePolling(() => { loadHead(filterRef.current, false); loadSummary(); }, active && open ? 10000 : null, { immediate: false });
+    // unfolding catches up at once instead of waiting a full poll (a fold→unfold
+    // CHANGE only — mount is already covered by the filter loader above)
+    const wasOpen = useRef(open);
+    useEffect(() => {
+        if (open && !wasOpen.current && active) { loadHead(filterRef.current, false); loadSummary(); }
+        wasOpen.current = open;
+    }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const loadOlder = () => {
         if (!next || loading) return;
@@ -138,14 +152,12 @@ export default function EngineJournal({ deployments = [], repeats = {}, focus = 
     }, [repeats, filter.deploymentId, deployments]);
 
     return (
-        <div ref={panelRef} className="bg-surface rounded-xl border border-line p-4 flex flex-col max-h-[40rem]">
-            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 mb-2">
-                <div className="text-sm font-semibold text-fg">Engine events <DocLink to="multi-leg#engine-journal" /></div>
-                <div className="text-3xs text-fg-5">
+        <Panel ref={panelRef} className="flex flex-col max-h-[40rem]" bodyClassName="flex-1 min-h-0 flex flex-col"
+            title="Engine events" docs="multi-leg#engine-journal" open={open} onOpenChange={setOpen}
+            right={<div className="text-3xs text-fg-5">
                     {total != null ? `${nf(rows.length)} of ${nf(total)} shown` : rows.length ? `${nf(rows.length)} shown` : ''}
                     {summary ? ` · ${nf(summary.total)} today` : ''}
-                </div>
-            </div>
+                </div>}>
 
             <div className="flex flex-wrap items-end gap-2 mb-2 text-2xs">
                 <label className="flex flex-col gap-0.5 min-w-0">
@@ -221,6 +233,6 @@ export default function EngineJournal({ deployments = [], repeats = {}, focus = 
                     </div>
                 </div>
             )}
-        </div>
+        </Panel>
     );
 }

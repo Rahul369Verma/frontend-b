@@ -3,7 +3,8 @@ import DeploymentsPanel from '../components/DeploymentsPanel';
 import DirectionConfidencePanel from '../components/risk/DirectionConfidencePanel';
 import TradeDetailsModal from '../components/TradeDetailsModal';
 import CollapsibleCard from '../components/CollapsibleCard';
-import { StatRow, StatTile, PageHeader, Chip, ModeChip, Spinner } from '../components/viz/primitives';
+import { StatRow, StatTile, PageHeader, Chip, ModeChip, Spinner, Panel } from '../components/viz/primitives';
+import useCollapse from '../hooks/useCollapse.js';
 import DocLink from '../components/DocLink.jsx';
 import { Play, Square, Activity, DollarSign, TrendingUp, AlertTriangle, Shield, ShoppingCart, List, Database, ChevronDown, ChevronRight, LayoutDashboard } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -36,16 +37,9 @@ export default function Dashboard() {
   const [tradesLimit, setTradesLimit] = useState(10);
   // Trade History → Details modal (full doc + direction-gate verdict for that trade)
   const [detailTradeId, setDetailTradeId] = useState(null);
-  // Trade History fold state (persisted). Default OPEN.
-  const [tradesExpanded, setTradesExpanded] = useState(() => {
-    try { const v = localStorage.getItem('dash:tradesOpen'); return v === null ? true : v === '1'; }
-    catch { return true; }
-  });
-  const toggleTrades = () => setTradesExpanded(prev => {
-    const next = !prev;
-    try { localStorage.setItem('dash:tradesOpen', next ? '1' : '0'); } catch { /* localStorage unavailable (private mode / blocked cookies) — the preference just does not persist */ }
-    return next;
-  });
+  // Trade History fold state (persisted, same key as before). Default OPEN. Shared
+  // hook, so the page's "Collapse all / Expand all" reaches it.
+  const { open: tradesExpanded, toggle: toggleTrades } = useCollapse({ storageKey: 'dash:tradesOpen', defaultOpen: true });
 
   // ── Live Activity Feed state ─────────────────────────────────────────────
   // Unified timeline from /api/live-activity (trades + AI rejects/errors + engine errors).
@@ -59,7 +53,8 @@ export default function Dashboard() {
     tradeId: '',
     limit: 100,
   });
-  const [activityExpanded, setActivityExpanded] = useState(true);
+  // folded = polling paused (see the effect below); remembered, and answers "Collapse all"
+  const { open: activityExpanded, toggle: toggleActivity } = useCollapse({ storageKey: 'dash:activityOpen', defaultOpen: true });
   const [activityDetail, setActivityDetail] = useState(null);  // selected event for modal
 
   // ── Web Session Health state ─────────────────────────────────────────────
@@ -556,7 +551,7 @@ export default function Dashboard() {
       {/* Header — one PageHeader for every page; the mode and the broker
           session are chips beside the title, the system monitor sits in the
           actions slot on the right. */}
-      <PageHeader docs="dashboard#overview"
+      <PageHeader foldAll docs="dashboard#overview"
         icon={LayoutDashboard}
         title="Live Dashboard"
         badges={(
@@ -844,16 +839,10 @@ export default function Dashboard() {
           Hover any dot for the exact reason + timestamp.
           The "current" status is shown left of the dot ribbon. */}
       {signalStatus && Object.keys(signalStatus).length > 0 && (
-          <div className="bg-surface rounded-xl border border-line p-4">
-              <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-bold flex items-center gap-2 text-fg-2">
-                      <Activity className="w-4 h-4 text-primary-ink" /> Signal Status Timeline
-                      <DocLink to="dashboard#signal-timeline" />
-                  </h3>
-                  <span className="text-3xs text-fg-5">
+          <Panel icon={Activity} title="Signal Status Timeline" docs="dashboard#signal-timeline" storageKey="fold:dashboard|signal-timeline"
+              right={<span className="text-3xs text-fg-5">
                       newest →  · last {Math.max(...Object.values(signalStatus).map(s => s?.history?.length || 0), 0)} checks per symbol
-                  </span>
-              </div>
+                  </span>}>
               <div className="space-y-1.5">
                   {Object.entries(signalStatus).map(([sym, info]) => {
                       const current = info?.current;
@@ -902,7 +891,7 @@ export default function Dashboard() {
                       );
                   })}
               </div>
-          </div>
+          </Panel>
       )}
 
       {/* ── Live Positions Panel ──────────────────────────────────────
@@ -910,26 +899,16 @@ export default function Dashboard() {
           🧪 Sim buttons cover manual signal testing, and each position card
           has its own Close button for individual exits. */}
       <div className="grid grid-cols-1 gap-8">
-        <div className="bg-surface rounded-xl border border-line p-6">
-          <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                  <ShoppingCart className="w-5 h-5 text-primary-ink" /> Live Positions
-                  <DocLink to="dashboard#live-positions" />
-                  {positions.length > 0 && (
-                      <span className="text-xs font-normal text-fg-5">
-                          {positions.length} open
-                      </span>
-                  )}
-              </h2>
-              {positions.length > 0 && (() => {
+        <CollapsibleCard icon={ShoppingCart} docs="dashboard#live-positions" storageKey="dash:positionsOpen"
+          title={<>Live Positions{positions.length > 0 && <span className="ml-2 text-xs font-normal text-fg-5">{positions.length} open</span>}</>}
+          right={positions.length > 0 && (() => {
                   const totalPnl = positions.reduce((s, p) => s + (p.pnl || 0), 0);
                   return (
                       <span className={`text-sm font-mono font-bold ${totalPnl > 0 ? 'text-success' : totalPnl < 0 ? 'text-danger' : 'text-fg-4'}`}>
                           {totalPnl >= 0 ? '+' : ''}₹{Math.round(totalPnl).toLocaleString()} total
                       </span>
                   );
-              })()}
-          </div>
+              })()}>
           {positions.length > 0 ? (
               <div className="space-y-3">
                   {positions.map((pos, i) => {
@@ -1478,7 +1457,7 @@ export default function Dashboard() {
                   <div className="text-3xs text-fg-5 mt-1">Waiting for the next signal…</div>
               </div>
           )}
-        </div>
+        </CollapsibleCard>
 
       </div>
 
@@ -1759,7 +1738,8 @@ export default function Dashboard() {
                       {activityLoading && <span className="text-3xs text-fg-5 font-normal">refreshing…</span>}
                   </h2>
                   <button
-                      onClick={() => setActivityExpanded(v => !v)}
+                      onClick={toggleActivity}
+                      aria-expanded={activityExpanded}
                       className="text-xs px-2 py-1 rounded border border-transparent bg-slate-700 hover:bg-slate-600 text-fg-2"
                       title={activityExpanded ? 'Pause polling (collapse)' : 'Resume polling'}
                   >

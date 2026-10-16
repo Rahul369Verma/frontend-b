@@ -96,7 +96,7 @@ export default function Risk() {
 
     return (
         <div className="p-6 space-y-4">
-            <PageHeader docs="risk" icon={Gauge} title="Portfolio Risk"
+            <PageHeader foldAll docs="risk" icon={Gauge} title="Portfolio Risk"
                 subtitle="Whole-account view across the single-leg and multi-leg engines. Read-only."
                 actions={(
                     <>

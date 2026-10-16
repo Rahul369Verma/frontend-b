@@ -283,7 +283,7 @@ export default function MarketRules() {
 
     return (
         <div className="p-6 space-y-4">
-            <PageHeader docs="market-rules#overview"
+            <PageHeader foldAll docs="market-rules#overview"
                 icon={ScrollText}
                 title="Market Rules"
                 subtitle="Lots, ticks, sessions, holidays and MCX margins, checked against NSE, Fyers, Upstox and Zerodha twice a day. A value is applied only when sources agree, the exchange says so, or it is the only source — anything else is held and shown here."

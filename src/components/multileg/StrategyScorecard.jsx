@@ -17,7 +17,7 @@ import { Link } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Legend } from 'recharts';
 import ZoomableChart from '../charts/ZoomableChart';
 import { ROUTES } from '../../config/routes.js';
-import { Chip } from '../viz/primitives';
+import { Chip, Panel } from '../viz/primitives';
 import { pnlTone, rupeeTick } from '../viz/tokens';
 import { useChartTheme } from '../../theme/chartTheme.js';
 import useRemWidth from '../../hooks/useRemWidth';
@@ -262,14 +262,9 @@ export default function StrategyScorecard({ sc, templates = [], single = false }
     const counts = data?.verdictCounts || {};
 
     return (
-            <div ref={ref} className="bg-surface rounded-xl border border-line p-4">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 mb-2">
-                    <h2 className="text-sm font-semibold text-fg mr-auto">
-                        Strategies {data ? `(${allRows.length})` : ''}
-                        <span className="text-fg-5 font-normal text-2xs"> — booked results per deployment, and live vs the backtest it was deployed from</span>
-                        <DocLink to="multi-leg#results-tab" className="ml-2" />
-                    </h2>
-                    {!single && allRows.length > 0 && (
+            <Panel ref={ref} storageKey="fold:results|strategies" title={`Strategies ${data ? `(${allRows.length})` : ''}`}
+                subtitle="Booked results per deployment, and live vs the backtest it was deployed from" docs="multi-leg#results-tab"
+                right={!single && allRows.length > 0 && (
                         <div className="flex flex-wrap items-center gap-2">
                             <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Filter strategies…"
                                 aria-label="Filter strategies" className="h-8 w-44 bg-slate-800 border border-line rounded-md px-2 text-xs text-fg-2 placeholder:text-fg-5" />
@@ -279,8 +274,7 @@ export default function StrategyScorecard({ sc, templates = [], single = false }
                                 </select>
                             </label>
                         </div>
-                    )}
-                </div>
+                    )}>
                 {Object.keys(counts).length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mb-2 text-2xs text-fg-5">
                         {Object.entries(counts).map(([v, n]) => (
@@ -388,6 +382,6 @@ export default function StrategyScorecard({ sc, templates = [], single = false }
                     <div className="mt-2 text-2xs text-fg-5">Tick 2–{MAX_COMPARE} strategies to overlay their equity curves.{pickedRows.length === 1 ? ' One picked — pick one more.' : ''}</div>
                 )}
                 {pickedRows.length >= 2 && <ComparePanel rows={pickedRows} onClear={() => setPicked([])} />}
-            </div>
+            </Panel>
     );
 }

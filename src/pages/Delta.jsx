@@ -131,7 +131,7 @@ export default function Delta() {
 
     return (
         <div className="p-6 space-y-4">
-            <PageHeader docs="delta#overview" icon={Bitcoin} title="Delta Exchange"
+            <PageHeader foldAll docs="delta#overview" icon={Bitcoin} title="Delta Exchange"
                 subtitle="Crypto and tokenised-asset derivatives (BTC, ETH, XAUT gold, tokenised US stocks…) on Delta Exchange India — 24×7. Prices are in USD; P&L is in rupees at Delta India's fixed ₹85 per USD."
                 actions={(
                     <button type="button" onClick={refresh} disabled={busy}

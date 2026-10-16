@@ -4,6 +4,7 @@ import { Chip } from '../viz/primitives';
 import { pnlTone } from '../viz/tokens';
 import { fmt, num, pfText, pfValue, shortSym } from './builderFormat';
 import useRemWidth from '../../hooks/useRemWidth';
+import useCollapse from '../../hooks/useCollapse.js';
 import useLocalStorage from '../../hooks/useLocalStorage';
 import DocLink from '../DocLink.jsx';
 
@@ -305,9 +306,10 @@ export default function SavedStrategiesPanel({
     // switches); otherwise it manages itself from `defaultOpen`.
     open: openProp, onOpenChange, defaultOpen = false,
 }) {
-    const [openLocal, setOpenLocal] = useState(defaultOpen);
-    const expanded = openProp ?? openLocal;
-    const setExpanded = (v) => { if (onOpenChange) onOpenChange(v); if (openProp === undefined) setOpenLocal(v); };
+    // shared fold state: remembered when uncontrolled, and answers "Collapse all / Expand all"
+    const { open: expanded, setOpen: setExpanded } = useCollapse({
+        storageKey: typeof openProp === 'boolean' ? null : 'fold:saved-strategies', defaultOpen, open: openProp, onOpenChange,
+    });
     const bodyId = useId();
     const ref = useRef(null);
     const rem = useRemWidth(ref);

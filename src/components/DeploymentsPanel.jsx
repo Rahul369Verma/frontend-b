@@ -42,6 +42,7 @@ import { Segmented } from './viz/primitives';
 import { PromoteDialog } from './golive/goLiveShared.jsx';
 import { GOLIVE } from './golive/goLiveApi.js';
 import DocLink from './DocLink.jsx';
+import useCollapse from '../hooks/useCollapse.js';
 
 
 // Fallback list — used only if /api/strategies/registry doesn't respond
@@ -148,15 +149,8 @@ export default function DeploymentsPanel({ onTest, onSim, onManualTrade, session
     const [search, setSearch] = useState('');
     // Whole-panel accordion. Persisted so the user's fold choice survives reload.
     // Defaults OPEN — this is the primary management surface.
-    const [panelOpen, setPanelOpen] = useState(() => {
-        try { const v = localStorage.getItem('dash:deploymentsOpen'); return v === null ? true : v === '1'; }
-        catch { return true; }
-    });
-    const togglePanel = () => setPanelOpen(prev => {
-        const next = !prev;
-        try { localStorage.setItem('dash:deploymentsOpen', next ? '1' : '0'); } catch { /* localStorage unavailable (private mode / blocked cookies) — the preference just does not persist */ }
-        return next;
-    });
+    // Shared fold state (hooks/useCollapse.js, same storage key) — answers "Collapse all" too.
+    const { open: panelOpen, toggle: togglePanel } = useCollapse({ storageKey: 'dash:deploymentsOpen', defaultOpen: true });
 
     // Fetch the live strategy registry + the user's saved backtest configs
     // once on mount. The saved configs power "Start from Saved Config" in the

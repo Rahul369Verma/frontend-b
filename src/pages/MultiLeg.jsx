@@ -14,12 +14,13 @@ import { normalizeMultilegTrade, buildDayCurves } from '../utils/dayCurves';
 import AutoRunProgress from '../components/multileg/AutoRunProgress';
 import { estimateStageSizes, sizesForRequest, runSummary, useRunTracker } from '../components/multileg/runProgress';
 import ZoomableChart from '../components/charts/ZoomableChart';
-import { PageHeader, Tabs } from '../components/viz/primitives';
+import { PageHeader, Tabs, Panel } from '../components/viz/primitives';
 import { ROUTES } from '../config/routes.js';
 import { riskOpenMin, riskCloseMin } from '../config/marketSession.js';
 import { HELP } from '../data/multilegHelp';
 import { useChartTheme } from '../theme/chartTheme.js';
 import { pollInterval } from '../hooks/usePolling.js';
+import useCollapse from '../hooks/useCollapse.js';
 import { newestExitIso, mergeTradesById } from '../utils/tradeMerge.js';
 import { API_URL } from '../config/api.js';
 import { pnlTone } from '../components/viz/tokens';
@@ -235,8 +236,9 @@ export default function MultiLeg() {
     const [savedDetail, setSavedDetail] = useState(null); // _id of the expanded saved-strategy row
     // Deploy-tab accordions — CLOSED on every page load (user, 13-Oct), kept
     // while you move between tabs. Deliberately not in localStorage.
-    const [savedPanelOpen, setSavedPanelOpen] = useState(false);
-    const [sigTimelineOpen, setSigTimelineOpen] = useState(false);
+    // closed by default (the Deploy tab opens on the live deployments); remembered, and folded/unfolded by "Collapse all"
+    const { open: savedPanelOpen, setOpen: setSavedPanelOpen } = useCollapse({ storageKey: 'fold:multi-leg|saved', defaultOpen: false });
+    const { open: sigTimelineOpen, setOpen: setSigTimelineOpen } = useCollapse({ storageKey: 'fold:multi-leg|signal-timeline', defaultOpen: false });
     const [depDetail, setDepDetail] = useState(null);     // _id of the expanded deployment (full order detail)
     const [depChart, setDepChart] = useState(null);       // _id of the deployment showing its live payoff chart
     const [depPayoff, setDepPayoff] = useState(null);     // { id, data } — backend risk-graph (expiry + T+0 curves)
@@ -1199,8 +1201,7 @@ export default function MultiLeg() {
     );
 
     const SetupCard = (
-        <div className="bg-surface rounded-xl border border-line p-4">
-            <div className="text-sm font-semibold text-fg mb-3 flex items-center gap-2"><SlidersHorizontal className="w-4 h-4 text-primary-ink" /> Setup — {tpl?.name || tplKey}</div>
+        <Panel icon={SlidersHorizontal} title={<>Setup — {tpl?.name || tplKey}</>} storageKey="fold:multi-leg|setup">
             <MarketRead symbol={symbol} presets={presets} onApplyPreset={applyPreset} />
             <BookCost symbol={symbol} />
             <div className="grid grid-cols-2 gap-2 text-xs">
@@ -1428,12 +1429,11 @@ export default function MultiLeg() {
                     <div className="text-3xs text-fg-5 mt-2">{tpl?.notes}</div>
                 </div>
             )}
-        </div>
+        </Panel>
     );
 
     const PayoffCard = (
-        <div className="bg-surface rounded-xl border border-line p-4">
-            <div className="text-sm font-semibold text-fg mb-2">Payoff at expiry (per unit) <DocLink to="multi-leg#setup-panel" /></div>
+        <Panel title="Payoff at expiry (per unit)" docs="multi-leg#setup-panel">
             {preview?.curve ? (
                 <ZoomableChart data={preview.curve} height={300}>
                     <LineChart >
@@ -1449,7 +1449,7 @@ export default function MultiLeg() {
             ) : (
                 <div className="text-xs text-fg-5 py-12 text-center">{tpl?.multiExpiry ? 'Calendar: risk profile is computed at NEAR expiry (see numbers on the left).' : 'Loading…'}</div>
             )}
-        </div>
+        </Panel>
     );
 
     const SymbolChips = (max) => (
@@ -1539,7 +1539,7 @@ export default function MultiLeg() {
             <PromoteDialog open={!!promote} kind="multileg" id={promote?.id} name={promote?.name}
                 onClose={() => { if (promote) pushToast(`“${promote.name}” stays on PAPER until it is promoted (Go-Live page)`, 'info', 6000); setPromote(null); }}
                 onDone={(res) => { pushToast(`LIVE — canary: first ${res.canary.trades} trades at ${res.canary.lots} lot(s)`, 'success', 8000); setPromote(null); refreshDeployments(); }} />
-            <PageHeader docs="multi-leg#overview" className="mb-3" icon={Layers} title="Multi-Leg Structures"
+            <PageHeader foldAll docs="multi-leg#overview" className="mb-3" icon={Layers} title="Multi-Leg Structures"
                 subtitle={<>Spreads · butterflies · condors · straddles · ratio backspreads · calendars — backtest, optimize, scan, and auto-race across symbols before any deployment.</>}
                 actions={(
                     <Link to={ROUTES.livePortfolioMulti}
@@ -1649,8 +1649,7 @@ export default function MultiLeg() {
 
                     {result?.trades?.length > 0 && (
                         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
-                            <div className="bg-surface rounded-xl border border-line p-4">
-                                <div className="text-sm font-semibold text-fg mb-2">Equity (net, ₹) <DocLink to="multi-leg#backtest-tab" /></div>
+                            <Panel title="Equity (net, ₹)" docs="multi-leg#backtest-tab">
                                 <ZoomableChart data={equity} height={300}>
                                     <LineChart >
                                         <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
@@ -1661,9 +1660,8 @@ export default function MultiLeg() {
                                         <Line type="monotone" dataKey="equity" stroke={ct.categorical[0]} dot={false} strokeWidth={2} />
                                     </LineChart>
                                 </ZoomableChart>
-                            </div>
-                            <div className="bg-surface rounded-xl border border-line p-4 overflow-x-auto">
-                                <div className="text-sm font-semibold text-fg mb-2">Trades ({result.trades.length}) <DocLink to="multi-leg#backtest-tab" /></div>
+                            </Panel>
+                            <Panel title={`Trades (${result.trades.length})`} docs="multi-leg#backtest-tab" bodyClassName="overflow-x-auto">
                                 <div className="max-h-[21.25rem] overflow-y-auto">
                                     <table className="w-full text-2xs text-fg-3">
                                         <thead className="sticky top-0 bg-surface"><tr className="text-fg-5 text-left"><th>Entry</th><th>Exit</th><th>Hold</th><th>Reason</th><th className="text-right">Spot in→out</th><th className="text-right">Credit</th><th className="text-right" title="Position size actually taken. 'risk' basis = sized to risk_per_trade, so it varies per trade.">Lots</th><th className="text-right" title="Worst per-unit delta the structure carried at ANY point in its life. A 'neutral' structure that reaches 0.5+ was not neutral. Exit-time delta hides this because exits cluster at DTE 0 where the reading is dominated by terminal gamma.">Worst Δ/u</th><th className="text-right">Margin</th><th className="text-right">Net ₹</th></tr></thead>
@@ -1687,7 +1685,7 @@ export default function MultiLeg() {
                                         </tbody>
                                     </table>
                                 </div>
-                            </div>
+                            </Panel>
                         </div>
                     )}
                 </>
@@ -1733,10 +1731,7 @@ export default function MultiLeg() {
                     </div>
 
                     {sweep?.top && (
-                        <div className="bg-surface rounded-xl border border-line p-4 mt-4 overflow-x-auto">
-                            <div className="text-sm font-semibold text-fg mb-1">
-                                Sweep — {sweep.combos} combos over {sweep.rounds} round{sweep.rounds > 1 ? 's' : ''} ({(sweep.combosPerRound || []).join(' + ')}), ranked by {sweep.split > 0 ? 'VALIDATION' : 'full-period'} {METRICS.find(m => m.v === sweep.metric)?.label}
-                            </div>
+                        <Panel className="mt-4" bodyClassName="overflow-x-auto" storageKey="fold:multi-leg|sweep-results" title={<>Sweep — {sweep.combos} combos over {sweep.rounds} round{sweep.rounds > 1 ? 's' : ''} ({(sweep.combosPerRound || []).join(' + ')}), ranked by {sweep.split > 0 ? 'VALIDATION' : 'full-period'} {METRICS.find(m => m.v === sweep.metric)?.label}</>}>
                             {sweep.window && <div className="text-2xs text-fg-5 mb-2">Train {sweep.window.trainDays}d → validate on the last {sweep.window.valDays}d (out-of-sample). Distrust combos whose train ≫ validation.</div>}
                             <table className="w-full text-2xs text-fg-3">
                                 <thead><tr className="text-fg-5 text-left">
@@ -1771,7 +1766,7 @@ export default function MultiLeg() {
                                     })}
                                 </tbody>
                             </table>
-                        </div>
+                        </Panel>
                     )}
                 </>
             )}
@@ -1801,10 +1796,7 @@ export default function MultiLeg() {
                     </div>
 
                     {scan?.rows && (
-                        <div className="bg-surface rounded-xl border border-line p-4 overflow-x-auto">
-                            <div className="text-sm font-semibold text-fg mb-1">
-                                Scan — {scan.templatesScanned} structures × {scan.symbolsScanned} symbols, ranked by {scan.split > 0 ? 'VALIDATION' : 'full-period'} {METRICS.find(m => m.v === scan.metric)?.label}
-                            </div>
+                        <Panel bodyClassName="overflow-x-auto" storageKey="fold:multi-leg|scan-results" title={<>Scan — {scan.templatesScanned} structures × {scan.symbolsScanned} symbols, ranked by {scan.split > 0 ? 'VALIDATION' : 'full-period'} {METRICS.find(m => m.v === scan.metric)?.label}</>}>
                             <div className="text-2xs text-fg-5 mb-2">All at template defaults — ▶ Test runs the full backtest, ⚙ Tune opens it in the Optimizer.</div>
                             <table className="w-full text-2xs text-fg-3">
                                 <thead><tr className="text-fg-5 text-left">
@@ -1847,7 +1839,7 @@ export default function MultiLeg() {
                                     })}
                                 </tbody>
                             </table>
-                        </div>
+                        </Panel>
                     )}
                 </>
             )}
@@ -1992,10 +1984,8 @@ export default function MultiLeg() {
                     </div>
 
                     {autoJobs.length > 0 && (
-                        <div className="bg-surface rounded-xl border border-line p-3 mb-4">
-                            <div className="flex items-center justify-between mb-2">
-                                <div className="text-xs font-semibold text-fg">Recent runs (persisted — re-attach after a refresh) <DocLink to="multi-leg#auto-tab" /></div>
-                                <div className="flex items-center gap-2">
+                        <Panel className="mb-4" title="Recent runs (persisted — re-attach after a refresh)" docs="multi-leg#auto-tab" storageKey="fold:multi-leg|auto-runs"
+                            right={<div className="flex items-center gap-2">
                                     <span className="text-3xs text-fg-5 hidden sm:inline" title="A run that dies on its own (server restart or an error) is restarted from its last checkpoint, up to 3 times in a row. A run the resource guard parks (low memory, market hours) restarts by itself as soon as there is room again — those parks don't use up the 3 tries, because the guard parks a multi-day run every trading morning. A run YOU pause is never restarted automatically.">
                                         crash or resource guard → auto-resume · paused by you → stays paused
                                     </span>
@@ -2005,8 +1995,7 @@ export default function MultiLeg() {
                                             Clear finished
                                         </button>
                                     )}
-                                </div>
-                            </div>
+                                </div>}>
                             <div className="space-y-1 text-2xs">
                                 {autoJobs.map(j => {
                                     const cp = j.checkpoint || {};
@@ -2057,7 +2046,7 @@ export default function MultiLeg() {
                                     );
                                 })}
                             </div>
-                        </div>
+                        </Panel>
                     )}
 
                     {autoState?.status === 'done' && autoState.result?.champions?.length > 0 && (
@@ -2104,8 +2093,7 @@ export default function MultiLeg() {
                                 ))}
                             </div>
                             {autoState.result.leaderboard?.length > 0 && (
-                                <div className="bg-surface rounded-xl border border-line p-4 mt-4 overflow-x-auto">
-                                    <div className="text-sm font-semibold text-fg mb-2">Full leaderboard (stage-3 survivors) <DocLink to="multi-leg#auto-tab" /></div>
+                                <Panel className="mt-4" bodyClassName="overflow-x-auto" title="Full leaderboard (stage-3 survivors)" docs="multi-leg#auto-tab">
                                     <table className="w-full text-2xs text-fg-3">
                                         <thead><tr className="text-fg-5 text-left"><th>#</th><th>Structure</th><th>Symbol</th><th>Signal</th><th className="text-right">Val net ₹</th><th className="text-right">Val PF</th><th className="text-right">Val win%</th><th className="text-right">Train net ₹</th><th className="text-right">OOS</th></tr></thead>
                                         <tbody>
@@ -2124,7 +2112,7 @@ export default function MultiLeg() {
                                             ))}
                                         </tbody>
                                     </table>
-                                </div>
+                                </Panel>
                             )}
                         </div>
                     )}
@@ -2196,19 +2184,10 @@ export default function MultiLeg() {
 
                     {/* ── Signal Status Timeline (per deployment) ────────────────── */}
                     {mlDeps.signalStatus && Object.keys(mlDeps.signalStatus).length > 0 && (
-                        <div className="bg-surface rounded-xl border border-line p-4 mb-4">
-                            <div className={`flex items-center justify-between gap-2 flex-wrap ${sigTimelineOpen ? 'mb-2' : ''}`}>
-                                <h2 className="text-sm font-semibold text-fg flex items-center gap-2">
-                                    <button type="button" onClick={() => setSigTimelineOpen(o => !o)} aria-expanded={sigTimelineOpen} aria-controls="ml-signal-timeline"
-                                        className="flex items-center gap-2 hover:text-warning" title={sigTimelineOpen ? 'Collapse' : 'Expand'}>
-                                        {sigTimelineOpen ? <ChevronDown className="w-4 h-4 text-fg-4" aria-hidden="true" /> : <ChevronRight className="w-4 h-4 text-fg-4" aria-hidden="true" />}
-                                        <Activity className="w-4 h-4 text-warning" aria-hidden="true" /> Signal Status Timeline
-                                    </button>
-                                    <DocLink to="multi-leg#deploy-signal-timeline" />
-                                </h2>
-                                {sigTimelineOpen ? (
-                                    <span className="text-3xs text-fg-5">newest → · 🟢 entry · ⚪ neutral · 🔵 ready · 🟡 waiting</span>
-                                ) : (() => {
+                        <Panel className="mb-4" icon={Activity} iconClassName="text-warning" title="Signal Status Timeline" docs="multi-leg#deploy-signal-timeline"
+                            open={sigTimelineOpen} onOpenChange={setSigTimelineOpen}
+                            right={sigTimelineOpen ? <span className="text-3xs text-fg-5">newest → · 🟢 entry · ⚪ neutral · 🔵 ready · 🟡 waiting</span> : null}
+                            summary={(() => {
                                     // closed: still say what is inside — one count per current status
                                     const counts = {};
                                     for (const d of mlDeps.deployments) {
@@ -2218,9 +2197,8 @@ export default function MultiLeg() {
                                     const ORDER = ['ENTRY', 'READY', 'WAIT', 'NEUTRAL', 'DONE'];
                                     const keys = Object.keys(counts).sort((x, y) => (ORDER.indexOf(x) + 99 * (ORDER.indexOf(x) < 0)) - (ORDER.indexOf(y) + 99 * (ORDER.indexOf(y) < 0)));
                                     return <span className="text-3xs text-fg-5">{keys.map(k => `${counts[k]} ${k.toLowerCase()}`).join(' · ') || 'no status yet'}</span>;
-                                })()}
-                            </div>
-                            {sigTimelineOpen && <div id="ml-signal-timeline" className="space-y-1.5">
+                                })()}>
+                            <div className="space-y-1.5">
                                 {mlDeps.deployments.filter(d => mlDeps.signalStatus[d._id]).map(d => {
                                     const info = mlDeps.signalStatus[d._id];
                                     const cur = info?.current;
@@ -2251,8 +2229,8 @@ export default function MultiLeg() {
                                         </div>
                                     );
                                 })}
-                            </div>}
-                        </div>
+                            </div>
+                        </Panel>
                     )}
 
                     {/* Engine-health banner — a halted engine or stale loop means open structures may be unmanaged */}
@@ -2282,10 +2260,9 @@ export default function MultiLeg() {
                         </div>
                     )}
 
-                    <div className="bg-surface rounded-xl border border-line p-4 mb-4">
-                        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                            <div className="text-sm font-semibold text-fg flex items-center gap-2"><Rocket className="w-4 h-4 text-warning" /> <DocLink to="multi-leg#deploy-toolbar" /> Deployments ({visibleDeps.length}{visibleDeps.length !== (mlDeps.deployments || []).length ? `/${(mlDeps.deployments || []).length}` : ''})</div>
-                            <div className="flex flex-wrap items-center gap-2 text-2xs">
+                    <Panel className="mb-4" icon={Rocket} iconClassName="text-warning" storageKey="fold:multi-leg|deployments" docs="multi-leg#deploy-toolbar"
+                        title={<>Deployments ({visibleDeps.length}{visibleDeps.length !== (mlDeps.deployments || []).length ? `/${(mlDeps.deployments || []).length}` : ''})</>}
+                        right={<div className="flex flex-wrap items-center gap-2 text-2xs">
                                 {/* freshness / connection */}
                                 <span className={`flex items-center gap-1 ${!lastPoll.ok ? 'text-danger' : 'text-fg-5'}`} title="Auto-refreshes every 5s">
                                     <span className={`w-1.5 h-1.5 rounded-full ${!lastPoll.ok ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`} />
@@ -2299,8 +2276,7 @@ export default function MultiLeg() {
                                 </select>
                                 <button onClick={() => bulkAction('stop-all')} disabled={pending.bulk} className="px-2 py-1 rounded border border-amber-700/50 bg-amber-900/20 text-warning hover:bg-amber-900/40 disabled:opacity-40">Stop all</button>
                                 <button onClick={() => bulkAction('close-all')} disabled={pending.bulk} className="px-2 py-1 rounded border border-red-700/50 bg-red-900/25 text-danger hover:bg-red-900/45 disabled:opacity-40">Close all</button>
-                            </div>
-                        </div>
+                            </div>}>
                         {mlStatus && (
                             <div className="flex flex-wrap gap-3 text-2xs font-mono mb-3 px-2 py-1.5 rounded border border-line-0 bg-slate-900/40"
                                 title="Whole-book exposure vs engine limits. Greeks: Δ ₹/spot-pt · V ₹/IV-pt · Θ ₹/day. Short vega is what the vega cap gates on.">
@@ -2887,7 +2863,7 @@ export default function MultiLeg() {
                                 })}
                             </div>
                         )}
-                    </div>
+                    </Panel>
 
                     {/*
                       Both cards are flex columns that FILL their grid cell, and the
@@ -2911,8 +2887,7 @@ export default function MultiLeg() {
                             panel showed the engine's last 60 in-memory rows, which one
                             flooding deployment could fill in minutes. */}
                         <EngineJournal deployments={mlDeps.deployments || []} repeats={mlDeps.repeats || {}} focus={journalFocus} active={mode === 'deploy'} />
-                        <div className="bg-surface rounded-xl border border-line p-4 flex flex-col max-h-[40rem]">
-                            <div className="text-sm font-semibold text-fg mb-2">Structure trades ({mlTrades.length}) <DocLink to="multi-leg#engine-journal" /></div>
+                        <Panel className="flex flex-col max-h-[40rem]" bodyClassName="flex-1 min-h-0 flex flex-col" title={`Structure trades (${mlTrades.length})`} docs="multi-leg#engine-journal">
                             {mlTrades.length === 0 ? <div className="text-xs text-fg-5">No completed structure round-trips yet.</div> : (
                               <div className="flex-1 min-h-0 overflow-auto">
                                 <table className="w-full text-2xs text-fg-3">
@@ -2946,7 +2921,7 @@ export default function MultiLeg() {
                                 </table>
                               </div>
                             )}
-                        </div>
+                        </Panel>
                     </div>
                 </>
             )}
@@ -3032,22 +3007,19 @@ export default function MultiLeg() {
                                 templates={templates} />
 
                             {/* Trades table */}
-                            <div className="bg-surface rounded-xl border border-line p-4 overflow-x-auto">
-                                <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
-                                    <div className="text-sm font-semibold text-fg">Structure round-trips ({resFiltered.length}) <DocLink to="multi-leg#results-tab" /></div>
-                                    {(() => {
+                            <Panel bodyClassName="overflow-x-auto" title={`Structure round-trips (${resFiltered.length})`} docs="multi-leg#results-tab"
+                                right={(() => {
                                         const allOpen = resPageRows.length > 0 && resPageRows.every(t => resTradeOpen.has(resTradeId(t)));
                                         const anyOpen = resPageRows.some(t => resTradeOpen.has(resTradeId(t)));
                                         const btn = 'px-2 py-0.5 rounded border border-line bg-slate-800 text-3xs text-fg-3 hover:text-fg disabled:opacity-40';
                                         return (
                                             <div className="flex items-center gap-1">
                                                 <button className={btn} disabled={allOpen} title="Open the legs, path chart and details of every round-trip on this page"
-                                                    onClick={() => setResTradeOpen(new Set(resPageRows.map(resTradeId)))}>Expand page</button>
-                                                <button className={btn} disabled={!anyOpen} onClick={() => setResTradeOpen(new Set())}>Collapse all</button>
+                                                    onClick={() => setResTradeOpen(new Set(resPageRows.map(resTradeId)))}>Expand rows</button>
+                                                <button className={btn} disabled={!anyOpen} onClick={() => setResTradeOpen(new Set())} title="Close every opened round-trip">Collapse rows</button>
                                             </div>
                                         );
-                                    })()}
-                                </div>
+                                    })()}>
                                 {/* find / filter / page — 350+ rows is not a list anyone reads top to bottom */}
                                 <div className="flex flex-wrap items-center gap-2 mb-2">
                                     <input type="search" value={resTable.q} onChange={e => setResTable(t => ({ ...t, q: e.target.value, page: 0 }))}
@@ -3184,7 +3156,7 @@ export default function MultiLeg() {
                                 {resTableRows.length === 0 && (
                                     <div className="text-2xs text-fg-5 py-3 text-center">No round-trip matches the search / exit-reason filter.</div>
                                 )}
-                            </div>
+                            </Panel>
 
                             {/* How each day went, minute by minute — LAST, after the round-trips (it is the
                                 longest section and split the breakdowns from the trades). Built from the

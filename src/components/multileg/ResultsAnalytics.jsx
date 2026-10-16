@@ -44,6 +44,7 @@ import StrategyScorecard, { OpenNow } from './StrategyScorecard';
 import ExcursionsPanel from './ExcursionsPanel';
 import useScorecard from './useScorecard';
 import DocLink from '../DocLink.jsx';
+import { Panel } from '../viz/primitives';
 
 // One deployment's own trades: the Results tab scoped to it. Works from the
 // Multi-Leg page and from Live Portfolio alike (MultiLeg reads ?deployment=).
@@ -254,7 +255,6 @@ export default function ResultsAnalytics({
     const chartTip = ct.tooltipStyle({ fontSize: ct.type['3xs'] });
 
     const hasTrades = !!summary && summary.trades > 0;
-    const card = 'bg-surface rounded-xl border border-line p-4';
     const costShare = num(summary?.grossPnl) > 0 ? Math.round((num(summary.charges) / num(summary.grossPnl)) * 100) : null;
 
     return (
@@ -263,13 +263,8 @@ export default function ResultsAnalytics({
             <OpenNow sc={sc} templates={templates} />
 
             {/* 1 ── Summary: five headline figures, the cost of trading, the rest on demand */}
-            <section className={`${card} space-y-3`} aria-labelledby="ml-summary-h">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                    <h2 id="ml-summary-h" className="text-sm font-semibold text-fg">
-                        Summary <span className="text-fg-5 font-normal text-2xs">— booked round-trips only, quarantined fills excluded</span>
-                        <DocLink to="multi-leg#results-tab" className="ml-2" />
-                    </h2>
-                    <div className="flex items-center gap-1">
+            <Panel bodyClassName="space-y-3" title="Summary" subtitle="Booked round-trips only, quarantined fills excluded" docs="multi-leg#results-tab"
+                storageKey="fold:results|summary" right={<div className="flex items-center gap-1">
                         {daysProp === undefined && DAY_OPTS.map((o) => (
                             <button key={String(o.v)} onClick={() => setDays(o.v)} aria-pressed={days === o.v}
                                 className={`text-3xs px-2 py-0.5 rounded border ${days === o.v
@@ -280,8 +275,7 @@ export default function ResultsAnalytics({
                             className="ml-1 px-2 py-0.5 rounded border border-line-2 bg-slate-800 text-3xs text-fg-4 hover:text-fg flex items-center gap-1">
                             <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} /> Refresh
                         </button>
-                    </div>
-                </div>
+                    </div>}>
 
                 {templateFilter !== 'all' && (
                     <div className="text-3xs text-fg-5 border border-line-0 rounded px-2 py-1 bg-slate-800/30">
@@ -358,7 +352,7 @@ export default function ResultsAnalytics({
                             )}
                         </>
                     )}
-            </section>
+            </Panel>
 
             {/* 2 ── which strategies are working (and Compare) */}
             <StrategyScorecard sc={sc} templates={templates} single={!canDrill} />
@@ -366,7 +360,7 @@ export default function ResultsAnalytics({
             {hasTrades && (
                 <>
                     {/* 3 ── P&L over time */}
-                    <section className={`${card} space-y-4`} aria-label="P&L over time">
+                    <Panel bodyClassName="space-y-4" title="P&L over time" subtitle="Daily net P&L and the equity curve, by exit day (IST)" storageKey="fold:results|pnl-over-time">
 {/* 2 ── Daily P&L */}
                 <div>
                     <div className="text-2xs font-semibold text-fg-3 mb-1">Daily net P&L (₹, by exit day IST)</div>
@@ -416,14 +410,10 @@ export default function ResultsAnalytics({
                         </ComposedChart>
                     </ZoomableChart>
                 </div>
-                    </section>
+                    </Panel>
 
                     {/* 4 ── where the P&L came from */}
-                    <section className={card} aria-labelledby="ml-breakdowns-h">
-                        <h2 id="ml-breakdowns-h" className="text-sm font-semibold text-fg mb-2">
-                            Breakdowns <span className="text-fg-5 font-normal text-2xs">— the same trades cut different ways; open a row to see the strategies in it</span>
-                        <DocLink to="multi-leg#results-tab" className="ml-2" />
-                        </h2>
+                    <Panel title="Breakdowns" subtitle="The same trades cut different ways; open a row to see the strategies in it" docs="multi-leg#results-tab" storageKey="fold:results|breakdowns">
 {tabs.length > 0 && (
                     <div>
                         <div className="flex flex-wrap gap-1 border-b border-line mb-1">
@@ -505,16 +495,12 @@ export default function ResultsAnalytics({
                         )}
                     </div>
                 )}
-                    </section>
+                    </Panel>
 
                     {/* 5 ── how trades travelled before they exited */}
-                    <section className={card} aria-labelledby="ml-exc-h">
-                        <h2 id="ml-exc-h" className="text-sm font-semibold text-fg mb-2">
-                            How trades travelled <span className="text-fg-5 font-normal text-2xs">— worst and best point while open, and what a stop or target would have done</span>
-                        <DocLink to="glossary#mae-mfe" className="ml-2" />
-                        </h2>
+                    <Panel title="How trades travelled" subtitle="Worst and best point while open, and what a stop or target would have done" docs="glossary#mae-mfe" storageKey="fold:results|excursions">
                         <ExcursionsPanel excursions={data?.excursions} />
-                    </section>
+                    </Panel>
                 </>
             )}
         </div>

@@ -5,7 +5,7 @@ import PriceChart from '../components/charts/PriceChart';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useGlobalState } from '../context/GlobalContext';
 import CollapsibleCard from '../components/CollapsibleCard';
-import { PageHeader, Spinner, Chip, Segmented } from '../components/viz/primitives';
+import { PageHeader, Spinner, Chip, Segmented, Panel } from '../components/viz/primitives';
 import DeltaInstrumentPicker from '../components/delta/DeltaInstrumentPicker';
 import DeltaParams from '../components/delta/DeltaParams';
 import { isDeltaSymbol } from '../components/delta/deltaFormat.js';
@@ -1430,7 +1430,7 @@ export default function Backtest() {
 
   return (
     <div className="p-6 space-y-6">
-      <PageHeader docs="backtest#overview" icon={BacktestIcon} title="Backtest Strategy"
+      <PageHeader foldAll docs="backtest#overview" icon={BacktestIcon} title="Backtest Strategy"
         subtitle="Replay a single-leg strategy over archived candles — every trade, the equity curve, the AI overlay."
         actions={(
           <>
@@ -3604,10 +3604,8 @@ export default function Backtest() {
                     title: hasFveData ? 'AI SL+TP with Fair Value Entry — skips trades where spot never retraced to AI entry level within 15 min' : 'No fair entry data yet — re-run AI confirmation to populate' },
                 ];
                 return (
-                <div className="bg-slate-800 rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-fg-4">Equity Curve <DocLink to="backtest#results" /></h3>
-                    <div className="flex items-center gap-2">
+                <Panel variant="inset" title="Equity Curve" docs="backtest#results" storageKey="fold:backtest|equity"
+                  right={<div className="flex items-center gap-2">
                       {showAiSim && hasAiSimAvail && (
                         <div className="flex items-center rounded border border-line-2 overflow-hidden text-xs">
                           {viewModes.filter(m => m.enabled).map((m, i) => {
@@ -3637,8 +3635,7 @@ export default function Backtest() {
                           📊 {showAiSim ? 'AI View ✓' : 'Compare AI SL/TP'}
                         </button>
                       )}
-                    </div>
-                  </div>
+                    </div>}>
 
                   {isComparison && (() => {
                     const diff = aiSimData.totalPnl - aiSimData.originalPnl;
@@ -3735,7 +3732,7 @@ export default function Backtest() {
                     </LineChart>
                   </ResponsiveContainer>
                   </div>
-                </div>
+                </Panel>
                 );
               })()}
 
@@ -3972,10 +3969,8 @@ export default function Backtest() {
                   },
                 };
                 return (
-                <div className="bg-slate-800 rounded-lg p-4 overflow-hidden">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-fg-4">All Trades ({result.trades.length}) <DocLink to="backtest#trades-table" /></h3>
-                    <div className="flex items-center gap-2 flex-wrap justify-end">
+                <Panel variant="inset" title={`All Trades (${result.trades.length})`} docs="backtest#trades-table" className="overflow-hidden" storageKey="fold:backtest|trades"
+                  right={<div className="flex items-center gap-2 flex-wrap justify-end">
                     {hasSpotData && (
                       <div className="flex items-center gap-2">
                         {isSwingMode && (
@@ -3998,8 +3993,7 @@ export default function Backtest() {
                     <ColumnOrderMenu
                       columns={tradeCols.order.map(k => ({ key: k, label: colDefs[k].label }))}
                       onStep={tradeCols.step} onReset={tradeCols.reset} isCustom={tradeCols.isCustom} />
-                    </div>
-                  </div>
+                    </div>}>
                   {showSpotView && hasSpotData && (
                     <p className="text-3xs text-blue-400/70 mb-2">
                       Showing index price levels. Entry &amp; Exit = underlying index price at signal/exit bar. SL/TP = index levels used as exit triggers. P&amp;L is still based on option premium.
@@ -4123,7 +4117,7 @@ export default function Backtest() {
                     </tbody>
                   </table>
                   </div>
-                </div>
+                </Panel>
                 );
               })()}
             </div>

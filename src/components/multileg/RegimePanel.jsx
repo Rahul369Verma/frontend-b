@@ -15,6 +15,7 @@ import { API_URL } from '../../config/api.js';
 import { Card, Chip, Meter, Segmented, Spinner, Placeholder, StatusBadge, DataTable } from '../viz/primitives';
 import { inr, istDateTime, pnlTone } from '../viz/tokens.js';
 import { usePolling } from '../../hooks/usePolling.js';
+import useCollapse from '../../hooks/useCollapse.js';
 import useRemWidth from '../../hooks/useRemWidth.js';
 import { toast } from '../toastStore.js';
 import { pct0, tierTone, actionTone, ACTION_LABEL, shortSym, bookWarning } from './regimeFormat.js';
@@ -171,7 +172,12 @@ export default function RegimePanel() {
         try { const r = await axios.get(`${API_URL}/multileg/regime`); setData(r.data); setErr(null); }
         catch (e) { setErr(e?.response?.data?.error || e.message); }
     }, []);
-    usePolling(load, data?.job?.running ? 5000 : 60000);
+    // Folded, it still knows today's read (the summary line) but polls 5× slower.
+    const { open, setOpen } = useCollapse({ storageKey: 'fold:multi-leg|regime', defaultOpen: true });
+    usePolling(load, data?.job?.running ? 5000 : open ? 60000 : 300000);
+    const summary = data
+        ? [data.mode === 'off' ? 'Off' : 'Shadow', ...(data.symbols || []).map(x => `${shortSym(x.symbol)} ${x.read?.unmeasured ? 'no read' : (x.read?.label || '—')}`)].join(' · ')
+        : null;
     const onMode = async (mode) => {
         if (!data || mode === data.mode) return;
         setBusy(true);
@@ -188,7 +194,8 @@ export default function RegimePanel() {
     return (
         <div ref={ref} className="mb-4">
             <Card docs="multi-leg#deploy-regime" title={<span className="inline-flex items-center gap-2"><Compass className="w-4 h-4" aria-hidden="true" />Market regime & structure fit</span>}
-                subtitle="Pure maths, shadow mode — what kind of afternoon is likely, and which structures suit it">
+                subtitle="Pure maths, shadow mode — what kind of afternoon is likely, and which structures suit it"
+                open={open} onOpenChange={setOpen} summary={summary}>
                 {err && <Placeholder>Could not load the regime read: {err}</Placeholder>}
                 {!data && !err && <Spinner label="Loading regime read…" />}
                 <RegimeView data={data} onMode={onMode} onRebuild={onRebuild} busy={busy} narrow={rem != null && rem < 70} />

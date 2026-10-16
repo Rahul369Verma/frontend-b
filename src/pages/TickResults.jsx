@@ -569,7 +569,7 @@ export default function TickResults() {
 
     return (
         <div className="p-6 space-y-4">
-            <PageHeader docs="tick-results"
+            <PageHeader foldAll docs="tick-results"
                 icon={Zap}
                 title="Tick Results"
                 subtitle="Every tick strategy's realised book. The management page shows what is running; this shows what it earned."

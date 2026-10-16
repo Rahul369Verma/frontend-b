@@ -10,6 +10,7 @@ import {
 } from './builderFormat';
 import { API_URL } from '../../config/api.js';
 import DocLink from '../DocLink.jsx';
+import { Panel } from '../viz/primitives';
 
 /**
  * STRATEGY BUILDER — draw ANY option structure leg-by-leg and see everything
@@ -814,10 +815,8 @@ export default function StrategyBuilder() {
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                 {/* ── LEG EDITOR ────────────────────────────────────────── */}
-                <div className="bg-surface rounded-xl border border-line p-4">
-                    <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                        <span className="text-sm font-semibold text-fg">Legs<Help k="leg-table" /> <span className="text-fg-5 font-normal text-2xs">{legs.length}/{MAX_LEGS}</span></span>
-                        <div className="flex gap-1.5">
+                <Panel title="Legs" storageKey="fold:builder|legs" titleAfter={<><Help k="leg-table" /> <span className="text-fg-5 font-normal text-2xs">{legs.length}/{MAX_LEGS}</span></>}
+                    right={<div className="flex gap-1.5">
                             <button onClick={() => addLeg()} disabled={legs.length >= MAX_LEGS}
                                 className="text-3xs px-2 py-0.5 rounded border border-primary/40 bg-primary/15 text-primary-ink hover:bg-primary/25 disabled:opacity-30">+ leg</button>
                             <button onClick={reverseAll} disabled={!legs.length} className={btnCls}
@@ -826,8 +825,7 @@ export default function StrategyBuilder() {
                                 title="Set every leg to the selected expiry">sync expiries</button>
                             <button onClick={clearLegs} disabled={!legs.length}
                                 className="text-3xs px-2 py-0.5 rounded border border-line-2 bg-slate-800 text-fg-4 hover:text-danger disabled:opacity-30">clear</button>
-                        </div>
-                    </div>
+                        </div>}>
 
                     {/* ── STRUCTURE ADJUSTERS ───────────────────────────── */}
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-2 pb-2 border-b border-line-0 text-3xs">
@@ -970,7 +968,7 @@ export default function StrategyBuilder() {
                         {saveState && <span className={`text-3xs ${saveState.ok ? 'text-success' : 'text-danger'}`}>{saveState.msg}</span>}
                     </div>
                     <div className="text-4xs text-fg-5 mt-1">Saved as a <span className="font-mono">custom</span> structure with absolute strikes — it is a snapshot of these legs, not a relative recipe that re-centres on a future ATM.</div>
-                </div>
+                </Panel>
 
                 {/* ── STRIKE LADDER ─────────────────────────────────────── */}
                 <ChainLadder
@@ -997,8 +995,7 @@ export default function StrategyBuilder() {
             />
 
             {/* ── STATS ─────────────────────────────────────────────────── */}
-            <div className="bg-surface rounded-xl border border-line p-4">
-                <div className="text-sm font-semibold text-fg mb-2">Structure</div>
+            <Panel title="Structure" storageKey="fold:builder|structure">
                 {!an ? (
                     <div className="text-2xs text-fg-5 py-6 text-center">{loading ? 'analysing…' : 'no analysis yet'}</div>
                 ) : (
@@ -1147,11 +1144,11 @@ export default function StrategyBuilder() {
                         )}
                     </>
                 )}
-            </div>
+            </Panel>
 
             {/* ── GREEKS (BOOK) ─────────────────────────────────────────── */}
-            <div className="bg-surface rounded-xl border border-line p-4">
-                <div className="text-sm font-semibold text-fg mb-2">Greeks<Help k="book-greeks" /> <span className="text-fg-5 font-normal text-2xs">— the whole structure at {fmt(body.lots)} lot(s), in RUPEES. The per-leg breakdown (in option units) is in the Greeks tab above.</span></div>
+            <Panel title="Greeks" storageKey="fold:builder|greeks" titleAfter={<Help k="book-greeks" />}
+                subtitle={<>The whole structure at {fmt(body.lots)} lot(s), in RUPEES. The per-leg breakdown (in option units) is in the Greeks tab above.</>}>
                 {!an?.greeks ? (
                     <div className="text-2xs text-fg-5 py-4 text-center">
                         {an ? 'No greeks — implied volatility could not be established for these legs (supply an IV override above).' : loading ? 'analysing…' : 'no analysis yet'}
@@ -1178,17 +1175,14 @@ export default function StrategyBuilder() {
                             title="Net option delta in UNITS (per-lot, unscaled by lot size) — the directional exposure the risk gates measure. ~0 means the structure is delta-neutral." />
                     </div>
                 )}
-            </div>
+            </Panel>
 
             {/* ── WHAT-IF ───────────────────────────────────────────────── */}
-            <div className="bg-surface rounded-xl border border-line p-4">
-                <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                    <span className="text-sm font-semibold text-fg">🔮 What-if <span className="text-fg-5 font-normal text-2xs">— same structure, different world</span></span>
-                    <label className="flex items-center gap-1.5 text-2xs text-fg-4">
+            <Panel title="🔮 What-if" subtitle="Same structure, different world" storageKey="fold:builder|what-if"
+                right={<label className="flex items-center gap-1.5 text-2xs text-fg-4">
                         <input type="checkbox" checked={wifOn} onChange={e => setWifOn(e.target.checked)} className="accent-fuchsia-500" />
                         overlay on the chart
-                    </label>
-                </div>
+                    </label>}>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-2xs">
                     <label className="text-fg-4">
@@ -1251,7 +1245,7 @@ export default function StrategyBuilder() {
                         )}
                     </div>
                 )}
-            </div>
+            </Panel>
         </div>
     );
 }

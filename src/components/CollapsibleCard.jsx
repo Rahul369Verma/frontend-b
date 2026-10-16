@@ -2,10 +2,12 @@
 // header. The open/closed state is persisted to localStorage by `storageKey`
 // so the user's layout preference survives reloads. Used across the Dashboard
 // to keep the long single-page view manageable (Global Defaults, Live Market
-// Data, etc. all fold away).
-import React, { useState } from 'react';
+// Data, etc. all fold away). State lives in hooks/useCollapse.js — the same
+// one Card/Panel use — so "Collapse all / Expand all" reaches it too.
+import React, { useId } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import DocLink from './DocLink.jsx';
+import useCollapse from '../hooks/useCollapse.js';
 
 export default function CollapsibleCard({
     title,
@@ -19,19 +21,8 @@ export default function CollapsibleCard({
     bodyClassName = 'px-6 pb-6 pt-0',
     docs = null,         // documentation target ("page#section") — 📖 link beside the header
 }) {
-    const [open, setOpen] = useState(() => {
-        if (!storageKey) return defaultOpen;
-        try {
-            const v = localStorage.getItem(storageKey);
-            return v === null ? defaultOpen : v === '1';
-        } catch { return defaultOpen; }
-    });
-
-    const toggle = () => setOpen(prev => {
-        const next = !prev;
-        if (storageKey) { try { localStorage.setItem(storageKey, next ? '1' : '0'); } catch { /* localStorage unavailable (private mode / blocked cookies) — the preference just does not persist */ } }
-        return next;
-    });
+    const { open, toggle } = useCollapse({ storageKey: storageKey || null, defaultOpen });
+    const bodyId = useId();
 
     return (
         <div className={`bg-surface rounded-xl border border-line ${className}`}>
@@ -41,6 +32,7 @@ export default function CollapsibleCard({
                 type="button"
                 onClick={toggle}
                 aria-expanded={open}
+                aria-controls={bodyId}
                 className="flex-1 min-w-0 flex items-center justify-between gap-3 p-4 text-left rounded-xl hover:bg-slate-800/40 transition-colors"
             >
                 <span className="flex items-center gap-2 min-w-0">
@@ -58,7 +50,7 @@ export default function CollapsibleCard({
             </button>
             {docs && <DocLink to={docs} className="pr-4" />}
             </div>
-            {open && <div className={bodyClassName}>{children}</div>}
+            {open && <div id={bodyId} className={bodyClassName}>{children}</div>}
         </div>
     );
 }

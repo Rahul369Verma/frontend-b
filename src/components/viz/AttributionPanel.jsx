@@ -49,10 +49,10 @@ export default function AttributionPanel({ data, context = 'live' }) {
 
     if (!data) return null;
     if (data.error) {
-        return <Card title="P&L attribution"><Placeholder>Attribution unavailable: {data.error}</Placeholder></Card>;
+        return <Card collapsible={false} title="P&L attribution"><Placeholder>Attribution unavailable: {data.error}</Placeholder></Card>;
     }
     if (!o || !o.trades) {
-        return <Card title="P&L attribution"><Placeholder>No closed trades in this window.</Placeholder></Card>;
+        return <Card collapsible={false} title="P&L attribution"><Placeholder>No closed trades in this window.</Placeholder></Card>;
     }
 
     const attributionCoverage = o.trades > 0 ? o.fullAttribution / o.trades : 0;
