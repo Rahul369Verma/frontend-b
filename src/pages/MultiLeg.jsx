@@ -9,8 +9,6 @@ import StructureAttributionPanel from '../components/viz/StructureAttributionPan
 import StrategyBuilder from '../components/multileg/StrategyBuilder';
 import ResultsAnalytics from '../components/multileg/ResultsAnalytics';
 import TradePathChart from '../components/viz/TradePathChart';
-import DayEquityCurves from '../components/viz/DayEquityCurves';
-import { normalizeMultilegTrade, buildDayCurves } from '../utils/dayCurves';
 import AutoRunProgress from '../components/multileg/AutoRunProgress';
 import { estimateStageSizes, sizesForRequest, runSummary, useRunTracker } from '../components/multileg/runProgress';
 import ZoomableChart from '../components/charts/ZoomableChart';
@@ -21,7 +19,8 @@ import { HELP } from '../data/multilegHelp';
 import { useChartTheme } from '../theme/chartTheme.js';
 import { pollInterval } from '../hooks/usePolling.js';
 import useCollapse from '../hooks/useCollapse.js';
-import { newestExitIso, mergeTradesById } from '../utils/tradeMerge.js';
+import useResultsTable from '../components/multileg/useResultsTable.js';
+import ResultsDayCurves from '../components/multileg/ResultsDayCurves.jsx';
 import { API_URL } from '../config/api.js';
 import { pnlTone } from '../components/viz/tokens';
 import { spotMove, pfText, pfValue } from '../components/multileg/builderFormat';
@@ -138,14 +137,8 @@ const tradeRom = (t) => (t.marginEst != null && Number(t.marginEst) > 0 && Numbe
 // Absent is NOT zero — a trade with no margin or no MAE sorts last, not as ₹0.
 const numOrNull = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 const RES_PAGE = 50;
-const RES_SORTS = {
-    exit: (t) => new Date(t.exitAt).getTime(), entry: (t) => new Date(t.entryAt).getTime(),
-    name: (t) => String(t.name || '').toLowerCase(), credit: (t) => numOrNull(t.origCredit),
-    margin: (t) => (t.marginEst != null && Number(t.marginEst) > 0 ? Number(t.marginEst) : null),
-    gross: (t) => numOrNull(t.grossPnl), chg: (t) => numOrNull(t.charges), net: (t) => numOrNull(t.netPnl),
-    rom: (t) => tradeRom(t), mae: (t) => numOrNull(t.maeRupees), mfe: (t) => numOrNull(t.mfeRupees),
-    hold: (t) => (t.entryAt && t.exitAt ? new Date(t.exitAt) - new Date(t.entryAt) : null),
-};
+// The table's sorts (exit, entry, name, credit, margin, gross, chg, net, rom, mae, mfe, hold) are
+// applied by the SERVER now — backend/logic/analytics/multilegTradeQuery.js sortKey().
 
 export default function MultiLeg() {
     // Five recharts charts live on this page and every one of them needs
@@ -262,9 +255,8 @@ export default function MultiLeg() {
     const focusJournal = useCallback((id) => setJournalFocus(f => ({ id: String(id), n: (f?.n || 0) + 1 })), []);
     const [mlStatus, setMlStatus] = useState(null); // engine book status (limits vs exposure, greeks)
     const [mlTrades, setMlTrades] = useState([]);
-    // Results tab: full trade history + filters (deployment/template/symbol/mode)
-    const [resTrades, setResTrades] = useState([]);
-    const [resLoading, setResLoading] = useState(false);
+    // Results tab: filters (deployment/template/symbol/mode). The round-trips themselves
+    // are fetched a page at a time (useResultsTable) — never the whole history.
     const [resFilter, setResFilter] = useState({ mode: 'all', deploymentId: 'all', template: 'all', symbol: 'all' });
     // ONE time window for the whole Results page — tiles, charts, breakdowns,
     // round-trips and Day by day. It used to live inside the Analytics panel
@@ -699,47 +691,18 @@ export default function MultiLeg() {
         return () => { alive = false; t?.(); };
     }, [depActivity, mode]);
 
-    // Results tab: the FULL structure-trade history, with paths (the day curves
-    // and per-trade path charts need them). It used to be re-downloaded whole
-    // every 15 s although it only changes when a structure exits. Now: one full
-    // load on entry / Refresh / every 10 min, and an incremental pull every 60 s
-    // of rows that exited or were quarantined since the newest exit we hold.
-    const resNewestExitRef = React.useRef(null);   // ISO of the newest exitAt loaded
-    const resFullAtRef = React.useRef(0);
+    // Results tab, ON DEMAND (components/multileg/useResultsTable.js): the server answers
+    // the 50 rows on screen — filtered, searched, sorted, counted — plus the dropdowns;
+    // a row's legs and path load when it is opened, the day curves when they are reached.
+    // It used to pull ?limit=2000 WITH every path (21 s on prod) and do all of it here.
     const [resDepList, setResDepList] = useState([]);   // dropdown names only — never written into mlDeps (the Deploy cards' state)
-    const refreshResults = useCallback(() => {
-        setResLoading(true);
-        axios.get(`${API_URL}/multileg/deployments`, { params: { lite: 1 }, timeout: 20000 })
-            .then(r => setResDepList(Array.isArray(r.data?.deployments) ? r.data.deployments : []))
-            .catch(() => {});
-        return axios.get(`${API_URL}/multileg/trades`, { params: { limit: 2000 }, timeout: 120000 })
-            .then(r => {
-                const rows = Array.isArray(r.data) ? r.data : [];
-                setResTrades(rows);
-                resNewestExitRef.current = newestExitIso(rows);
-                resFullAtRef.current = Date.now();
-            })
-            .catch(() => {})
-            .finally(() => setResLoading(false));
-    }, []);
-    const pollResults = useCallback(() => {
-        if (!resNewestExitRef.current || Date.now() - resFullAtRef.current > 10 * 60 * 1000) return refreshResults();
-        return axios.get(`${API_URL}/multileg/trades`, { params: { after: resNewestExitRef.current, limit: 500 }, timeout: 30000 })
-            .then(r => {
-                const rows = Array.isArray(r.data) ? r.data : [];
-                if (!rows.length) return;
-                setResTrades(prev => mergeTradesById(prev, rows));   // returns prev when nothing changed → no curve rebuild
-                const n = newestExitIso(rows);
-                if (n && n > resNewestExitRef.current) resNewestExitRef.current = n;
-            })
-            .catch(() => {});
-    }, [refreshResults]);
-    useEffect(() => {
-        if (mode !== 'results') return;
-        refreshResults();
-        const t = pollInterval(pollResults, 60000);
-        return () => t?.();
-    }, [mode, refreshResults, pollResults]);
+    const resQuery = useResultsTable({ active: mode === 'results', filter: resFilter, since: resWindow.since, table: resTable, templates });
+    const resLoading = resQuery.loading;
+    const loadResDepList = useCallback(() => axios.get(`${API_URL}/multileg/deployments`, { params: { lite: 1 }, timeout: 20000 })
+        .then(r => setResDepList(Array.isArray(r.data?.deployments) ? r.data.deployments : []))
+        .catch(() => {}), []);
+    const refreshResults = useCallback(() => { loadResDepList(); return resQuery.refresh(); }, [loadResDepList, resQuery]);
+    useEffect(() => { if (mode === 'results') loadResDepList(); }, [mode, loadResDepList]);
 
     // Calibrate the backtest IV proxy to the LIVE chain ATM IV (level parity).
     const calibrateIv = useCallback(() => {
@@ -780,67 +743,38 @@ export default function MultiLeg() {
     const resDeploymentOptions = useMemo(() => {
         const m = new Map();
         for (const d of (resDepList.length ? resDepList : (mlDeps.deployments || []))) if (d && d._id) m.set(String(d._id), { name: d.name || null, n: 0 });
-        for (const t of resTrades) {
-            const id = String(t.deploymentId);
-            if (!t.deploymentId || id === 'undefined') continue;
-            const e = m.get(id) || { name: null, n: 0 };
-            e.n++; if (!e.name) e.name = t.name || null;
-            m.set(id, e);
+        for (const d of resQuery.facets.deployments) {             // every deployment with booked trades (server: names + counts)
+            const e = m.get(d.id) || { name: null, n: 0 };
+            e.n += d.n; if (!e.name) e.name = d.name || null;
+            m.set(d.id, e);
         }
         if (resFilter.deploymentId !== 'all' && !m.has(resFilter.deploymentId)) m.set(resFilter.deploymentId, { name: null, n: 0 });
         return [...m.entries()]
             .map(([id, e]) => ({ id, name: e.name || `deployment …${id.slice(-6)}`, n: e.n }))
             .sort((a, b) => a.name.localeCompare(b.name));
-    }, [resDepList, mlDeps, resTrades, resFilter.deploymentId]);
+    }, [resDepList, mlDeps, resQuery.facets.deployments, resFilter.deploymentId]);
     const resDeploymentName = resFilter.deploymentId === 'all' ? null
         : (resDeploymentOptions.find(o => o.id === resFilter.deploymentId)?.name || resFilter.deploymentId);
 
-    // filtered trades + computed KPIs / equity / breakdowns (live-engine parity)
-    const resFiltered = useMemo(() => {
-        return resTrades.filter(t =>
-            (resFilter.mode === 'all' || t.trade_mode === resFilter.mode) &&
-            (resFilter.deploymentId === 'all' || String(t.deploymentId) === resFilter.deploymentId) &&
-            (resFilter.template === 'all' || t.template === resFilter.template) &&
-            (resFilter.symbol === 'all' || t.symbol === resFilter.symbol) &&
-            (resWindow.since == null || (t.exitAt != null && new Date(t.exitAt).getTime() >= resWindow.since))
-        );
-    }, [resTrades, resFilter, resWindow]);
-    const resTableRows = useMemo(() => {
-        const q = resTable.q.trim().toLowerCase();
-        const tplName = (k) => templates.find(x => x.key === k)?.name || k || '';
-        const get = RES_SORTS[resTable.sort] || RES_SORTS.exit;
-        const sign = resTable.dir === 'asc' ? 1 : -1;
-        return resFiltered
-            .filter(t => (resTable.reason === 'all' || t.exitReason === resTable.reason)
-                && (!q || [t.name, tplName(t.template), shortSym(t.symbol), t.exitReason].some(v => String(v || '').toLowerCase().includes(q))))
-            .sort((a, b) => {
-                const x = get(a), y = get(b);
-                if (x == null && y == null) return 0;
-                if (x == null) return 1;            // missing values sink, either direction
-                if (y == null) return -1;
-                return (typeof x === 'string' ? x.localeCompare(y) : x - y) * sign;
-            });
-    }, [resFiltered, resTable.q, resTable.reason, resTable.sort, resTable.dir, templates]);
-    const resPages = Math.max(1, Math.ceil(resTableRows.length / RES_PAGE));
+    // The table's numbers, from the server (same rules the page used to apply here —
+    // backend/scripts/resultsParity.js compares them row for row).
+    const resTotal = resQuery.page.total;          // round-trips under the filter bar
+    const resMatched = resQuery.page.matched;      // … that match the search / exit reason
+    const resPages = resQuery.page.pages;
     const resPage = Math.min(resTable.page, resPages - 1);
-    const resPageRows = resTableRows.slice(resPage * RES_PAGE, (resPage + 1) * RES_PAGE);
-    const resExitReasons = useMemo(() => [...new Set(resFiltered.map(t => t.exitReason).filter(Boolean))].sort(), [resFiltered]);
+    const resPageRows = resQuery.page.rows;
+    const resExitReasons = resQuery.page.exitReasons;
+    // a narrower filter can leave the page past the end: step back to the last one
+    useEffect(() => {
+        if (resQuery.page.matched > 0 && resTable.page > resQuery.page.pages - 1) setResTable(t => ({ ...t, page: resQuery.page.pages - 1 }));
+    }, [resQuery.page.matched, resQuery.page.pages, resTable.page]);
+    // an opened row's legs / path / spots — fetched when it is opened, then cached
+    const ensureResDetails = resQuery.ensureDetails;
+    useEffect(() => {
+        const ids = resPageRows.map(resTradeId).filter(id => resTradeOpen.has(id) && id && !String(id).includes('-'));
+        if (ids.length) ensureResDetails(ids);
+    }, [resPageRows, resTradeOpen, ensureResDetails]);
     const sortResBy = (k) => setResTable(t => ({ ...t, page: 0, sort: k, dir: t.sort === k ? (t.dir === 'desc' ? 'asc' : 'desc') : (k === 'name' ? 'asc' : 'desc') }));
-    // Day-by-day P&L curves over EXACTLY the round-trips listed below. A
-    // quarantined trade is excluded here as it is from every other total (it was
-    // booked on a price that never existed) — and COUNTED, so the curves never
-    // silently disagree with the table's row count.
-    const resDayCurves = useMemo(() => {
-        const norm = [];
-        let quarantined = 0, unreadable = 0;
-        for (const t of resFiltered) {
-            if (t.quarantined) { quarantined++; continue; }
-            const n = normalizeMultilegTrade(t);
-            if (n) norm.push(n); else unreadable++;
-        }
-        const res = buildDayCurves(norm);
-        return { days: res?.days || [], excluded: { ...(res?.excluded || {}), quarantined, unreadable } };
-    }, [resFiltered]);
     // NOTE: the Results KPIs / equity / breakdowns are NOT computed here any
     // more — they come from GET /multileg/analytics via <ResultsAnalytics>.
     // The client aggregate summed EVERY row in `resFiltered`, quarantined
@@ -2954,14 +2888,14 @@ export default function MultiLeg() {
                             <div className="text-3xs text-fg-5 mb-0.5">Structure</div>
                             <select value={resFilter.template} onChange={e => setResFilter(f => ({ ...f, template: e.target.value }))} className="bg-slate-800 border border-line rounded p-1 text-xs text-fg-2 max-w-full">
                                 <option value="all">All structures</option>
-                                {[...new Set(resTrades.map(t => t.template))].filter(Boolean).map(k => <option key={k} value={k}>{templates.find(t => t.key === k)?.name || k}</option>)}
+                                {resQuery.facets.templates.map(k => <option key={k} value={k}>{templates.find(t => t.key === k)?.name || k}</option>)}
                             </select>
                         </div>
                         <div>
                             <div className="text-3xs text-fg-5 mb-0.5">Symbol</div>
                             <select value={resFilter.symbol} onChange={e => setResFilter(f => ({ ...f, symbol: e.target.value }))} className="bg-slate-800 border border-line rounded p-1 text-xs text-fg-2">
                                 <option value="all">All symbols</option>
-                                {[...new Set(resTrades.map(t => t.symbol))].filter(Boolean).map(s => <option key={s} value={s}>{shortSym(s)}</option>)}
+                                {resQuery.facets.symbols.map(s => <option key={s} value={s}>{shortSym(s)}</option>)}
                             </select>
                         </div>
                         <div>
@@ -2981,7 +2915,7 @@ export default function MultiLeg() {
                         </button>
                     </div>
 
-                    {resFiltered.length === 0 ? (
+                    {resTotal === 0 ? (
                         <div className="bg-surface rounded-xl border border-line p-8 text-center text-sm text-fg-5">
                             {resLoading ? 'Loading…' : resDeploymentName ? (
                                 <>
@@ -3007,7 +2941,7 @@ export default function MultiLeg() {
                                 templates={templates} />
 
                             {/* Trades table */}
-                            <Panel bodyClassName="overflow-x-auto" title={`Structure round-trips (${resFiltered.length})`} docs="multi-leg#results-tab"
+                            <Panel bodyClassName="overflow-x-auto" title={`Structure round-trips (${resTotal})`} docs="multi-leg#results-tab"
                                 right={(() => {
                                         const allOpen = resPageRows.length > 0 && resPageRows.every(t => resTradeOpen.has(resTradeId(t)));
                                         const anyOpen = resPageRows.some(t => resTradeOpen.has(resTradeId(t)));
@@ -3033,7 +2967,7 @@ export default function MultiLeg() {
                                         </select>
                                     </label>
                                     <span className="text-2xs text-fg-5">
-                                        {resTableRows.length === resFiltered.length ? `${resTableRows.length} round-trips` : `${resTableRows.length} of ${resFiltered.length} match`} · click a column to sort
+                                        {resMatched === resTotal ? `${resMatched} round-trips` : `${resMatched} of ${resTotal} match`} · click a column to sort
                                     </span>
                                 </div>
                                 <table className="w-full text-2xs text-fg-3">
@@ -3067,7 +3001,10 @@ export default function MultiLeg() {
                                         {resPageRows.map((t) => {
                                             const tid = resTradeId(t);
                                             const openT = resTradeOpen.has(tid);
-                                            const allLegs = [...(t.legs || []), ...(t.closedLegs || [])];
+                                            // legs / path / spots arrive when the row is opened (resQuery.details)
+                                            const det = resQuery.details.get(String(t._id));
+                                            const full = det ? { ...t, ...det } : null;
+                                            const allLegs = full ? [...(full.legs || []), ...(full.closedLegs || [])] : [];
                                             const hasMargin = t.marginEst != null && Number(t.marginEst) > 0;
                                             const rom = tradeRom(t);
                                             return (
@@ -3114,12 +3051,15 @@ export default function MultiLeg() {
                                                     {numOrNull(t.mfeRupees) == null ? '—' : `₹${fmt(t.mfeRupees)}`}
                                                 </td>
                                             </tr>
-                                            {openT && (
+                                            {openT && !full && (
+                                                <tr className="bg-slate-900/60"><td colSpan={16} className="p-2 text-3xs text-fg-5">Loading legs and path…</td></tr>
+                                            )}
+                                            {openT && full && (
                                                 <tr className="bg-slate-900/60"><td colSpan={16} className="p-2">
-                                                    <div className="text-3xs text-fg-4 mb-1">Held {t.exitAt ? fmtSpan(t.entryAt, t.exitAt) : fmtDur(t.entryAt)} · spot {fmt(t.entrySpot)} → {fmt(t.exitSpot)} · net credit at entry ₹{fmt(t.origCredit, 1)}/u{t.lots ? ` · ${t.lots} lot(s)` : ''}</div>
+                                                    <div className="text-3xs text-fg-4 mb-1">Held {full.exitAt ? fmtSpan(full.entryAt, full.exitAt) : fmtDur(full.entryAt)} · spot {fmt(full.entrySpot)} → {fmt(full.exitSpot)} · net credit at entry ₹{fmt(full.origCredit, 1)}/u{full.lots ? ` · ${full.lots} lot(s)` : ''}</div>
                                                     {/* What it DID while open — MAE/MFE and the gave-back number.
                                                         Renders its own explanation for pre-feature trades. */}
-                                                    <div className="mb-2"><TradePathChart trade={t} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} /></div>
+                                                    <div className="mb-2"><TradePathChart trade={full} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} /></div>
                                                     {allLegs.length > 0 ? (
                                                         <table className="w-full text-3xs font-mono text-fg-3">
                                                             <thead><tr className="text-fg-5 text-left"><th>Leg</th><th>Strike</th><th className="text-right">Entry ₹</th><th className="text-right">Exit ₹</th><th>Close</th></tr></thead>
@@ -3143,7 +3083,7 @@ export default function MultiLeg() {
                                 </table>
                                 {resPages > 1 && (
                                     <div className="flex flex-wrap items-center justify-between gap-2 mt-2 text-2xs text-fg-4">
-                                        <span>Showing {resPage * RES_PAGE + 1}–{Math.min((resPage + 1) * RES_PAGE, resTableRows.length)} of {resTableRows.length}</span>
+                                        <span>Showing {resPage * RES_PAGE + 1}–{Math.min((resPage + 1) * RES_PAGE, resMatched)} of {resMatched}</span>
                                         <div className="flex items-center gap-1">
                                             <button type="button" disabled={resPage === 0} onClick={() => setResTable(t => ({ ...t, page: Math.max(0, resPage - 1) }))}
                                                 className="px-2 py-0.5 rounded border border-line bg-slate-800 hover:text-fg disabled:opacity-40">‹ Prev</button>
@@ -3153,7 +3093,7 @@ export default function MultiLeg() {
                                         </div>
                                     </div>
                                 )}
-                                {resTableRows.length === 0 && (
+                                {resMatched === 0 && (
                                     <div className="text-2xs text-fg-5 py-3 text-center">No round-trip matches the search / exit-reason filter.</div>
                                 )}
                             </Panel>
@@ -3161,10 +3101,7 @@ export default function MultiLeg() {
                             {/* How each day went, minute by minute — LAST, after the round-trips (it is the
                                 longest section and split the breakdowns from the trades). Built from the
                                 round-trips' own recorded paths, same filter as the table. */}
-                            <div className="bg-surface rounded-xl border border-line p-4">
-                                <DayEquityCurves days={resDayCurves.days} excluded={resDayCurves.excluded} markBasis="net-of-estimated-costs"
-                                    emptyText="No booked round-trip in this filter to draw." />
-                            </div>
+                            <ResultsDayCurves filter={resFilter} since={resWindow.since} />
                         </>
                     )}
                 </div>

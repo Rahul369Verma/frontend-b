@@ -344,7 +344,9 @@ Each trade's worst and best point while open ([MAE / MFE](glossary#mae-mfe)), an
 The figures are upper bounds: every trade that touched the level is booked at exactly that loss, while a real stop fills a little worse and marks are about a minute apart. Filter Results to one deployment to price a stop for that deployment alone.
 
 ### Round-trips table
-Every booked structure: entry → exit, deployment, structure, index, mode, exit reason, credit per unit, IV percentile at entry, **margin** (~ = estimated), gross, charges, net and net ÷ margin. Click a row (or **Expand page**) to see its legs, its MTM path and details. Search and page through long lists. A row **struck through** is [quarantined](glossary#quarantined): booked on a price that was not real, shown but excluded from every total.`,
+Every booked structure: entry → exit, deployment, structure, index, mode, exit reason, credit per unit, IV percentile at entry, **margin** (~ = estimated), gross, charges, net and net ÷ margin. Click a row (or **Expand page**) to see its legs, its MTM path and details. Search and page through long lists.
+
+Results load **on demand**, so the tab opens fast however long the history: the table fetches only the 50 rows on screen (already filtered, searched and sorted by the server), a row's legs and path are fetched when you open it, and **Day by day** fetches the recorded paths when you scroll to it. A row **struck through** is [quarantined](glossary#quarantined): booked on a price that was not real, shown but excluded from every total.`,
         },
     ],
 };

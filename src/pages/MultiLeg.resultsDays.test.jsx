@@ -33,8 +33,19 @@ const trades = [
     },
 ];
 
+// The server answers the Results tab ON DEMAND (backend logic/analytics/multilegTradeQuery):
+// a table page without paths, the dropdowns, an opened row's detail, and the curves' paths.
+const TABLE_KEYS = ['_id', 'deploymentId', 'name', 'template', 'symbol', 'trade_mode', 'entryAt', 'exitAt', 'exitReason', 'grossPnl', 'charges', 'netPnl', 'quarantined', 'quarantineReason', 'maeRupees', 'mfeRupees'];
+const pick = (t, keys) => Object.fromEntries(keys.filter((k) => t[k] !== undefined).map((k) => [k, t[k]]));
+function answer(url, params = {}) {
+    if (/\/multileg\/trades\/page$/.test(url)) return { rows: trades.map((t) => pick(t, TABLE_KEYS)), total: 3, matched: 3, page: 0, pages: 1, exitReasons: ['TP'] };
+    if (/\/multileg\/trades\/facets$/.test(url)) return { deployments: [{ id: 'd1', name: 'IC nifty', n: 3 }], templates: ['iron_condor'], symbols: ['NSE:NIFTY50-INDEX'] };
+    if (/\/multileg\/trades\/details$/.test(url)) return trades.filter((t) => String(params.ids || '').split(',').includes(t._id));
+    if (/\/multileg\/trades\/paths$/.test(url)) return trades.map(({ path, legs, closedLegs, ...t }) => ({ ...t, p: path ? path.map((m) => [Date.parse(m.t), m.net]) : undefined }));
+    return [];
+}
 vi.mock('axios', () => {
-    const get = vi.fn((url) => Promise.resolve({ data: /\/multileg\/trades$/.test(url) ? trades : [] }));
+    const get = vi.fn((url, cfg) => Promise.resolve({ data: answer(url, cfg && cfg.params) }));
     const empty = () => Promise.resolve({ data: [] });
     const api = {
         get, post: vi.fn(empty), put: vi.fn(empty), delete: vi.fn(empty), patch: vi.fn(empty),
@@ -49,12 +60,20 @@ vi.mock('socket.io-client', () => ({
     default: () => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn(), disconnect: vi.fn(), connected: false }),
 }));
 
+import axios from 'axios';
 import MultiLeg from './MultiLeg.jsx';
+
+// The day curves load when their section scrolls into view. The shared test setup's
+// observer never fires; these tests scroll to it (the observer reports it visible),
+// except the one that checks nothing is fetched before then.
+const NEVER = globalThis.IntersectionObserver;
+class Visible { constructor(cb) { this.cb = cb; } observe(el) { this.cb([{ isIntersecting: true, target: el }]); } unobserve() {} disconnect() {} takeRecords() { return []; } }
+globalThis.IntersectionObserver = Visible;
 
 describe('MultiLeg results — day by day', () => {
     it('draws one row per IST day over the listed round-trips and counts the quarantined one', async () => {
         render(<MemoryRouter initialEntries={['/multi-leg?tab=results']}><MultiLeg /></MemoryRouter>);
-        const mon = await screen.findByRole('button', { name: /Mon 28 Sep 2026/ });
+        const mon = await screen.findByRole('button', { name: /Mon 28 Sep 2026/ }, { timeout: 5000 });
         expect(within(mon).getByText('+₹1,200')).toBeTruthy();
         expect(within(mon).getByText('marked 1/1')).toBeTruthy();
         const fri = screen.getByRole('button', { name: /Fri 25 Sep 2026/ });
@@ -67,11 +86,39 @@ describe('MultiLeg results — day by day', () => {
 
     it('a round-trip row still opens its path chart', async () => {
         render(<MemoryRouter initialEntries={['/multi-leg?tab=results']}><MultiLeg /></MemoryRouter>);
-        await screen.findByRole('button', { name: /Mon 28 Sep 2026/ });
+        await screen.findByRole('button', { name: /Mon 28 Sep 2026/ }, { timeout: 5000 });
         // a table CELL reading TP — the Exit-reason filter's <option>TP</option> is not a row
         const cell = screen.getAllByText('TP').find(el => el.tagName === 'TD');
+        const detailsBefore = axios.get.mock.calls.filter(([u]) => /\/trades\/details$/.test(u)).length;
         fireEvent.click(cell.closest('tr'));
         expect(await screen.findByText(/net of estimated costs/)).toBeTruthy();
         expect(screen.getByText('gross (pre-cost)')).toBeTruthy();
+        // the row's legs/path were fetched when it was OPENED, for that row only
+        const details = axios.get.mock.calls.filter(([u]) => /\/trades\/details$/.test(u));
+        expect(details.length).toBe(detailsBefore + 1);
+        expect(details.at(-1)[1].params.ids).toBe('m1');
+    });
+
+    it('the curves\' paths are not fetched until that section is reached', async () => {
+        axios.get.mockClear();
+        globalThis.IntersectionObserver = NEVER;
+        try {
+            render(<MemoryRouter initialEntries={['/multi-leg?tab=results']}><MultiLeg /></MemoryRouter>);
+            expect(await screen.findByText(/Structure round-trips \(3\)/)).toBeTruthy();
+            expect(screen.getByTestId('results-day-curves').textContent).toMatch(/load when you scroll here/);
+            expect(axios.get.mock.calls.some(([u]) => /\/trades\/paths$/.test(u))).toBe(false);
+        } finally { globalThis.IntersectionObserver = Visible; }
+    });
+
+    it('never downloads the whole history: a page without paths, the dropdowns, and the paths for the curves only', async () => {
+        axios.get.mockClear();
+        render(<MemoryRouter initialEntries={['/multi-leg?tab=results']}><MultiLeg /></MemoryRouter>);
+        await screen.findByRole('button', { name: /Mon 28 Sep 2026/ }, { timeout: 5000 });
+        const urls = axios.get.mock.calls.map(([u, c]) => `${u.replace(/^.*\/api/, '')} ${JSON.stringify((c && c.params) || {})}`);
+        expect(urls.some((u) => /\/multileg\/trades \{.*"limit":2000/.test(u))).toBe(false);
+        const page = axios.get.mock.calls.find(([u]) => /\/trades\/page$/.test(u));
+        expect(page[1].params).toMatchObject({ mode: 'all', deploymentId: 'all', sort: 'exit', dir: 'desc', page: 0, pageSize: 50 });
+        expect(urls.some((u) => /\/multileg\/trades\/facets/.test(u))).toBe(true);
+        expect(screen.getByText(/Structure round-trips \(3\)/)).toBeTruthy();
     });
 });
