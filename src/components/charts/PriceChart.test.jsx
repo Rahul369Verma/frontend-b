@@ -14,7 +14,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, act, screen } from '@testing-library/react';
 import ThemeProvider from '../../theme/ThemeContext.jsx';
 
 // Capture what PriceChart actually configures the chart with.
@@ -123,5 +123,87 @@ describe('PriceChart canvas text', () => {
         // pad a two-digit option-premium axis with dead space for no gain.
         const opts = (layoutAt(1.4), captured.options[0]);
         expect(opts.rightPriceScale.minimumWidth).toBeUndefined();
+    });
+});
+
+// ── the trade layer: hover a mark → tooltip + linked highlight; click → focus ──
+// (user, 17-Oct-2026: 168 overlapping marker texts made the chart unreadable;
+// the words moved into a tooltip, so the tooltip has to actually appear.)
+describe('PriceChart trade marks', () => {
+    const SHAPES = [{
+        id: 'a1', kind: 'single', side: 'CE', won: true, net: 1250, label: 'breakout_range · CE',
+        entry: { t: CANDLES[0].time, p: 105, shape: 'arrowUp' }, exit: { t: CANDLES[1].time, p: 108, shape: 'circle' },
+    }];
+
+    async function mountWithTrades(props = {}) {
+        const lw = await import('lightweight-charts');
+        const chart = lw.createChart.mock.results.at(-1)?.value || lw.createChart();
+        const before = { attach: 0, move: chart.subscribeCrosshairMove.mock.calls.length, click: chart.subscribeClick.mock.calls.length };
+        const series = chart.addSeries();
+        before.attach = series.attachPrimitive.mock.calls.length;
+        const onTradeHover = vi.fn(), onTradeClick = vi.fn();
+        render(
+            <ThemeProvider>
+                <PriceChart candles={CANDLES} trades={SHAPES} onTradeHover={onTradeHover} onTradeClick={onTradeClick}
+                    renderTradeTip={(hit) => (hit?.type === 'trade' ? `trade ${hit.tradeId}` : null)} {...props} />
+            </ThemeProvider>,
+        );
+        // the trade primitive is the second one PriceChart attaches (trend lines first)
+        const prims = series.attachPrimitive.mock.calls.slice(before.attach).map((c) => c[0]);
+        const tradePrim = prims.find((p) => typeof p.hitTest === 'function');
+        // paint one frame with a deterministic projection: bar i → x 100 + 50i, price p → y 500 − p
+        const fakeChart = { timeScale: () => ({ logicalToCoordinate: (li) => (Number.isInteger(li) ? 100 + li * 50 : 0) }) };
+        tradePrim.attached({ chart: fakeChart, series: { priceToCoordinate: (p) => 500 - p }, requestUpdate: () => {} });
+        tradePrim.paneViews()[0].renderer().draw({
+            useMediaCoordinateSpace: (fn) => fn({
+                context: new Proxy({ measureText: () => ({ width: 30 }) }, { get: (o, k) => (k in o ? o[k] : () => {}), set: () => true }),
+                mediaSize: { width: 600, height: 300 },
+            }),
+        });
+        const move = chart.subscribeCrosshairMove.mock.calls.slice(before.move).map((c) => c[0]);
+        const click = chart.subscribeClick.mock.calls.slice(before.click).map((c) => c[0]);
+        return { move, click, onTradeHover, onTradeClick };
+    }
+
+    it('hovering an entry mark shows the tooltip and reports the trade', async () => {
+        const { move, onTradeHover } = await mountWithTrades();
+        act(() => { move.forEach((fn) => fn({ point: { x: 101, y: 396 }, time: CANDLES[0].time + 19800, seriesData: new Map() })); });
+        expect(screen.getByTestId('trade-tip').textContent).toBe('trade a1');
+        expect(onTradeHover).toHaveBeenLastCalledWith(['a1']);
+        act(() => { move.forEach((fn) => fn({ point: { x: 400, y: 20 }, seriesData: new Map() })); });
+        expect(screen.queryByTestId('trade-tip')).toBeNull();
+        expect(onTradeHover).toHaveBeenLastCalledWith(null);
+    });
+
+    it('clicking a mark focuses that trade', async () => {
+        const { click, onTradeClick } = await mountWithTrades();
+        click.forEach((fn) => fn({ point: { x: 150, y: 392 }, time: CANDLES[1].time + 19800 }));
+        expect(onTradeClick).toHaveBeenCalledWith('a1');
+    });
+});
+
+// ── a rebuilt chart must not come back empty (17-Oct-2026: "Free zoom" → blank chart) ──
+describe('PriceChart rebuilds and the zoom lock', () => {
+    it('toggling the lock is an option change, not a new chart', async () => {
+        const lw = await import('lightweight-charts');
+        const { rerender } = render(<ThemeProvider><PriceChart candles={CANDLES} /></ThemeProvider>);
+        const created = lw.createChart.mock.calls.length;
+        const chart = lw.createChart.mock.results.at(-1).value;
+        chart.applyOptions.mockClear();
+        rerender(<ThemeProvider><PriceChart candles={CANDLES} lockToData /></ThemeProvider>);
+        expect(lw.createChart.mock.calls.length).toBe(created);
+        expect(chart.applyOptions).toHaveBeenCalledWith({ timeScale: { fixLeftEdge: true, fixRightEdge: true } });
+    });
+
+    it('when the chart IS rebuilt (height, volume pane, theme), the candles go back on it', async () => {
+        const lw = await import('lightweight-charts');
+        const { rerender } = render(<ThemeProvider><PriceChart candles={CANDLES} height={400} /></ThemeProvider>);
+        const series = lw.createChart.mock.results.at(-1).value.addSeries();
+        series.setData.mockClear();
+        const created = lw.createChart.mock.calls.length;
+        rerender(<ThemeProvider><PriceChart candles={CANDLES} height={500} /></ThemeProvider>);
+        expect(lw.createChart.mock.calls.length).toBe(created + 1);
+        expect(series.setData).toHaveBeenCalled();
+        expect(series.setData.mock.calls.at(-1)[0]).toHaveLength(CANDLES.length);
     });
 });

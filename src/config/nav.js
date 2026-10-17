@@ -90,6 +90,7 @@ const Alerts = lazy(() => import('../pages/Alerts'));
 const DataManager = lazy(() => import('../components/DataManager'));
 const ParityAuditDashboard = lazy(() => import('../components/ParityAuditDashboard'));
 const MarketRules = lazy(() => import('../pages/MarketRules'));
+const Notifications = lazy(() => import('../pages/Notifications'));
 const Delta = lazy(() => import('../pages/Delta'));
 const GoLive = lazy(() => import('../pages/GoLive'));
 const Docs = lazy(() => import('../pages/Docs'));
@@ -148,6 +149,8 @@ export const HIDDEN_ROUTES = [
     { path: '/callback', labelKey: 'nav.callback', component: Callback },
     // a doc page: /docs/<page>#<section> (DocLink targets)
     { path: '/docs/:pageId', labelKey: 'nav.docs', component: Docs },
+    // Reached from the bell in the rail footer (with its unread count), not the rail list.
+    { path: '/notifications', labelKey: 'nav.notifications', component: Notifications },
 ];
 
 /** Everything that gets a <Route>. Rail order first, then the unlisted pages. */

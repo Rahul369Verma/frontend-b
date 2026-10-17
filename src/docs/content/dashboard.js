@@ -80,8 +80,10 @@ These values are edited on [Settings](settings#risk-limits).`,
             where: 'Card below the Deployments panel',
             md: `This card answers one question: **lately, have our bullish (CE) trades or our bearish (PE) trades been working?** It is pure arithmetic on your own recent closed trades — no AI and no market forecast.
 
+It reads **top to bottom, simplest first**: one line on what the gate is doing, the two sides in plain words, whether blocking has helped, the **blocked trades**, and the **latest decisions**. Everything else — the scorecard, session history, day-by-day value and the ghost table — is behind **Show details**.
+
 ## The two side boxes
-For each side the bar shows a **confidence** from 0% to 100%: the probability that the side's average result is positive. **50% = no edge either way.** The numbers underneath:
+Each box shows the side's **confidence** (0% to 100%: the probability that the side's average result is positive — **50% = no edge either way**) and one sentence saying what that means right now, e.g. *"Below the 40% floor — these signals are blocked; 1 in 3 goes through as a probe (next probe in 2 signals)."* **Numbers** opens the detail:
 
 | Line | Meaning |
 |---|---|
@@ -115,8 +117,16 @@ The **badge** on the right is the verdict. Its icon matters: **✓** = blocking 
 ## Confidence at each session close
 One row per trading day: each side's confidence measured at that day's **15:40 IST close** (the time is shown), with the number of trades counted in brackets. Today's row says **(so far)** until the session ends, because the day is not over. Read it as a history: watching a side's confidence fall below the floor and recover is how you see the gate "think".
 
+## Is it helping?
+One sentence on whether blocking has made or cost money over roughly the last 4 weeks. Until 10 or more trades have been blocked it says **too few to judge** — a handful of trades can go either way by luck.
+
+## Blocked trades
+Every trade the gate **blocked** (Enforce) or **would have blocked** (Shadow), newest first. The line on top adds it up: how much blocking **saved** (blocked trades that would have lost) and **cost** (blocked trades that would have won), and the net. Each row says in words what happened — *"would have made −₹893 (SL Hit)"* for a blocked trade followed at real prices, *"taken anyway (shadow mode) — made +₹2,179"* for a shadow verdict — and whether blocking saved or cost money.
+
+**Details** opens everything about one block: both sides' confidence at that moment and the engine's exact reason, the contract and prices, the worst and best point while it was followed, and any **AI reviews** — a failed review says *why* it failed (for example *Claude.ai blocked the request with a Cloudflare check*) and how to fix it. AI failures are also raised on [Notifications](notifications#ai-health).
+
 ## Latest gate decisions
-The most recent signals the gate judged, newest first, with **date and time**, side, strategy and decision:
+The most recent signals the gate judged, newest first, with **date and time**, strategy, index and side, decision, confidence and what happened next:
 
 | Decision | Meaning |
 |---|---|
@@ -126,7 +136,7 @@ The most recent signals the gate judged, newest first, with **date and time**, s
 | **THIN** | Too few recent trades on this side to judge — the trade goes ahead. |
 | **UNMEASURED** | No fresh reading was available, so the gate stepped aside (it never blocks blind). |
 
-Hover a decision to see its meaning and the engine's exact reason. This list lives in the engine's memory, so it starts empty after a restart; the permanent record is the history below.`,
+Hover a decision to see its meaning and the engine's exact reason. The list is read from the gate's permanent journal, so it survives restarts (it used to be engine memory and said *"No signals since the engine started"* after every deploy).`,
         },
         {
             id: 'direction-gate-history',

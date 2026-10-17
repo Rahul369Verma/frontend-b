@@ -5,6 +5,11 @@
  * sceptical Bayesian estimate over recent closed trades (backend
  * src/domain/risk/directionConfidence.js — pure maths, no AI).
  *
+ * SIMPLE FIRST (user, 16-Oct-2026). The top says, in words, what the gate is doing
+ * to each side right now, whether blocking has helped, and which trades it
+ * blocked — each with a Details button. The maths (scorecard, session history,
+ * day-by-day value, ghost table) sits behind "Show details".
+ *
  * ── WHY THE DEFAULT IS SHADOW ───────────────────────────────────────────────
  * Before this was built, a side's recent confidence did NOT predict its next trade
  * on three datasets, and every blocking setting lowered one-year backtest profit.
@@ -14,110 +19,81 @@
  */
 import React, { useCallback, useState } from 'react';
 import axios from 'axios';
-import { Compass } from 'lucide-react';
+import { Compass, ChevronDown, ChevronRight } from 'lucide-react';
 import { API_URL } from '../../config/api.js';
-import { Card, StatusBadge, Chip, Meter, Segmented, Spinner, DataTable, Placeholder } from '../viz/primitives';
+import { Card, StatusBadge, Meter, Segmented, Spinner, DataTable, Placeholder } from '../viz/primitives';
 import { inr, istDateTime, pnlTone } from '../viz/tokens.js';
 import { usePolling } from '../../hooks/usePolling.js';
 import { useConfirm } from '../confirmContext.js';
 import { toast } from '../toastStore.js';
-import { sideState } from './directionState.js';
+import { sideState, sideMeaning, gateVerdict, MODE_LINE } from './directionState.js';
 import DirectionGateHistory from './DirectionGateHistory.jsx';
+import BlockedTrades from './BlockedTrades.jsx';
+import GateDecisions from './GateDecisions.jsx';
 import DocLink from '../DocLink.jsx';
 
 const n = (v) => { if (v == null || v === '') return null; const x = Number(v); return Number.isFinite(x) ? x : null; };
 const pct0 = (v) => (n(v) == null ? '—' : `${Math.round(n(v) * 100)}%`);
+const BTN = 'inline-flex items-center gap-1 px-2 py-0.5 rounded border border-line-2 bg-card-2 text-2xs text-fg-3 hover:text-fg';
 
 const SIDES = [
     { key: 'CE', title: 'CE · bullish buys' },
     { key: 'PE', title: 'PE · bearish buys' },
 ];
 
-const DECISION_TONE = { ALLOW: 'good', PROBE: 'info', BLOCK: 'critical', THIN: 'muted', UNMEASURED: 'warning', OFF: 'muted' };
-
-// What each decision means, on hover — the chip alone is jargon.
-const DECISION_MEANING = {
-    ALLOW: 'ALLOW — this side is trusted enough (confidence at or above the floor); the trade goes ahead.',
-    BLOCK: 'BLOCK — this side is weak (confidence below the floor). In Shadow it is only recorded; in Enforce (✕) the signal is rejected.',
-    PROBE: 'PROBE — the side is weak, but every Nth weak signal is let through on purpose as a test trade, so the side can earn its confidence back.',
-    THIN: 'THIN — too few recent trades on this side to judge, so the trade goes ahead.',
-    UNMEASURED: 'UNMEASURED — the engine had no fresh confidence reading, so the gate stayed out of the way (fails open).',
-    OFF: 'OFF — the gate is switched off; nothing was decided.',
-};
-
 // The scorecard verdict badge: its icon is part of the message, not decoration.
 const VERDICT_HELP = 'Badge icon: ✓ = blocking would have made money · ✕ = blocking would have cost money · i = information only, not enough data to judge yet (needs 10+ blocked trades).';
 
-function SideBlock({ meta, side, opts, credit }) {
+
+
+function SideTile({ meta, side, opts, credit, mode }) {
+    const [open, setOpen] = useState(false);
     const st = sideState(side, opts);
     const conf = n(side?.confidence);
     const weak = st.label === 'WEAK';
     const probeEvery = opts?.probeEvery ?? 3;
     const left = weak && credit != null ? Math.max(1, Math.ceil((1 - credit) * probeEvery - 1e-9)) : null;
     return (
-        <div className="bg-card-2/40 border border-line/60 rounded-lg p-3 space-y-2" data-testid={`side-${meta.key}`}>
+        <div className="bg-card-2/40 border border-line/60 rounded-lg p-3 space-y-1.5" data-testid={`side-${meta.key}`}>
             <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-medium text-fg-3">{meta.title}</span>
                 <StatusBadge level={st.level}>{st.label}</StatusBadge>
             </div>
-            <Meter value={conf ?? 0.5} max={1} label="Confidence (P mean R > 0)"
-                tone={weak ? 'critical' : st.label === 'NEUTRAL' ? 'warning' : 'neutral'}
-                caption={`floor ${pct0(opts?.floor)} · 50% = no edge either way`} />
-            <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-2xs text-fg-5">
-                <span>Trades in window</span><span className="text-fg-3 tabular-nums text-right">{side?.n ?? 0} (eff {n(side?.nEff)?.toFixed(1) ?? '0.0'})</span>
-                <span>Win rate (decayed)</span><span className="text-fg-3 tabular-nums text-right">{pct0(side?.winRate)}</span>
-                <span>Avg R (decayed)</span><span className="text-fg-3 tabular-nums text-right">{n(side?.meanR) == null ? '—' : n(side.meanR).toFixed(2)}</span>
-                <span>Net in window</span><span className={`tabular-nums text-right ${pnlTone(side?.netRs)}`}>{inr(side?.netRs, { sign: true })}</span>
-            </div>
-            {weak && (
-                <p className="text-2xs text-fg-4">
-                    Weak side: 1 in {probeEvery} signals goes through as a probe
-                    {left != null ? ` — next probe in ${left} signal${left === 1 ? '' : 's'}` : ''}.
-                </p>
+            <p className="text-2xl font-semibold tabular-nums text-fg">{pct0(conf)} <span className="text-2xs font-normal text-fg-5">confidence</span></p>
+            <p className="text-2xs text-fg-4">{sideMeaning(st, { mode, probeEvery, left, floor: opts?.floor })}</p>
+            <button type="button" className={BTN} onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+                {open ? <ChevronDown className="w-3 h-3" aria-hidden="true" /> : <ChevronRight className="w-3 h-3" aria-hidden="true" />}
+                {open ? 'Hide numbers' : 'Numbers'}
+            </button>
+            {open && (
+                <div className="space-y-2 pt-1">
+                    <Meter value={conf ?? 0.5} max={1} label="Confidence (P mean R > 0)"
+                        tone={weak ? 'critical' : st.label === 'NEUTRAL' ? 'warning' : 'neutral'}
+                        caption={`floor ${pct0(opts?.floor)} · 50% = no edge either way`} />
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-2xs text-fg-5">
+                        <span>Trades in window</span><span className="text-fg-3 tabular-nums text-right">{side?.n ?? 0} (eff {n(side?.nEff)?.toFixed(1) ?? '0.0'})</span>
+                        <span>Win rate (decayed)</span><span className="text-fg-3 tabular-nums text-right">{pct0(side?.winRate)}</span>
+                        <span>Avg R (decayed)</span><span className="text-fg-3 tabular-nums text-right">{n(side?.meanR) == null ? '—' : n(side.meanR).toFixed(2)}</span>
+                        <span>Net in window</span><span className={`tabular-nums text-right ${pnlTone(side?.netRs)}`}>{inr(side?.netRs, { sign: true })}</span>
+                    </div>
+                </div>
             )}
         </div>
     );
 }
 
-export function DirectionConfidenceView({ data, onMode, onTrackBlocked, busy }) {
-    if (!data) return null;
-    const { sides, opts, mode, history, scorecard, live, excluded } = data;
+
+function Details({ data }) {
+    const { opts, history, scorecard, live, excluded, mode } = data;
     const sc = scorecard || {};
     const wb = sc.wouldBlock || { n: 0 };
     const en = sc.enforce || null;
-    // value = book with the gate − book without it (shadow would-blocks + enforce ghosts/knock-ons)
     const verdictLevel = sc.judged != null
         ? (sc.judged >= 10 ? (sc.value > 0 ? 'good' : 'critical') : 'info')
         : (wb.n >= 10 ? (wb.net < 0 ? 'good' : 'critical') : 'info');
     const trackBlocked = opts?.trackBlocked !== false;
     return (
         <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-2xs text-fg-5 max-w-xl">
-                    {mode === 'enforce' ? 'ENFORCING: weak-side signals are blocked except probes.'
-                        : mode === 'off' ? 'Off: no decisions are made or recorded.'
-                        : 'Shadow: every entry records what the gate would do; nothing is blocked.'}
-                </p>
-                <Segmented value={mode} onChange={onMode}
-                    options={[
-                        { v: 'off', label: 'Off', hint: 'No decisions' },
-                        { v: 'shadow', label: 'Shadow', hint: 'Record decisions, never block (recommended)' },
-                        { v: 'enforce', label: 'Enforce', hint: 'Block weak-side signals except probes' },
-                    ]} />
-            </div>
-            {onTrackBlocked && (
-                <label className="inline-flex items-center gap-2 text-2xs text-fg-4" title="Enforce mode: carry each blocked signal down the real entry path and follow it at real prices (never an order), so the history shows what it would have made">
-                    <input type="checkbox" checked={trackBlocked} disabled={busy} onChange={(e) => onTrackBlocked(e.target.checked)} aria-label="Follow blocked trades as ghosts" />
-                    Follow blocked trades as ghosts (enforce)
-                </label>
-            )}
-            {busy && <Spinner label="Saving…" />}
-            {live?.stale && <StatusBadge level="warning">Engine snapshot is stale or not running — decisions fail open</StatusBadge>}
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {SIDES.map(s => <SideBlock key={s.key} meta={s} side={sides?.[s.key]} opts={opts} credit={live?.credit?.[s.key]} />)}
-            </div>
-
             <div className="border border-line/60 rounded-lg p-3 space-y-1.5" data-testid="scorecard">
                 <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-medium text-fg-3">Scorecard, last ~4 weeks — would blocking have helped?</span>
@@ -142,38 +118,77 @@ export function DirectionConfidenceView({ data, onMode, onTrackBlocked, busy }) 
                     </p>
                 )}
             </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                <div>
-                    <p className="text-2xs uppercase tracking-wide text-fg-5 mb-1">Confidence at each session close (IST) <DocLink to="dashboard#direction-confidence" /></p>
-                    <DataTable dense rows={(history || []).slice().reverse().map(h => ({ ...h, _key: h.date }))} empty="No sessions yet"
-                        columns={[
-                            // measured at the 15:40 close; today's row is "so far" until then
-                            { key: 'date', header: 'Session', render: r => (r.at
-                                ? <span title={r.live ? 'Session still open — this is the reading so far, not the close' : 'Measured at the session close'}>{istDateTime(r.at)}{r.live ? ' (so far)' : ''}</span>
-                                : `${r.date}, 15:40`) },
-                            { key: 'CE', header: 'CE', align: 'right', render: r => `${pct0(r.CE)} (${r.ceN})` },
-                            { key: 'PE', header: 'PE', align: 'right', render: r => `${pct0(r.PE)} (${r.peN})` },
-                        ]} />
-                </div>
-                <div>
-                    <p className="text-2xs uppercase tracking-wide text-fg-5 mb-1">Latest gate decisions (engine memory) <DocLink to="dashboard#direction-confidence" /></p>
-                    <DataTable dense maxHeight={240} rows={(live?.recent || []).slice(0, 12).map((d, i) => ({ ...d, _key: `${d.at}-${i}` }))}
-                        empty={live ? 'No signals since the engine started' : 'Engine not running'}
-                        columns={[
-                            { key: 'at', header: 'When (IST)', render: r => istDateTime(r.at) },
-                            { key: 'side', header: 'Side' },
-                            { key: 'strategy', header: 'Strategy', render: r => r.strategy || '—' },
-                            { key: 'decision', header: 'Decision', render: r => <Chip tone={DECISION_TONE[r.decision] || 'neutral'} title={[DECISION_MEANING[r.decision], r.enforced ? '✕ = enforced: this signal was actually rejected.' : null, r.reason ? `Engine: ${r.reason}` : null].filter(Boolean).join('\n')}>{r.decision}{r.enforced ? ' ✕' : ''}</Chip> },
-                        ]} />
-                </div>
+            <div>
+                <p className="text-2xs uppercase tracking-wide text-fg-5 mb-1">Confidence at each session close (IST) <DocLink to="dashboard#direction-confidence" /></p>
+                <DataTable dense rows={(history || []).slice().reverse().map(h => ({ ...h, _key: h.date }))} empty="No sessions yet"
+                    columns={[
+                        { key: 'date', header: 'Session', render: r => (r.at
+                            ? <span title={r.live ? 'Session still open — this is the reading so far, not the close' : 'Measured at the session close'}>{istDateTime(r.at)}{r.live ? ' (so far)' : ''}</span>
+                            : `${r.date}, 15:40`) },
+                        { key: 'CE', header: 'CE', align: 'right', render: r => `${pct0(r.CE)} (${r.ceN})` },
+                        { key: 'PE', header: 'PE', align: 'right', render: r => `${pct0(r.PE)} (${r.peN})` },
+                    ]} />
             </div>
-
+            {live?.stale && <StatusBadge level="warning">Engine snapshot is stale or not running — decisions fail open</StatusBadge>}
             <p className="text-3xs text-fg-5">
                 Pure maths, no AI: R = net P&L ÷ rupees risked, half-life {opts?.halfLifeSessions} sessions, sceptical prior worth {opts?.priorTrades} trades
                 at 0, confidence = P(mean R &gt; 0). Old results fade, so a blocked side drifts back to 50% on its own; winning probes bring it back faster.
                 {excluded?.count ? ` ${excluded.count} trade${excluded.count === 1 ? '' : 's'} excluded (${Object.entries(excluded.reasons || {}).map(([k, v]) => `${v} ${k}`).join(', ')}).` : ''}
             </p>
+        </div>
+    );
+}
+
+export function DirectionConfidenceView({ data, onMode, onTrackBlocked, busy, blocked = null, decisions = null, history = null }) {
+    const [details, setDetails] = useState(false);
+    if (!data) return null;
+    const { sides, opts, mode, live } = data;
+    const trackBlocked = opts?.trackBlocked !== false;
+    const v = gateVerdict(data);
+    return (
+        <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-fg-3 max-w-xl">{MODE_LINE[mode] || MODE_LINE.shadow}</p>
+                <Segmented value={mode} onChange={onMode}
+                    options={[
+                        { v: 'off', label: 'Off', hint: 'No decisions' },
+                        { v: 'shadow', label: 'Shadow', hint: 'Record decisions, never block (recommended)' },
+                        { v: 'enforce', label: 'Enforce', hint: 'Block weak-side signals except probes' },
+                    ]} />
+            </div>
+            {onTrackBlocked && mode === 'enforce' && (
+                <label className="inline-flex items-center gap-2 text-2xs text-fg-4" title="Carry each blocked signal down the real entry path and follow it at real prices (never an order), so you can see what it would have made">
+                    <input type="checkbox" checked={trackBlocked} disabled={busy} onChange={(e) => onTrackBlocked(e.target.checked)} aria-label="Follow blocked trades as ghosts" />
+                    Follow blocked trades at real prices (to see what they would have made)
+                </label>
+            )}
+            {busy && <Spinner label="Saving…" />}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {SIDES.map(s => <SideTile key={s.key} meta={s} side={sides?.[s.key]} opts={opts} credit={live?.credit?.[s.key]} mode={mode} />)}
+            </div>
+
+            {/* ONE answer to "is it helping?": the blocked list carries it when shown; this line is the fallback */}
+            {!blocked && (
+                <div className="flex items-start gap-2" data-testid="gate-verdict">
+                    <StatusBadge level={v.level} title={VERDICT_HELP}>Is it helping?</StatusBadge>
+                    <p className="text-2xs text-fg-3">{v.text}</p>
+                </div>
+            )}
+
+            {blocked}
+            {decisions}
+
+            <button type="button" className={BTN} onClick={() => setDetails((d) => !d)} aria-expanded={details}>
+                {details ? <ChevronDown className="w-3 h-3" aria-hidden="true" /> : <ChevronRight className="w-3 h-3" aria-hidden="true" />}
+                {details ? 'Hide details' : 'Show details — scorecard, session history, day-by-day value'}
+            </button>
+            {details && (
+                <div className="space-y-3 border-t border-line/60 pt-3">
+                    <Details data={data} />
+                    {history}
+                </div>
+            )}
         </div>
     );
 }
@@ -219,7 +234,7 @@ export default function DirectionConfidencePanel() {
         setBusy(true);
         try {
             await axios.post(`${API_URL}/analytics/direction-confidence/settings`, { trackBlocked });
-            toast.success(trackBlocked ? 'Blocked trades will be followed as ghosts' : 'Ghost tracking off');
+            toast.success(trackBlocked ? 'Blocked trades will be followed at real prices' : 'Blocked trades will not be followed');
             await load();
         } catch (e) {
             toast.error(e?.response?.data?.error || e.message);
@@ -227,12 +242,14 @@ export default function DirectionConfidencePanel() {
     };
 
     return (
-        <Card docs="dashboard#direction-confidence" title={<span className="inline-flex items-center gap-2"><Compass className="w-4 h-4" aria-hidden="true" />Direction confidence — CE vs PE</span>}
-            subtitle="How much recent trades trust each side; the gate's verdict is stamped on every entry">
-            {err && <Placeholder>Could not load direction confidence: {err}</Placeholder>}
-            {!data && !err && <Spinner label="Loading direction confidence…" />}
-            <DirectionConfidenceView data={data} onMode={onMode} onTrackBlocked={onTrackBlocked} busy={busy} />
-            <div className="mt-3"><DirectionGateHistory /></div>
-        </Card>
+        <div id="direction-confidence" className="scroll-mt-4">
+            <Card docs="dashboard#direction-confidence" icon={Compass} title="Direction confidence — CE vs PE"
+                subtitle="How much recent trades trust each side, and which trades the gate blocked">
+                {err && <Placeholder>Could not load direction confidence: {err}</Placeholder>}
+                {!data && !err && <Spinner label="Loading direction confidence…" />}
+                <DirectionConfidenceView data={data} onMode={onMode} onTrackBlocked={onTrackBlocked} busy={busy}
+                    blocked={<BlockedTrades />} decisions={<GateDecisions />} history={<DirectionGateHistory />} />
+            </Card>
+        </div>
     );
 }

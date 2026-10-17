@@ -80,6 +80,7 @@ export const STRINGS = {
         docs: 'Docs',
         // Reachable pages that are deliberately not in the rail.
         strategyDetail: 'Strategy Detail',
+        notifications: 'Notifications',
         callback: 'Broker Callback',
     },
 

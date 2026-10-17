@@ -1,6 +1,7 @@
 // Pure helpers for the multi-index optimizer view. Everything here reads the
 // server's `multi_index_optimization_result` (backend/logic/engine/optimizer/pooledRun.js)
 // and never invents numbers: sentences and badges are built only from result fields.
+import { withCurrentLot } from '../../utils/lots.js';
 
 export const INDEXES = [
   { symbol: 'NSE:NIFTY50-INDEX', name: 'NIFTY' },
@@ -117,18 +118,21 @@ export function bannerSentence(result, k) {
 // Keys that never travel from a result into a backtest (orchestration + run context set explicitly).
 export const MULTI_OMIT_KEYS = ['symbols', 'preset', 'budget', 'seed', 'cross_index', 'minSlU', 'optimizer_workers', 'optimizer_block', 'jobId', 'strategies', 'iterations', 'stop_on_match', 'isOptimizer', 'DISABLE_RANDOMIZATION', 'signal'];
 
-/** Backtest params for "Test on <index>" (contract: shared run context + the row's params + this index's lot and min SL). */
-export function buildTestParams(result, row, symbol) {
+/**
+ * A result's tuned params as Backtester settings for one index: the run's shared
+ * context, and ONE lot today (utils/lots.js). Every hand-off — an index card's Test
+ * and Copy JSON, a By-index row's, Save — goes through here, so they cannot differ.
+ * The run's own per-index lot_size is not used: older runs stored the START date's
+ * lot (NIFTY 75 for a window that is 65 from 31 Dec 2025).
+ */
+export function settingsForIndex(result, params, symbol, strategy) {
   const shared = result?.runConfig?.shared || {};
-  const ps = result?.runConfig?.perSymbol?.[symbol] || {};
-  const cell = row?.perSymbol?.[symbol] || {};
-  const src = cell.row?.params || row?.params || {};
-  const params = { ...src };
-  for (const k of MULTI_OMIT_KEYS) delete params[k];
-  return {
-    ...params,
+  const p = { ...(params || {}) };
+  for (const k of MULTI_OMIT_KEYS) delete p[k];
+  return withCurrentLot({
+    ...p,
     symbol,
-    strategy: row.strategy,
+    strategy,
     resolution: shared.resolution,
     start_date: shared.start_date,
     end_date: shared.end_date,
@@ -137,7 +141,15 @@ export function buildTestParams(result, row, symbol) {
     backtest_mode: shared.backtest_mode,
     slippage_percent: shared.slippage_percent,
     brokerage_per_order: shared.brokerage_per_order,
-    ...(ps.lot_size ? { lot_size: ps.lot_size } : {}),
+  });
+}
+
+/** Backtest params for "Test on <index>" (the shared hand-off + this index's min SL). */
+export function buildTestParams(result, row, symbol) {
+  const cell = row?.perSymbol?.[symbol] || {};
+  const src = cell.row?.params || row?.params || {};
+  return {
+    ...settingsForIndex(result, src, symbol, row.strategy),
     ...(cell.minSlPoints != null ? { min_sl_points: cell.minSlPoints } : {}),
   };
 }

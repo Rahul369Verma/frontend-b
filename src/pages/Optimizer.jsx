@@ -4,10 +4,12 @@ import DeltaInstrumentPicker from '../components/delta/DeltaInstrumentPicker';
 import DeltaParams from '../components/delta/DeltaParams';
 import { isDeltaSymbol } from '../components/delta/deltaFormat.js';
 import { useNavigate } from 'react-router-dom';
-import { Activity, Play, TrendingUp, AlertTriangle, Code, ChevronDown, ChevronRight, Check, Trophy, Square, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Activity, Play, TrendingUp, AlertTriangle, Code, ChevronDown, ChevronRight, Check, Trophy, Square, PanelLeftClose, PanelLeftOpen, Copy } from 'lucide-react';
+import { copyStrategyJson, resultsFromRow } from '../components/optimizer/copyStrategy.js';
 import { useGlobalState } from '../context/GlobalContext';
 import { io } from 'socket.io-client';
 import { INSTRUMENT_CONFIG } from '../constants';
+import { sizesByLots, currentLot, withCurrentLot, lotText } from '../utils/lots.js';
 import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 import { pollInterval } from '../hooks/usePolling.js';
 import { API_ORIGIN } from '../config/api.js';
@@ -501,7 +503,8 @@ export default function Optimizer() {
         ...config,
         jobId,
         symbol: config.symbol,
-        lot_size: config.lot_size || 15,
+        lot_size: (sizesByLots(config.symbol) && currentLot(config.symbol)) || config.lot_size || 15,
+        lots: Math.max(1, parseInt(config.lots, 10) || 1),
         start_date: config.start_date,
         end_date: config.end_date,
         capital: config.capital,
@@ -659,7 +662,8 @@ export default function Optimizer() {
     });
   };
 
-  const handleTestClick = (result, strategyId) => {
+  // The exact Backtester settings for a single-index result — Test sends them, Copy JSON copies them.
+  const buildSingleTest = (result, strategyId) => {
     // The per-row strategy MUST win (a multi-strategy result row may not be the
     // first selected strategy). result.params carries the original request's
     // `strategy`, so we strip it and set the correct one explicitly.
@@ -700,7 +704,20 @@ export default function Optimizer() {
       // but symbol/strategy already stripped from `tuned`).
       ...tuned,
     };
+    // One lot TODAY for the symbol (the same rule as every multi-index hand-off), never a
+    // stored run's lot: each trade still takes the lot listed on its own day.
+    return { newBacktestParams: withCurrentLot(newBacktestParams), tuned, strat, symbol };
+  };
 
+  const copyResultJson = (result, strategyId) => {
+    const { newBacktestParams, strat } = buildSingleTest(result, strategyId);
+    return copyStrategyJson(newBacktestParams, {
+      strategy: strat, results: resultsFromRow(result, result.robust === false ? 'overfit' : result.robust ? 'held up' : null),
+    });
+  };
+
+  const handleTestClick = (result, strategyId) => {
+    const { newBacktestParams, tuned, strat, symbol } = buildSingleTest(result, strategyId);
     setBacktestParams(newBacktestParams);
     // Also pass navigation state so Backtest's location.state handler runs its
     // strategy-name normalization + critical-param merge.
@@ -1012,13 +1029,26 @@ export default function Optimizer() {
 
             {isMulti ? (
               <div>
-                <span className="block text-sm font-medium text-fg-4 mb-1">Lot Size</span>
-                <p className="text-2xs text-fg-3">
-                  {symbols.map(s => `${nameOf(s)} ${dataCheckResult?.symbols?.[s]?.lotSize ?? instrumentConfig[s]?.lotSize ?? '—'}`).join(' · ')}
-                </p>
-                <p className="text-2xs text-fg-5">Each index uses its exchange lot (as of the start date) — not editable here.</p>
+                <span className="block text-sm font-medium text-fg-4 mb-1">One lot (today)</span>
+                <ul className="text-2xs text-fg-3 space-y-0.5" data-testid="multi-lots">
+                  {symbols.map(s => {
+                    const dc = dataCheckResult?.symbols?.[s];
+                    return <li key={s}>{nameOf(s)} {lotText(currentLot(s) ?? dc?.lotSize, dc?.lotWindow)}</li>;
+                  })}
+                </ul>
+                <p className="text-2xs text-fg-5">Each trade uses the exchange lot listed on its own day, so a window that crosses a lot revision is sized correctly on both sides. Not editable here.</p>
               </div>
-            ) : isDeltaSymbol(config.symbol) ? null : (
+            ) : isDeltaSymbol(config.symbol) ? null : sizesByLots(config.symbol) ? (
+            <div>
+              <label htmlFor="optimizer-lots-2" className="block text-sm font-medium text-fg-4 mb-1">Lots</label>
+              <input id="optimizer-lots-2" type="number" min="1" step="1"
+                className="w-full bg-slate-900 border border-line rounded p-2 text-fg"
+                value={Math.max(1, parseInt(config.lots, 10) || 1)}
+                onChange={e => setConfig({ ...config, lots: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+              />
+              <p className="text-2xs text-fg-5 mt-1" data-testid="single-lot">1 lot = {currentLot(config.symbol) ?? '—'} today. Each trade uses the lot listed on its own day.</p>
+            </div>
+            ) : (
             <div>
               <label htmlFor="optimizer-lot-size-2" className="block text-sm font-medium text-fg-4 mb-1">Lot Size</label>
               <input id="optimizer-lot-size-2"
@@ -1532,6 +1562,12 @@ export default function Optimizer() {
                       onClick={() => handleTestClick(winner.best, winner.strategy)}>
                       Test best on Backtester →
                     </button>
+                    <button type="button"
+                      className="mt-3 ml-2 text-xs bg-slate-700 hover:bg-slate-600 text-fg px-3 py-1.5 rounded inline-flex items-center gap-1"
+                      title="Copy the best settings as strategy JSON — paste in Backtest → Import JSON"
+                      onClick={() => copyResultJson(winner.best, winner.strategy)}>
+                      <Copy className="w-3 h-3" aria-hidden="true" />Copy JSON
+                    </button>
                   </div>
                 );
               })()}
@@ -1695,8 +1731,13 @@ export default function Optimizer() {
                                                   onClick={(e) => { e.stopPropagation(); handleTestClick(res, g.strategy); }}>
                                                   Test
                                                 </button>
+                                                <button type="button" className="text-xs bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-fg inline-flex items-center gap-1"
+                                                  onClick={(e) => { e.stopPropagation(); copyResultJson(res, g.strategy); }}
+                                                  title="Copy as strategy JSON — paste in Backtest → Import JSON" aria-label={`Copy strategy JSON for ${g.strategy}`}>
+                                                  <Copy className="w-3 h-3" aria-hidden="true" />JSON
+                                                </button>
                                                 <button className="text-xs bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-fg"
-                                                  onClick={(e) => { e.stopPropagation(); setSelectedResult(res); }} title="View JSON">
+                                                  onClick={(e) => { e.stopPropagation(); setSelectedResult(res); }} title="View the raw result (not importable — use Copy JSON for that)">
                                                   <Code className="w-3 h-3" />
                                                 </button>
                                               </div>
@@ -1744,7 +1785,12 @@ export default function Optimizer() {
                     <Code className="w-4 h-4 text-primary-ink" />
                     Selected Parameters JSON
                     {selectedResult.strategy && <span className="text-xs text-fg-5">({labelFor(selectedResult.strategy)})</span>}
+                    <button type="button" className="ml-auto text-xs bg-slate-700 hover:bg-slate-600 text-fg px-2 py-1 rounded inline-flex items-center gap-1 font-normal"
+                      onClick={() => copyResultJson(selectedResult, selectedResult.strategy)} title="Copy as strategy JSON — paste in Backtest → Import JSON">
+                      <Copy className="w-3 h-3" aria-hidden="true" />Copy importable JSON
+                    </button>
                   </h3>
+                  <p className="text-2xs text-fg-5 mb-2">Below are this result's raw parameters. Copy importable JSON adds the run context (index, dates, data source, costs) so the Backtester can load it.</p>
                   {/* bg-bg-2 (the sunken-surface role), not bg-black: `--color-black` is pinned
                       to #000 in every theme by design, so text-fg-5 on it drops to 1.7:1 on the
                       light themes. bg-2 is #0e1117-dark / near-white-light and keeps the ink

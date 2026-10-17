@@ -139,6 +139,25 @@ export const GRID = MIDNIGHT_CHART_THEME.grid;        // solid hairline, one sha
  * `dp` pins the decimals; omit it for the default (2 below ₹100, whole rupees
  * above — small premiums need the paise, a lakh does not).
  */
+// ── Intl formatters are built ONCE per option set ───────────────────────────
+// `n.toLocaleString('en-IN', opts)` / `d.toLocaleString('en-IN', opts)` construct a
+// new Intl formatter on every call (tens of µs each). A table of a few hundred
+// cells re-rendering on hover spent most of its time here (17-Oct-2026 profile:
+// the Charts page's #1 and #3 functions). Same output, built once.
+const _nf = new Map();
+const numberFormat = (locale, opts) => {
+    const k = `${locale}|${opts.minimumFractionDigits ?? ''}|${opts.maximumFractionDigits ?? ''}`;
+    let f = _nf.get(k);
+    if (!f) { f = new Intl.NumberFormat(locale, opts); _nf.set(k, f); }
+    return f;
+};
+const _df = new Map();
+const dateFormat = (key, opts) => {
+    let f = _df.get(key);
+    if (!f) { f = new Intl.DateTimeFormat('en-IN', opts); _df.set(key, f); }
+    return f;
+};
+
 export function inr(v, { compact = false, sign = false, dp = null } = {}) {
     const n = Number(v);
     if (!Number.isFinite(n)) return '—';
@@ -148,7 +167,7 @@ export function inr(v, { compact = false, sign = false, dp = null } = {}) {
     if (compact && a >= 1e5) return `${s}₹${(a / 1e5).toFixed(2)}L`;
     if (compact && a >= 1000) return `${s}₹${(a / 1000).toFixed(1)}k`;
     const max = dp == null ? (a < 100 ? 2 : 0) : dp;
-    return `${s}₹${a.toLocaleString('en-IN', { maximumFractionDigits: max })}`;
+    return `${s}₹${numberFormat('en-IN', { maximumFractionDigits: max }).format(a)}`;
 }
 
 /**
@@ -165,7 +184,7 @@ export function premium(v, symbol = null) {
     // Delta Exchange contracts are priced in USD (INR only for *_INR spot pairs);
     // their P&L is still rupees, but a BTC price is not ₹83,000.
     if (typeof symbol === 'string' && symbol.startsWith('DELTA:') && !/_INR$/.test(symbol)) {
-        return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: n < 1 ? 6 : 2 })}`;
+        return `$${numberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: n < 1 ? 6 : 2 }).format(n)}`;
     }
     return `₹${n.toFixed(2)}`;
 }
@@ -220,25 +239,25 @@ export function istDayLabel(day, { year = true } = {}) {
 export function istDateTime(v, { seconds = false } = {}) {
     const d = v instanceof Date ? v : new Date(v);
     if (Number.isNaN(d.getTime())) return '—';
-    return d.toLocaleString('en-IN', {
+    return dateFormat(seconds ? 'dt:s' : 'dt', {
         timeZone: 'Asia/Kolkata',
         day: '2-digit', month: 'short', year: 'numeric',
         hour: '2-digit', minute: '2-digit',
         ...(seconds ? { second: '2-digit' } : {}),
         hour12: false,
-    });
+    }).format(d);
 }
 
 /** Time of day only, IST, 24-hour. */
 export function istTime(v, { seconds = true } = {}) {
     const d = v instanceof Date ? v : new Date(v);
     if (Number.isNaN(d.getTime())) return '—';
-    return d.toLocaleTimeString('en-IN', {
+    return dateFormat(seconds ? 't:s' : 't', {
         timeZone: 'Asia/Kolkata',
         hour: '2-digit', minute: '2-digit',
         ...(seconds ? { second: '2-digit' } : {}),
         hour12: false,
-    });
+    }).format(d);
 }
 
 /**
@@ -289,5 +308,5 @@ export function pct(v, dp = 1) {
 
 export function num(v, dp = 2) {
     const n = Number(v);
-    return Number.isFinite(n) ? n.toLocaleString('en-IN', { maximumFractionDigits: dp }) : '—';
+    return Number.isFinite(n) ? numberFormat('en-IN', { maximumFractionDigits: dp }).format(n) : '—';
 }

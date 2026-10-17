@@ -9,12 +9,14 @@ import ThemePanel from './theme/ThemePanel.jsx';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 import ConfirmProvider from './components/ConfirmDialog.jsx';
 import Toaster from './components/Toast.jsx';
+import keepIfSame from './utils/keepIfSame.js';
 import { pollInterval } from './hooks/usePolling.js';
 import { ALL_ROUTES, NAV_ITEMS } from './config/nav.js';
 import { useT } from './config/useT.js';
 import { useConfirm } from './components/confirmContext.js';
 import { assertMatchesServer } from './config/marketSession.js';
 import { API_URL } from './config/api.js';
+import NotificationBell from './components/notify/NotificationBell.jsx';
 
 /**
  * App shell — provider stack, sidebar rail and the route table.
@@ -76,8 +78,8 @@ function useHealth(pollMs = 30000) {
                 if (dead) return;
                 const status = j && j.status;
                 if (status === 'healthy') {
-                    setHealth({ dot: 'bg-success', pulse: true, label: t('sidebar.systemOnline'),
-                        detail: 'All required checks passing' });
+                    setHealth(prev => keepIfSame(prev, { dot: 'bg-success', pulse: true, label: t('sidebar.systemOnline'),
+                        detail: 'All required checks passing' }));
                 } else if (status === 'degraded') {
                     const which = (j.degraded || []).join(', ') || 'an optional check';
                     setHealth({ dot: 'bg-warning', pulse: true, label: t('sidebar.systemDegraded'),
@@ -225,6 +227,8 @@ function Sidebar() {
       </nav>
 
       <div className="p-4 border-t border-line space-y-2">
+        {/* Everything that needs a person: warnings, failures, notices (also sent to Telegram). */}
+        <NotificationBell collapsed={collapsed} focusClass={FOCUS} />
         {/*
           Appearance. Deliberately in the footer rather than the rail: it is not
           a page, it does not change the route, and it must not read as one. The

@@ -1,11 +1,12 @@
 import React from 'react';
-import { ChevronDown, ChevronRight, Trophy, AlertTriangle, TrendingUp } from 'lucide-react';
+import { ChevronDown, ChevronRight, Trophy, AlertTriangle, TrendingUp, Copy } from 'lucide-react';
 import useRemWidth from '../../hooks/useRemWidth';
 import { API_ORIGIN } from '../../config/api.js';
 import {
-  nameOf, bestPerStrategy, verdictOf, bannerSentence, buildTestParams, buildSaveBodies, weakestOf, tradesPerDayOf, failWords, MULTI_OMIT_KEYS, winnerAt,
+  nameOf, bestPerStrategy, verdictOf, bannerSentence, buildTestParams, buildSaveBodies, weakestOf, tradesPerDayOf, failWords, settingsForIndex, winnerAt,
 } from './crossIndex';
 import DocLink from '../DocLink.jsx';
+import { copyStrategyJson, resultsFromCell, resultsFromRow } from './copyStrategy.js';
 
 const TONE = {
   success: 'bg-emerald-500/15 border-emerald-500/40 text-success',
@@ -45,7 +46,7 @@ function VerdictChip({ row, symbol, onTest }) {
   );
 }
 
-function IndexCard({ row, symbol, onTest, onSave }) {
+function IndexCard({ row, symbol, onTest, onSave, onCopy }) {
   const c = row.perSymbol?.[symbol] || { status: 'not_run' };
   const v = verdictOf(c);
   return (
@@ -64,15 +65,22 @@ function IndexCard({ row, symbol, onTest, onSave }) {
         <dt className="text-fg-5">Min SL pts</dt><dd>{c.minSlPoints ?? '—'}</dd>
       </dl>
       {c.failReason && <p className="text-3xs text-fg-4">Why not: {failWords(c.failReason)}</p>}
-      <div className="flex gap-1 pt-1">
+      <div className="flex gap-1 pt-1 flex-wrap">
         <button type="button" className="text-3xs bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded text-fg" onClick={() => onTest(row, symbol)}>Test</button>
         <button type="button" className="text-3xs bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded text-fg" onClick={() => onSave(row, [symbol])}>Save for {nameOf(symbol)}</button>
+        {onCopy && (
+          <button type="button" className="text-3xs bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded text-fg inline-flex items-center gap-1"
+            onClick={() => onCopy(row, symbol)} title={`Copy these settings for ${nameOf(symbol)} as JSON — paste in Backtest → Import JSON`}
+            aria-label={`Copy strategy JSON for ${nameOf(symbol)}`}>
+            <Copy className="w-3 h-3" aria-hidden="true" />JSON
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-function ByIndex({ result, noise, onTestParams }) {
+function ByIndex({ result, noise, onTestParams, onCopyParams }) {
   const indexes = result.indexes || [];
   const [ix, setIx] = React.useState(0);
   const cur = indexes[ix];
@@ -136,7 +144,18 @@ function ByIndex({ result, noise, onTestParams }) {
                       <td className={`p-1.5 font-mono ${(r.oos?.totalPnL ?? 0) > 0 ? 'text-success' : 'text-danger'}`}>{r.oos ? rupee(r.oos.totalPnL) : '—'}</td>
                       <td className="p-1.5">{r.robust ? <span className={`text-3xs px-1 py-0.5 rounded border ${TONE.success}`}>Held up</span> : <span className={`text-3xs px-1 py-0.5 rounded border ${TONE.danger}`}>Overfit</span>}</td>
                       <td className="p-1.5 max-w-md"><ParamChips params={r.params} noise={noise} /></td>
-                      <td className="p-1.5"><button type="button" className="text-2xs bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded text-fg" onClick={() => onTestParams(r, cur.symbol, strategy)}>Test</button></td>
+                      <td className="p-1.5">
+                        <span className="inline-flex gap-1">
+                          <button type="button" className="text-2xs bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded text-fg" onClick={() => onTestParams(r, cur.symbol, strategy)}>Test</button>
+                          {onCopyParams && (
+                            <button type="button" className="text-2xs bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded text-fg inline-flex items-center gap-1"
+                              onClick={() => onCopyParams(r, cur.symbol, strategy)} title="Copy as strategy JSON — paste in Backtest → Import JSON"
+                              aria-label={`Copy strategy JSON for setting #${i + 1} on ${nameOf(cur.symbol)}`}>
+                              <Copy className="w-3 h-3" aria-hidden="true" />JSON
+                            </button>
+                          )}
+                        </span>
+                      </td>
                     </tr>
                   );
                 })}
@@ -178,13 +197,21 @@ export default function CrossIndexResults({ result, onTest, onSave, onClear, noi
     try { await onSave(bodies); setSaveMsg(`Saved ${bodies.length} setting${bodies.length === 1 ? '' : 's'}: ${bodies.map(b => b.name).join(', ')}`); }
     catch (e) { setSaveMsg(`Save failed: ${e.message}`); }
   };
-  const testCellRow = (r, symbol, strategy) => {
-    const params = { ...(r.params || {}) };
-    for (const key of MULTI_OMIT_KEYS) delete params[key];
-    const shared = result.runConfig?.shared || {};
-    onTest({ ...params, symbol, strategy, resolution: shared.resolution, start_date: shared.start_date, end_date: shared.end_date, capital: shared.capital,
-      dataSource: shared.dataSource, backtest_mode: shared.backtest_mode, slippage_percent: shared.slippage_percent, brokerage_per_order: shared.brokerage_per_order,
-      ...(result.runConfig?.perSymbol?.[symbol]?.lot_size ? { lot_size: result.runConfig.perSymbol[symbol].lot_size } : {}) }, strategy);
+  // The exact settings a By-index row's Test sends — Copy JSON uses the same object.
+  const cellRowParams = (r, symbol, strategy) => settingsForIndex(result, r.params, symbol, strategy);
+  const testCellRow = (r, symbol, strategy) => onTest(cellRowParams(r, symbol, strategy), strategy);
+  const copyCellRow = (r, symbol, strategy) => copyStrategyJson(cellRowParams(r, symbol, strategy), {
+    strategy, results: resultsFromRow(r, r.robust ? 'held up' : 'overfit'),
+    label: `${strategy} on ${nameOf(symbol)} — optimizer, ${r.robust ? 'held up' : 'overfit'}`,
+  });
+  // An index card's Copy JSON: the same params its Test button sends.
+  const copyCard = (row, symbol) => {
+    const cell = row.perSymbol?.[symbol] || {};
+    const verdict = verdictOf(cell).label;
+    return copyStrategyJson(buildTestParams(result, row, symbol), {
+      strategy: row.strategy, results: resultsFromCell(cell, verdict),
+      label: `${row.label || row.strategy} on ${nameOf(symbol)} — optimizer, ${verdict.toLowerCase()}`,
+    });
   };
 
   const rowView = (row, rank) => {
@@ -195,7 +222,7 @@ export default function CrossIndexResults({ result, onTest, onSave, onClear, noi
     const expansion = (
       <div className="space-y-2">
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(11rem, 1fr))' }}>
-          {symbols.map(s => <IndexCard key={s} row={row} symbol={s} onTest={test} onSave={save} />)}
+          {symbols.map(s => <IndexCard key={s} row={row} symbol={s} onTest={test} onSave={save} onCopy={copyCard} />)}
         </div>
         {layout !== 'wide' && (
           <p className="text-2xs text-fg-4">Weakest index: {weak ? `${nameOf(weak.symbol)} (test PF ${pf(weak.oosPF)})` : '—'} · Trades/day: {tpd != null ? tpd.toFixed(1) : '—'}</p>
@@ -348,7 +375,7 @@ export default function CrossIndexResults({ result, onTest, onSave, onClear, noi
           )}
         </div>
       ) : (
-        <div role="tabpanel"><ByIndex result={result} noise={noise} onTestParams={testCellRow} /></div>
+        <div role="tabpanel"><ByIndex result={result} noise={noise} onTestParams={testCellRow} onCopyParams={copyCellRow} /></div>
       )}
     </div>
   );

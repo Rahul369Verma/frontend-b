@@ -248,6 +248,12 @@ export const HELP = {
         detail: "Combined loss per unit reached the configured stop — credit × (multiplier − 1) for credit structures, or a percentage of the debit paid. Stops always go out as market orders, because a stop that does not fill leaves you bleeding.",
         gotcha: "Because it exits at market, the realised loss is usually a bit worse than the SL level printed on the card.",
     },
+    "exit-max-loss": {
+        label: "MAX_LOSS",
+        short: "Closed because the whole structure lost the rupee amount you set (Max loss ₹).",
+        detail: "The rupee stop: once the structure's mark-to-market, net of the estimated charges to close it, reaches minus your Max loss ₹, the whole structure is closed. It is set per deployment — usually from Results → How trades travelled, where the same level is priced against your past trades — and the live engine and every backtest apply the same rule. It sits after the structure SL in priority and before DTE.",
+        gotcha: "Like any stop it fills at market, so the booked loss is usually a little worse than the level. It also applies to a structure that is already open when you set it — one already past the level closes at the next check.",
+    },
     "exit-leg-sl": {
         label: "LEG_SL",
         short: "One sold leg was bought back on its own after its price ran against you.",

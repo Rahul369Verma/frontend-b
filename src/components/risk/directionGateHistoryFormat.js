@@ -39,5 +39,26 @@ export function ghostAiSummary(g) {
         ...partials.map(x => `${hhmm(x.ts)} scaled out ${x.lots} lot(s) @ ₹${x.exitPrice}`),
     ];
     const last = reviews.length ? reviews[reviews.length - 1].action : consults.length ? consults[consults.length - 1].outcome : 'scale-out';
+    // "ERROR" alone read like a verdict; say it FAILED and why (the AI never answered)
+    if (last === 'ERROR') {
+        const why = aiFailureShort(reviews[reviews.length - 1].reasoning);
+        return { label: `${n} AI · failed`, title: `AI review failed — ${why}\n\n${lines.join('\n')}`, failed: true, why };
+    }
     return { label: `${n || partials.length} AI · ${last}`, title: lines.join('\n') };
 }
+
+/**
+ * A short, plain reason for a failed AI call (mirrors the server's
+ * notificationRules.classifyAiFailure for the common cases).
+ */
+export function aiFailureShort(text) {
+    const t = String(text || '');
+    if (/just a moment|cloudflare/i.test(t)) return 'Claude.ai blocked the request (Cloudflare check, HTTP 403)';
+    if (/account_session_invalid|session.{0,20}(invalid|expired)|401/i.test(t)) return 'the AI session key is missing or expired';
+    if (/429|rate.?limit|quota/i.test(t)) return 'the AI provider is rate-limiting';
+    if (/ECONNREFUSED|ENOTFOUND|python engine/i.test(t)) return 'the AI engine could not be reached';
+    if (/timeout|timed out|Poll budget/i.test(t)) return 'the AI did not answer in time';
+    const short = t.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+    return short || 'no reason given';
+}
+

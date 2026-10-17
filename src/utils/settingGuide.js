@@ -19,20 +19,46 @@ export const ASSUMPTION_KEYS = [
 const TIME = 'time HH:MM (IST), 09:15–15:30';
 
 /**
- * Settings the form shows with a fallback when the value was never set — the
- * same fallbacks the Backtest form displays, so the AI is told what the run
- * actually used. `when` limits a fallback to the mode that shows the field.
+ * What the Backtest form shows for a setting that was never set — and therefore
+ * what Run sends, what Copy JSON exports and what Deploy saves (utils/backtestSettings.js).
+ * ONE table: the form reads it (no `params.x || 5` of its own), so the screen, the
+ * run and the export cannot disagree.
+ *
+ * The values are what the engines use for an unset setting (backend
+ * logic/engine/backtest/execution.js, and src/domain/risk/singleLegRules for the
+ * rules live, the Backtester and the optimizer share) — tests/engine/singleLegParity.test.js
+ * checks them against the backend source. 17-Oct-2026: the form showed ATR multipliers
+ * 1.8 / 3.5 while the engine ran 1.4 / 4.3 (form corrected), and a ₹2,000 single-loss
+ * cap only live applied (the backtest and the optimizer now apply it too). The page
+ * normally gets the cap and the end time from /engine/defaults, resolved with the
+ * global settings exactly as a live deployment inherits them.
+ *
+ * `when` limits a fallback to the mode or strategy that shows (and uses) the field.
  */
+const STRAT = (id) => (p) => p.strategy === id;
 export const FORM_FALLBACKS = {
+    // run context
+    resolution: { value: '5' },
+    broker: { value: 'fyers' },
+    backtest_mode: { value: 'Simulated Premium' },
+    dataSource: { value: 'AUTO' },
+    trade_mode: { value: 'BUY' },
+    holding_enabled: { value: false },
+    lots: { value: 1 },
+    // timing and risk
     trade_start_time: { value: '09:30' },
     trade_end_time: { value: '15:00' },
     max_daily_loss: { value: 2000 },
     max_single_trade_loss: { value: 2000 },
+    max_trades_per_day: { value: 10 },
+    slippage_percent: { value: 0.05 },
+    brokerage_per_order: { value: 20 },
+    // exits
     sl_type: { value: 'ATR' },
     sl_tp_type: { value: 'SPOT_ATR' },
     atr_period: { value: 14 },
-    atr_sl_mult: { value: 1.8 },
-    atr_tp_mult: { value: 3.5 },
+    atr_sl_mult: { value: 1.4 },
+    atr_tp_mult: { value: 4.3 },
     use_dynamic_sl: { value: false },
     use_trailing_sl: { value: false },
     trailing_sl_mult: { value: 1.5 },
@@ -41,6 +67,26 @@ export const FORM_FALLBACKS = {
     rr_ratio: { value: 2.0, when: p => (p.sl_tp_type || 'SPOT_ATR') === 'SPOT_SWING' },
     fixed_sl_points: { value: 40, when: p => (p.sl_type || 'ATR') === 'FIXED' },
     fixed_tp_points: { value: 100, when: p => (p.sl_type || 'ATR') === 'FIXED' },
+    // AI confirmation
+    use_ai_confirmation: { value: false },
+    enable_ai_confirmation: { value: false },
+    ai_concurrency: { value: 1 },
+    claude_web_model: { value: 'claude-web/claude-sonnet-4-6' },
+    gemini_web_model: { value: 'gemini-web/gemini-2.5-pro' },
+    claude_effort: { value: 'high' },
+    ai_inflight_review_interval_min: { value: 15 },
+    ai_sl_safety_buffer: { value: 1.5 },
+    // strategy-specific (only for the strategy whose panel shows them)
+    range_duration_min: { value: 30, when: STRAT('orb_breakout') },
+    breakout_mode: { value: 'ORB', when: STRAT('breakout_range') },
+    max_hold_candles: { value: 20, when: STRAT('rl_agent') },
+    adverse_atr_mult: { value: 3.0, when: STRAT('rl_agent') },
+    adverse_exit_enabled: { value: true, when: STRAT('rl_agent') },
+    enable_daily_profit_lock: { value: true, when: STRAT('rl_agent') },
+    daily_profit_lock_pct: { value: 0.5, when: STRAT('rl_agent') },
+    enable_daily_loss_filter: { value: true, when: STRAT('rl_agent') },
+    max_daily_losses: { value: 3, when: STRAT('rl_agent') },
+    use_ensemble: { value: false, when: STRAT('rl_agent') },
 };
 
 /**
@@ -66,7 +112,7 @@ export const GENERAL_SETTINGS = {
     trade_end_time: { label: 'Trade End Time', group: 'Timing', type: 'time', allowed: TIME, what: 'No new trades open after this time. Open trades are still managed and squared off before the close.' },
     max_trades_per_day: { label: 'Max Trades / Day', group: 'Risk & sizing', type: 'int', allowed: 'int 1–20', what: 'Cap on new entries per day.' },
     max_daily_loss: { label: 'Max Daily Loss (₹)', group: 'Risk & sizing', type: 'float', allowed: 'rupees > 0 (keep ≤ 3–5% of capital)', what: 'Stop opening trades for the day once the day has lost this much.' },
-    max_single_trade_loss: { label: 'Max Single Loss (₹)', group: 'Risk & sizing', type: 'float', allowed: 'rupees > 0', what: 'Skip a trade whose worst case (stop distance × quantity) is larger than this.' },
+    max_single_trade_loss: { label: 'Max Single Loss (₹)', group: 'Risk & sizing', type: 'float', allowed: 'rupees > 0', what: 'Per lot: tightens the stop so one lot\'s stop-loss risk (stop distance × lot) is at most this. More lots keep the same stop and risk this × lots. Empty or 0 = the global setting, else ₹2,000 — the live engine\'s rule, used by backtests too.' },
     sl_type: { label: 'Stop-Loss Type', group: 'Exits', type: 'enum', allowed: 'one of ATR, FIXED, STRATEGY, INDEX_LEVEL', what: 'How the stop is set: from volatility (ATR), a fixed number of points, the strategy\'s own level, or a manual index level.' },
     sl_tp_type: { label: 'SL/TP Reference Chart', group: 'Exits', type: 'enum', allowed: 'one of SPOT_ATR, SPOT_SWING', what: 'Stops/targets measured on the index chart from ATR, or from recent swing highs/lows.' },
     swing_lookback: { label: 'Swing Lookback', group: 'Exits', type: 'int', allowed: 'int 3–30 (only with SPOT_SWING)', what: 'How many candles back to look for the swing high/low.' },

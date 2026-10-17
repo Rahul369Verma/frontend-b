@@ -452,7 +452,8 @@ export function Heatmap({
 
 // ── Table — always available behind every chart ──────────────────────────────
 
-export function DataTable({ columns, rows, empty = 'No rows', dense = false, maxHeight, zebra = true, onRowClick = null, selectedKey = null }) {
+// onRowHover(row|null) + highlightKeys (Set or array): a row linked to something else on screen (e.g. a trade under the chart's pointer)
+export function DataTable({ columns, rows, empty = 'No rows', dense = false, maxHeight, zebra = true, onRowClick = null, selectedKey = null, onRowHover = null, highlightKeys = null }) {
     const ct = useChartTheme();
     if (!rows || !rows.length) return <p className="text-xs text-fg-5 py-4 text-center">{empty}</p>;
     return (
@@ -472,6 +473,7 @@ export function DataTable({ columns, rows, empty = 'No rows', dense = false, max
                 <tbody>
                     {rows.map((r, i) => {
                         const isSel = selectedKey != null && (r._key ?? i) === selectedKey;
+                        const isHi = !!highlightKeys && (Array.isArray(highlightKeys) ? highlightKeys.includes(r._key ?? i) : highlightKeys.has?.(r._key ?? i));
                         return (
                         // A clickable row is a real button semantically: it gets a
                         // pointer, a keyboard path and a pressed state, because a
@@ -482,7 +484,9 @@ export function DataTable({ columns, rows, empty = 'No rows', dense = false, max
                             tabIndex={onRowClick ? 0 : undefined}
                             role={onRowClick ? 'button' : undefined}
                             aria-pressed={onRowClick ? isSel : undefined}
-                            className={`${zebra && i % 2 === 1 ? 'bg-card-2/40' : ''} hover:bg-card-2/80 transition-colors ${onRowClick ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary' : ''} ${isSel ? 'bg-primary/10' : ''}`}>
+                            onMouseEnter={onRowHover ? () => onRowHover(r) : undefined}
+                            onMouseLeave={onRowHover ? () => onRowHover(null) : undefined}
+                            className={`${zebra && i % 2 === 1 ? 'bg-card-2/40' : ''} hover:bg-card-2/80 transition-colors ${onRowClick ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary' : ''} ${isSel ? 'bg-primary/10' : isHi ? 'bg-card-2' : ''}`}>
                             {columns.map(c => (
                                 <td key={c.key}
                                     className={`${dense ? 'py-1' : 'py-1.5'} px-2 whitespace-nowrap ${c.align === 'right' ? 'text-right tabular-nums' : ''}`}

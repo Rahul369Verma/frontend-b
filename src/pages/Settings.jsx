@@ -521,6 +521,7 @@ export default function Settings() {
           {activeTab === 'notifications' && (
              <div className="space-y-6">
                 <h2 className="text-xl font-bold text-fg flex items-center gap-2">Telegram Notifications <DocLink to="settings#notifications" /></h2>
+                <p className="text-sm text-fg-4">Which warnings go to Telegram, how often an open problem is repeated, and the AI health check now live on the <a href="/notifications#telegram" className="text-primary-ink hover:underline">Notifications page</a>.</p>
                 <div className="p-4 bg-slate-900/50 rounded-lg border border-line space-y-4">
                     <p className="text-fg-4 text-sm">Send a test message to verify your Telegram bot integration.</p>
                     <button 

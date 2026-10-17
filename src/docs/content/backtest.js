@@ -25,16 +25,30 @@ export default {
 - **Trading Mode** — *Buying (long options)*, *Selling (naked shorts)* or *Selling (hedged)*. Selling modes show extra inputs: lot size, margin per lot, theta (time decay is already built into the simulated premium) and hedge width.`,
         },
         {
+            id: 'strategy-json',
+            title: 'Copy, download and import settings (JSON)',
+            where: 'Buttons at the top right of the page',
+            md: `Every setting on this page can travel as one small JSON text:
+
+- **Copy JSON** puts **every setting the page shows** on the clipboard — strategy, index, timeframe, dates, times, lots, data source, costs, stops and every strategy parameter, including the ones you never changed (their defaults). It is exactly what **Run** sends, so it always reflects your latest edits.
+- **Download** saves the same thing as a \`.json\` file.
+- **Import JSON** loads settings: paste the JSON (or choose a file) and the window shows what it is, where it came from, and **exactly which settings will change** (**Show changes** lists each one as *old → new*). The settings are rebuilt from the JSON, so parameters that belong only to your previous strategy are **cleared** (listed as such) — the result is an exact copy of what was exported. Nothing changes until you press **Load into Backtest**, and nothing runs until you press **Run**.
+
+The same JSON comes from the **Optimizer**: every result has a **JSON** (copy) button — on each index card (next to *Test* and *Save for …*), on every row of **By index**, on the single-index leaderboard and the best-result card, and in results of **old runs** (open one from *Recent runs*). Copying an Optimizer result gives exactly the settings its **Test** button would send here, with what it scored kept alongside for reference (scores are never imported as settings).
+
+Import also accepts older shapes — a saved strategy, or a plain object of settings — as long as it names a **strategy** this page knows. A JSON without a symbol keeps your current symbol.`,
+        },
+        {
             id: 'capital-risk',
             title: 'Configuration · Capital, limits and costs',
             md: `| Setting | Meaning |
 |---|---|
 | **Starting Capital (₹)** | Money the simulated account starts with. Trades are skipped if it runs out. |
-| **Lot Size (Total Qty)** | Units bought per trade. |
+| **Lots** | How many lots each trade takes — the trades table's **Qty** column shows it (e.g. *130 (2 × 65)*). One lot is the exchange's lot **on the trade's own day** (NIFTY was 75 until 30 Dec 2025 and is 65 since) — the note under the box shows one lot today and the total quantity. MCX shows its own lot box instead. |
 | **Max Daily Loss (₹)** | Stop trading for the day after losing this much. |
-| **Max Single Loss (₹)** | Skip trades whose worst case is larger than this. |
+| **Max Single Loss (₹)** | The most **one lot** may risk: when the stop × lot would be more, the stop is **tightened** (the quantity stays). It is per **lot**, so 2 lots keep the same stop as 1 lot — the same trades, twice the size — and risk up to twice this. Empty = the global setting, else ₹2,000 — the live engine's rule, which backtests and the Optimizer follow too. Trades it tightened show **cap** in the Qty column. |
 | **Max Trades / Day** | Cap on entries per day. |
-| **Trade Start / End Time** | The window in which new trades may open. |
+| **Trade Start / End Time** | The window in which new trades may open; an open intraday trade is closed at the end time. Unset, the end is the global setting, else 15:00 on NSE/BSE — as live. |
 | **Slippage (%)** | Assumed price worsening on each fill. |
 | **Brokerage/Order (₹)** | Broker fee per order (other charges are computed automatically). |`,
         },

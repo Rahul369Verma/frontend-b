@@ -24,8 +24,15 @@
  *
  * Click any trade to zoom to it; click "open the option" on a single-leg trade
  * to jump to its own premium chart with its fills on it.
+ *
+ * ── READABLE AT ANY DENSITY (17-Oct-2026) ───────────────────────────────────
+ * Trades are drawn by components/charts/tradeOverlay.js, the way trading
+ * platforms show executions: small marks with no text, a dotted entry→exit line
+ * per round trip, numbered bubbles where marks crowd (click to zoom in), words in
+ * a hover tooltip, and the full position box only for the selected trade. The
+ * library's text markers drew 168 overlapping sentences on a 5-day chart.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import axios from 'axios';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts';
 import { CandlestickChart, RefreshCw, Crosshair, ExternalLink, PenLine, Trash2, Keyboard, Lock, Unlock } from 'lucide-react';
@@ -36,9 +43,12 @@ import { inr, useChartTheme } from '../components/viz/tokens';
 import PriceChart from '../components/charts/PriceChart';
 import { API_URL } from '../config/api.js';
 import { loadLines, saveLines } from '../components/charts/trendLines';
+import { buildTradeShapes, tradeFacts, fractionalIndex } from '../components/charts/tradeOverlay';
+import useLocalStorage from '../hooks/useLocalStorage';
 
 const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
-const int = (v) => (n(v) == null ? '—' : Math.round(n(v)).toLocaleString('en-IN'));
+const INT_FMT = new Intl.NumberFormat('en-IN');   // built once (toLocaleString builds one per call)
+const int = (v) => (n(v) == null ? '—' : INT_FMT.format(Math.round(n(v))));
 const round2 = (v) => (n(v) == null ? '—' : Math.round(n(v) * 100) / 100);
 const RESOLUTIONS = [
     { v: '1', label: '1m' }, { v: '5', label: '5m' }, { v: '15', label: '15m' },
@@ -51,11 +61,61 @@ const MODES = [
 const RANGES = [{ v: 5, label: '5d' }, { v: 15, label: '15d' }, { v: 30, label: '30d' }, { v: 90, label: '90d' }];
 
 const iso = (d) => new Date(d).toISOString().slice(0, 10);
+// One formatter, built once: toLocaleString(…, options) builds a new Intl formatter on
+// EVERY call, which was the page's single most expensive function while hovering.
+const IST_STAMP = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
 const istStamp = (v) => {
     const d = v ? new Date(v) : null;
     if (!d || Number.isNaN(d.getTime())) return '—';
-    return d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+    return IST_STAMP.format(d);
 };
+const NO_MARKERS = Object.freeze([]);   // a stable empty list — `[]` inline is new on every render
+
+/**
+ * The candle under the pointer, kept OUT of the page's state.
+ *
+ * It changes on every bar the pointer crosses; as page state it re-rendered the
+ * whole page (filters, legend, trades table, detail panel) each time. A tiny store
+ * lets only this readout re-render.
+ */
+function createHoverStore({ perFrame = false } = {}) {
+    let value = null;
+    let frame = 0;
+    const subs = new Set();
+    const notify = () => { frame = 0; subs.forEach((f) => f()); };
+    return {
+        get: () => value,
+        // perFrame: the readout shows the latest bar at most once per frame, however
+        // fast the pointer crosses bars.
+        set: (v) => {
+            value = v;
+            if (!perFrame || typeof requestAnimationFrame !== 'function') { notify(); return; }
+            if (!frame) frame = requestAnimationFrame(notify);
+        },
+        subscribe: (f) => { subs.add(f); return () => subs.delete(f); },
+    };
+}
+/** The chart, re-rendered on its own when the hovered trades change (mark or table row). */
+function HoverLinkedChart({ store, ...props }) {
+    const ids = useSyncExternalStore(store.subscribe, store.get);
+    return <PriceChart {...props} hoverTradeIds={ids} onTradeHover={store.set} />;
+}
+/** The trades table, likewise: a hover lights a row without re-rendering the page. */
+function HoverLinkedTable({ store, rows, ...props }) {
+    const ids = useSyncExternalStore(store.subscribe, store.get);
+    const keys = useMemo(() => (ids ? rows.filter((r) => ids.includes(String(r.id))).map((r) => r._key) : null), [ids, rows]);
+    return <DataTable {...props} rows={rows} highlightKeys={keys} onRowHover={(r) => store.set(r ? [String(r.id)] : null)} />;
+}
+function HoverReadout({ store }) {
+    const hover = useSyncExternalStore(store.subscribe, store.get);
+    if (!hover?.candle) return null;
+    return (
+        <span className="text-2xs text-fg-5 pb-1.5 inline-flex items-center gap-1 tabular-nums">
+            <Crosshair className="w-3 h-3" aria-hidden="true" />
+            O {int(hover.candle.open)} H {int(hover.candle.high)} L {int(hover.candle.low)} C {int(hover.candle.close)}
+        </span>
+    );
+}
 
 /**
  * The levels this trade was managed against, in words.
@@ -168,7 +228,7 @@ export default function Charts() {
     // on any render and could hand the effect a new range every frame.
     const [asOf, setAsOf] = useState(() => Date.now());
     const [universe, setUniverse] = useState(null);
-    const [selected, setSelected] = useState(null);   // trade id
+    const [selected, setSelected] = useState(null);   // trade id, always a string (marks, rows and markers carry mixed types)
 
     // ── TREND LINES ─────────────────────────────────────────────────────────
     // Per (symbol, resolution): a line drawn on 5m NIFTY means nothing on 1m
@@ -193,7 +253,13 @@ export default function Charts() {
         setEdited({ key: drawKey, lines: next });
         saveLines(symbol, resolution, next);
     }, [drawKey, symbol, resolution]);
-    const [hover, setHover] = useState(null);
+    const [hoverStore] = useState(() => createHoverStore({ perFrame: true }));
+    // which trades are under the pointer (chart) or a hovered table row — linked both ways
+    const [hoverIdsStore] = useState(createHoverStore);
+    // a bubble of trades on ONE bar (no zoom separates them) → list them to pick from
+    const [pickIds, setPickIds] = useState(null);
+    const [tradeFilter, setTradeFilter] = useLocalStorage('charts:tradeFilter', { outcome: 'all', kind: 'all', strategy: 'all', connectors: true },
+        { validate: (v) => !!v && typeof v === 'object' && typeof v.outcome === 'string' });
 
     // Both requests carry the key they answer, so "still loading" is derived and
     // last symbol's trades never sit under this symbol's heading for a frame.
@@ -239,6 +305,32 @@ export default function Charts() {
     const errDetail = fresh ? res.errDetail : null;
     const candles = useMemo(() => candleData?.candles || [], [candleData]);
     const trades = useMemo(() => overlays?.trades || [], [overlays]);
+    const tradeById = useMemo(() => new Map(trades.map(t => [String(t.id), t])), [trades]);
+    const pickList = useMemo(() => (pickIds || []).map(id => tradeById.get(String(id))).filter(Boolean), [pickIds, tradeById]);
+    const allShapes = useMemo(() => buildTradeShapes(overlays), [overlays]);
+    const strategyNames = useMemo(() => [...new Set(trades.map(t => tradeFacts(t).strategy).filter(Boolean))].sort(), [trades]);
+    // a remembered strategy this symbol never traded means "all", not an empty chart
+    const strategyPick = strategyNames.includes(tradeFilter.strategy) ? tradeFilter.strategy : 'all';
+    const passes = useCallback((s) => (
+        // winners/losers are CLOSED results; an open position's mark-to-market is not one yet
+        (tradeFilter.outcome === 'all' || (tradeFilter.outcome === 'open' ? s.open : !s.open && (tradeFilter.outcome === 'won' ? s.won === true : s.won === false)))
+        && (tradeFilter.kind === 'all' || s.kind === tradeFilter.kind)
+        && (strategyPick === 'all' || s.strategy === strategyPick)
+    ), [tradeFilter, strategyPick]);
+    const shapes = useMemo(() => allShapes.filter(passes), [allShapes, passes]);
+    // the table filters the TRADES, so a trade with no mark in this window is still listed
+    const shownTrades = useMemo(() => trades.filter(t => passes(tradeFacts(t))), [trades, passes]);
+    const filtered = shownTrades.length !== trades.length;
+    // never a silent gap between the chart and the table: say how many have no mark on
+    // these candles (no recorded time, or entered and exited outside the loaded bars)
+    const unmarked = useMemo(() => {
+        const times = candles.map(c => c.time);
+        const byId = new Map(allShapes.map(s => [s.id, s]));
+        return shownTrades.filter((t) => {
+            const s = byId.get(String(t.id));
+            return !s || (fractionalIndex(times, s.entry?.t) == null && fractionalIndex(times, s.exit?.t) == null);
+        }).length;
+    }, [allShapes, shownTrades, candles]);
 
     // Selecting a trade dims the rest: showing every level of every trade at once
     // is a wall of lines nobody can read.
@@ -256,8 +348,8 @@ export default function Charts() {
         const lines = overlays.priceLines || [];
         if (selected) {
             return {
-                markers: all.filter(m => m.tradeId === selected),
-                priceLines: lines.filter(l => l.tradeId === selected),
+                markers: all.filter(m => String(m.tradeId) === selected),
+                priceLines: lines.filter(l => String(l.tradeId) === selected),
                 auto: false,
             };
         }
@@ -266,7 +358,7 @@ export default function Charts() {
         return { markers: all, priceLines: [], auto: false };
     }, [overlays, selected]);
 
-    const sel = useMemo(() => trades.find(t => t.id === selected) || null, [trades, selected]);
+    const sel = useMemo(() => trades.find(t => String(t.id) === selected) || null, [trades, selected]);
     const fitKey = useMemo(() => {
         if (!sel?.entryAt) return null;
         const a = Math.floor(Date.parse(sel.entryAt) / 1000);
@@ -302,7 +394,55 @@ export default function Charts() {
         { key: 'net', header: 'Net', align: 'right', render: (t) => <span style={{ color: (n(t.net) ?? 0) > 0 ? ct.diverging.positive : (n(t.net) ?? 0) < 0 ? ct.diverging.negative : undefined }} className="tabular-nums">{inr(t.net)}</span> },
         { key: 'reason', header: 'Exit', render: (t) => <span className="text-fg-5 truncate max-w-[9rem] inline-block align-middle" title={t.reason || ''}>{t.reason || (t.open ? 'still open' : '—')}</span> },
     ], [ct]);
-    const tradeRows = useMemo(() => trades.map((t, i) => ({ ...t, _key: `${t.id}-${i}` })), [trades]);
+    const tradeRows = useMemo(() => trades
+        .filter(t => shownTrades.includes(t) || String(t.id) === selected)
+        .map((t, i) => ({ ...t, _key: `${t.id}-${i}` })), [trades, shownTrades, selected]);
+
+    // ── words for the chart: tooltip on hover, two short labels on the selected trade ──
+    const pxOf = useCallback((v) => (n(v) == null ? '—' : Math.abs(n(v)) >= 1000 ? int(v) : round2(v)), []);
+    const priceIn = useCallback((t) => (mode === 'premium' ? t.entryPremium : t.entrySpot), [mode]);
+    const priceOut = useCallback((t) => (mode === 'premium' ? t.exitPremium : t.exitSpot), [mode]);
+    const toneOf = useCallback((v) => ((n(v) ?? 0) > 0 ? ct.diverging.positive : (n(v) ?? 0) < 0 ? ct.diverging.negative : undefined), [ct]);
+    const renderTradeTip = useCallback((hit) => {
+        if (!hit) return null;
+        if (hit.type === 'cluster') {
+            const list = hit.tradeIds.map(id => tradeById.get(String(id))).filter(Boolean)
+                .sort((a, b) => Date.parse(a.entryAt) - Date.parse(b.entryAt));
+            return (
+                <div className="space-y-0.5">
+                    <div className="font-semibold">{list.length} trades here — {hit.sameBar ? 'click to pick one' : 'click to zoom in'}</div>
+                    {list.slice(0, 6).map(t => (
+                        <div key={t.id} className="flex justify-between gap-3">
+                            <span className="truncate min-w-0">{istStamp(t.entryAt)} · {t.label}</span>
+                            <span className="tabular-nums whitespace-nowrap shrink-0" style={{ color: toneOf(t.net) }}>{inr(t.net)}</span>
+                        </div>
+                    ))}
+                    {list.length > 6 && <div className="opacity-70">+{list.length - 6} more</div>}
+                </div>
+            );
+        }
+        const t = tradeById.get(String(hit.tradeId));
+        if (!t) return null;
+        return (
+            <div className="space-y-0.5">
+                <div className="font-semibold">{t.label}{t.open ? ' · open' : ''}</div>
+                <div>In {istStamp(t.entryAt)}{priceIn(t) != null ? ` @ ${pxOf(priceIn(t))}` : ''}</div>
+                <div>{t.exitAt && !t.open ? `Out ${istStamp(t.exitAt)}${priceOut(t) != null ? ` @ ${pxOf(priceOut(t))}` : ''}` : 'Still open'}</div>
+                <div><b className="tabular-nums" style={{ color: toneOf(t.net) }}>{inr(t.net)}</b>{t.reason ? ` · ${t.reason}` : ''}</div>
+                <div className="opacity-70">{selected === String(t.id) ? 'Selected — click again to show all' : 'Click to focus this trade'}</div>
+            </div>
+        );
+    }, [tradeById, priceIn, priceOut, pxOf, toneOf, selected]);
+    const tradeLabelFor = useCallback((shape) => {
+        const t = tradeById.get(String(shape.id));
+        if (!t) return null;
+        const side = t.kind === 'multileg' ? 'IN' : `${Number(t.side) === -1 ? 'SELL' : 'BUY'} ${String(t.label).split(' · ')[1] || ''}`.trim();
+        const reason = String(t.reason || '').split(' — ')[0].replace(/\s*\(.*$/, '').slice(0, 22);
+        return {
+            entry: `${side} ${pxOf(priceIn(t))}`,
+            exit: t.open ? null : `${inr(t.net)}${reason ? ` · ${reason}` : ''}`,
+        };
+    }, [tradeById, priceIn, pxOf]);
 
     const pathRows = useMemo(() => (sel?.path || []).map(p => ({
         t: new Date(p.t).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }),
@@ -402,12 +542,7 @@ export default function Charts() {
                         show all trades &amp; reset zoom
                     </button>
                 )}
-                {hover?.candle && (
-                    <span className="text-2xs text-fg-5 pb-1.5 inline-flex items-center gap-1 tabular-nums">
-                        <Crosshair className="w-3 h-3" aria-hidden="true" />
-                        O {int(hover.candle.open)} H {int(hover.candle.high)} L {int(hover.candle.low)} C {int(hover.candle.close)}
-                    </span>
-                )}
+                <HoverReadout store={hoverStore} />
             </div>
 
             {/* mode ↔ symbol mismatch is a real trap: say it rather than draw nothing */}
@@ -463,24 +598,83 @@ export default function Charts() {
                                         from chain archive
                                     </Chip>
                                 )}
-                                <span>{shown.markers.length} marker(s) · {shown.priceLines.length} level(s){selected ? ' · one trade' : ''}</span>
+                                <span>{filtered ? `${shownTrades.length} of ${trades.length}` : trades.length} trade{trades.length === 1 ? '' : 's'}{unmarked ? ` · ${unmarked} with no mark in this window` : ''}{selected ? ' · one focused' : ''}{shown.priceLines.length ? ` · ${shown.priceLines.length} level(s)` : ''}</span>
                             </span>
                         }
                     >
-                        <PriceChart
+                        <div className="flex flex-wrap items-center gap-2 mb-2 text-2xs" data-testid="trade-filters">
+                            <Segmented size="sm" value={tradeFilter.outcome} onChange={(v) => setTradeFilter(f => ({ ...f, outcome: v }))}
+                                options={[{ v: 'all', label: 'All' }, { v: 'won', label: 'Winners' }, { v: 'lost', label: 'Losers' }, { v: 'open', label: 'Open' }]} />
+                            <Segmented size="sm" value={tradeFilter.kind} onChange={(v) => setTradeFilter(f => ({ ...f, kind: v }))}
+                                options={[{ v: 'all', label: 'All types' }, { v: 'single', label: 'Single-leg' }, { v: 'multileg', label: 'Multi-leg' }]} />
+                            <select value={strategyPick} aria-label="Strategy"
+                                onChange={(e) => setTradeFilter(f => ({ ...f, strategy: e.target.value }))}
+                                className="bg-card-2 border border-line rounded px-1.5 py-1 text-fg-2 max-w-[16rem]">
+                                <option value="all">All strategies ({strategyNames.length})</option>
+                                {strategyNames.map(nm => <option key={nm} value={nm}>{nm}</option>)}
+                            </select>
+                            <label className="inline-flex items-center gap-1 text-fg-4">
+                                <input type="checkbox" checked={tradeFilter.connectors !== false} onChange={(e) => setTradeFilter(f => ({ ...f, connectors: e.target.checked }))} />
+                                Entry→exit lines
+                            </label>
+                            {filtered && (
+                                <button type="button" className="text-primary-ink hover:underline"
+                                    onClick={() => setTradeFilter(f => ({ ...f, outcome: 'all', kind: 'all', strategy: 'all' }))}>
+                                    show all {trades.length}
+                                </button>
+                            )}
+                        </div>
+                        {pickList.length > 0 && (
+                            <div className="mb-2 rounded border border-line bg-card-2 px-2 py-1.5 text-2xs" role="group" aria-label="Trades at the same moment" data-testid="trade-picker">
+                                <div className="flex items-center justify-between gap-2 mb-1">
+                                    <span className="text-fg-3">{pickList.length} trades sit on the same bar, so zooming cannot pull them apart — pick one:</span>
+                                    <button type="button" className="text-fg-4 hover:text-fg" onClick={() => setPickIds(null)} aria-label="Close the list">✕</button>
+                                </div>
+                                <div className="flex flex-wrap gap-1">
+                                    {pickList.map(t => (
+                                        <button key={t.id} type="button"
+                                            onClick={() => { setSelected(String(t.id)); setPickIds(null); }}
+                                            onMouseEnter={() => hoverIdsStore.set([String(t.id)])} onMouseLeave={() => hoverIdsStore.set(null)}
+                                            className="inline-flex items-center gap-1.5 rounded border border-line-2 bg-card px-2 py-0.5 text-fg-2 hover:border-primary">
+                                            <span className="truncate max-w-[14rem]">{t.label}</span>
+                                            <span className="tabular-nums" style={{ color: toneOf(t.net) }}>{inr(t.net)}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        <HoverLinkedChart
+                            store={hoverIdsStore}
                             candles={candles}
-                            markers={shown.markers}
+                            markers={NO_MARKERS}
+                            trades={shapes}
+                            selectedTradeId={selected}
+                            showConnectors={tradeFilter.connectors !== false}
+                            onTradeClick={(id) => { setPickIds(null); setSelected(cur => (cur === String(id) ? null : String(id))); }}
+                            onClusterPick={setPickIds}
+                            renderTradeTip={renderTradeTip}
+                            tradeLabelFor={tradeLabelFor}
                             priceLines={shown.priceLines}
                             showVolume={!!candleData?.meta?.hasVolume}
                             height={520}
                             fitKey={fitKey}
-                            onHover={setHover}
+                            onHover={hoverStore.set}
                             lockToData={lockToData}
                             drawMode={drawMode}
                             lines={lines}
                             onLinesChange={commitLines}
                             onDrawModeChange={setDrawMode}
                         />
+                        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-fg-4" data-testid="chart-legend">
+                            <span><span aria-hidden="true" style={{ color: ct.categorical[0] }}>▲</span> CE entry (bullish)</span>
+                            <span><span aria-hidden="true" style={{ color: ct.categorical[1] }}>▼</span> PE entry (bearish)</span>
+                            <span><span aria-hidden="true" style={{ color: ct.categorical[2] }}>■</span> structure entry</span>
+                            <span><span aria-hidden="true" style={{ color: ct.diverging.positive }}>●</span> exit, made money</span>
+                            <span><span aria-hidden="true" style={{ color: ct.diverging.negative }}>●</span> exit, lost</span>
+                            <span>┄ one round trip</span>
+                            <span><b className="text-fg-3">③</b> several trades — hover to list, click to zoom in</span>
+                            <span>hover a mark for details · click it to focus the trade</span>
+                        </div>
                         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-3xs text-fg-5">
                             <span className="inline-flex items-center gap-1">
                                 <Keyboard className="w-3 h-3" aria-hidden="true" />
@@ -552,16 +746,17 @@ export default function Charts() {
                     </StatRow>
 
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                        <Card docs="charts#trades" title="Trades in this window" subtitle="Click a row to zoom the chart to that trade and show only its levels.">
+                        <Card docs="charts#trades" title={`Trades in this window${filtered ? ` (${shownTrades.length} of ${trades.length} — filtered)` : ''}`} subtitle="Hover a row to find it on the chart; click it to zoom there and show its levels.">
                             {trades.length === 0 ? (
                                 <EmptyState title="Nothing traded here">
                                     No trade of ours falls in this window on this symbol. Pick a wider range, or a symbol you have actually traded.
                                 </EmptyState>
                             ) : (
-                                <DataTable
+                                <HoverLinkedTable
+                                    store={hoverIdsStore}
                                     columns={tradeCols} rows={tradeRows} dense maxHeight={330}
-                                    selectedKey={tradeRows.find(r => r.id === selected)?._key ?? null}
-                                    onRowClick={(r) => setSelected(cur => (cur === r.id ? null : r.id))}
+                                    selectedKey={tradeRows.find(r => String(r.id) === selected)?._key ?? null}
+                                    onRowClick={(r) => { setPickIds(null); setSelected(cur => (cur === String(r.id) ? null : String(r.id))); }}
                                 />
                             )}
                         </Card>

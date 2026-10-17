@@ -1,6 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import useStableCallback from '../hooks/useStableCallback.js';
+import keepIfSame from '../utils/keepIfSame.js';
 import DeploymentsPanel from '../components/DeploymentsPanel';
 import DirectionConfidencePanel from '../components/risk/DirectionConfidencePanel';
+import AttentionStrip from '../components/notify/AttentionStrip.jsx';
 import TradeDetailsModal from '../components/TradeDetailsModal';
 import CollapsibleCard from '../components/CollapsibleCard';
 import { StatRow, StatTile, PageHeader, Chip, ModeChip, Spinner, Panel } from '../components/viz/primitives';
@@ -18,6 +21,168 @@ import { toast } from '../components/toastStore.js';
 import { inr, premium, istDateTime, pnlTone } from '../components/viz/tokens.js';
 
 // API Base URL
+
+// Shortens a Mongo ObjectId (24 hex chars) for display: last 6 chars, uppercased.
+const shortTradeId = (id) => ((!id || typeof id !== 'string') ? '—' : id.slice(-6).toUpperCase());
+
+/**
+ * A trade-id badge; a click copies the full id (paste it into Trade History search).
+ * Module-level on purpose: it used to be declared INSIDE the Dashboard, so every
+ * Dashboard render (each socket snapshot, each price tick) made it a new component
+ * type and React remounted every badge on the page.
+ */
+function TradeIdBadge({ id, label = 'ID' }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return undefined;
+    const t = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
+  if (!id) return null;
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); try { navigator.clipboard.writeText(id); setCopied(true); } catch { /* clipboard blocked — no-op */ } }}
+      title={`Trade ID: ${id}\nClick to copy. Paste into Trade History search to filter.`}
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-mono font-semibold transition-colors ${
+        copied
+          ? 'bg-emerald-800/60 text-success'
+          : 'bg-slate-700/60 hover:bg-slate-600/80 text-fg-3 hover:text-fg'
+      }`}
+    >
+      <span className="text-fg-5 font-sans tracking-wide">{label}</span>
+      <span>{copied ? '✓ copied' : shortTradeId(id)}</span>
+    </button>
+  );
+}
+
+// One formatter for the activity times (toLocaleString built one per row, per render).
+const ACTIVITY_TS = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' });
+
+/**
+ * The activity feed's rows — memoised. They re-render when the EVENTS change, not
+ * on every socket snapshot or price tick that re-renders the Dashboard (100 rows
+ * rebuilt each time was the page's biggest idle cost, 17-Oct-2026).
+ */
+const ActivityRows = React.memo(function ActivityRows({ events, onFilterTrade, onDetail }) {
+    return events.map((ev, i) => {
+        const ts = new Date(ev.timestamp);
+        const tsStr = Number.isNaN(ts.getTime()) ? 'Invalid Date' : ACTIVITY_TS.format(ts);
+        let typeBadge, rowTone, pnlOrConf, detail;
+        if (ev.type === 'TRADE_ENTRY') {
+            typeBadge = <span className="px-1.5 py-0.5 rounded bg-emerald-800/40 text-success">🟢 ENTRY</span>;
+            rowTone = '';
+            // ai_confidence is already on a 0-100 scale (Python's native).
+            // No * 100 anywhere — that was the long-standing "6000%" bug.
+            pnlOrConf = ev.ai_confidence != null ? `AI ${Math.round(ev.ai_confidence)}%` : '—';
+            detail = (
+                <span className="text-fg-4 text-xs">
+                    @ ₹{ev.price?.toFixed?.(2) ?? ev.price} · qty {ev.quantity ?? '?'} · {ev.reason || '—'}
+                </span>
+            );
+        } else if (ev.type === 'TRADE_EXIT') {
+            typeBadge = <span className="px-1.5 py-0.5 rounded bg-blue-800/40 text-blue-200">💰 EXIT</span>;
+            const pnl = ev.pnl || 0;
+            rowTone = pnl > 0 ? 'hover:bg-emerald-950/30' : (pnl < 0 ? 'hover:bg-rose-950/30' : '');
+            pnlOrConf = (
+                <span className={`font-mono font-bold ${pnl > 0 ? 'text-success' : pnl < 0 ? 'text-danger' : 'text-fg-3'}`}>
+                    {pnl > 0 ? '+' : ''}₹{Math.round(pnl).toLocaleString()}
+                </span>
+            );
+            detail = (
+                <span className="text-fg-4 text-xs">
+                    {ev.entryPrice?.toFixed?.(2)} → {ev.exitPrice?.toFixed?.(2)} · {ev.reason || '—'}
+                </span>
+            );
+        } else if (ev.type === 'AI_CONFIRM') {
+            typeBadge = <span className="px-1.5 py-0.5 rounded bg-teal-800/40 text-teal-200">✅ AI CONFIRM</span>;
+            rowTone = 'hover:bg-teal-950/20';
+            pnlOrConf = ev.ai_confidence != null
+                ? <span className="font-mono text-teal-300">{Math.round(ev.ai_confidence)}%</span>
+                : '—';
+            detail = (
+                <span className="text-teal-300/80 text-xs italic">
+                    {ev.ai_reasoning?.slice(0, 100) || '(no reasoning)'}
+                    {ev.ai_suggested_sl && ev.ai_suggested_tp ? (
+                        <span className="ml-2 text-fg-5 not-italic">
+                            · SL {ev.ai_suggested_sl} / TP {ev.ai_suggested_tp}
+                        </span>
+                    ) : null}
+                </span>
+            );
+        } else if (ev.type === 'AI_REJECT') {
+            typeBadge = <span className="px-1.5 py-0.5 rounded bg-rose-800/40 text-danger">🛑 AI REJECT</span>;
+            rowTone = 'hover:bg-rose-950/20';
+            pnlOrConf = ev.ai_confidence != null ? `${Math.round(ev.ai_confidence)}%` : '—';
+            detail = (
+                <span className="text-danger/80 text-xs italic">
+                    {ev.ai_reasoning || '(no reasoning)'}
+                </span>
+            );
+        } else if (ev.type === 'ENTRY_SKIPPED') {
+            typeBadge = <span className="px-1.5 py-0.5 rounded bg-orange-800/40 text-warning">⏭️ SKIPPED</span>;
+            rowTone = 'hover:bg-orange-950/20';
+            pnlOrConf = <span className="text-warning/80 text-2xs">no entry</span>;
+            detail = (
+                <span className="text-warning/80 text-xs italic">
+                    {ev.ai_reasoning || '(no reason)'}
+                </span>
+            );
+        } else if (ev.type === 'AI_ERROR') {
+            typeBadge = <span className="px-1.5 py-0.5 rounded bg-amber-800/40 text-warning">⚠️ AI ERR</span>;
+            rowTone = 'hover:bg-amber-950/20';
+            pnlOrConf = ev.elapsed_ms ? `${(ev.elapsed_ms / 1000).toFixed(0)}s` : '—';
+            detail = (
+                <span className="text-warning/80 text-xs">
+                    [{ev.failure_type}] {ev.ai_reasoning?.slice(0, 80) || '(no detail)'}
+                </span>
+            );
+        } else if (ev.type === 'ENGINE_ERROR') {
+            typeBadge = <span className="px-1.5 py-0.5 rounded bg-red-800/40 text-danger">🔥 {ev.category || 'ERR'}</span>;
+            rowTone = 'hover:bg-red-950/20';
+            pnlOrConf = ev.severity === 'critical' ? <span className="text-danger font-bold">CRITICAL</span> : '—';
+            detail = (
+                <span className="text-danger/80 text-xs">
+                    {(ev.message || '').slice(0, 100)}
+                </span>
+            );
+        }
+        return (
+            <tr key={i} className={`text-fg-3 ${rowTone}`}>
+                <td className="p-2 font-mono text-2xs text-fg-4 whitespace-nowrap">{tsStr}</td>
+                <td className="p-2 text-2xs">{typeBadge}</td>
+                <td className="p-2 text-2xs">
+                    {ev.trade_id ? (
+                        <span className="inline-flex items-center gap-1">
+                            <TradeIdBadge id={String(ev.trade_id)} label="" />
+                            <button
+                                type="button"
+                                onClick={() => onFilterTrade(String(ev.trade_id))}
+                                title="Filter feed by this trade ID"
+                                className="hit-target text-fg-5 hover:text-teal-300 text-2xs leading-none"
+                            >🔎</button>
+                        </span>
+                    ) : (
+                        <span className="text-fg-5">—</span>
+                    )}
+                </td>
+                <td className="p-2 text-xs truncate max-w-[11.25rem]" title={ev.symbol || ''}>{ev.symbol || '—'}</td>
+                <td className="p-2 text-xs text-fg-4 truncate max-w-[8.75rem]" title={ev.strategyName || ''}>{ev.strategyName || '—'}</td>
+                <td className="p-2 text-xs">{ev.side || '—'}</td>
+                <td className="p-2 text-right text-xs">{pnlOrConf}</td>
+                <td className="p-2">{detail}</td>
+                <td className="p-2 text-right">
+                    <button
+                        onClick={() => onDetail(ev)}
+                        className="text-3xs px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-fg-3"
+                    >
+                        view
+                    </button>
+                </td>
+            </tr>
+        );
+});
+});
 
 export default function Dashboard() {
   const confirm = useConfirm();
@@ -53,6 +218,7 @@ export default function Dashboard() {
     tradeId: '',
     limit: 100,
   });
+  const filterActivityByTrade = useCallback((id) => setActivityFilters(f => ({ ...f, tradeId: id })), []);
   // folded = polling paused (see the effect below); remembered, and answers "Collapse all"
   const { open: activityExpanded, toggle: toggleActivity } = useCollapse({ storageKey: 'dash:activityOpen', defaultOpen: true });
   const [activityDetail, setActivityDetail] = useState(null);  // selected event for modal
@@ -224,12 +390,14 @@ export default function Dashboard() {
         // every ENTRY/EXIT; applying it blanked the panel — positions [], P&L 0,
         // engine "stopped" — until the next full emit.
         if (data && Array.isArray(data.positions)) {
-            setStatus(data.status || { is_running: false });
-            setMarketData(data.marketData || null);
-            setPnl(data.pnl || { daily_pnl: 0, trades_count: 0 });
-            setPositions(data.positions || []);
-            setOptionChain(data.optionChain || []);
-            setSignalStatus(data.signalStatus || {});
+            // keepIfSame: a snapshot every 2 s whose content usually did not change must
+            // not re-render the page (it rebuilt every panel, every 2 s, all day).
+            setStatus(prev => keepIfSame(prev, data.status || { is_running: false }));
+            setMarketData(prev => keepIfSame(prev, data.marketData || null));
+            setPnl(prev => keepIfSame(prev, data.pnl || { daily_pnl: 0, trades_count: 0 }));
+            setPositions(prev => keepIfSame(prev, data.positions || []));
+            setOptionChain(prev => keepIfSame(prev, data.optionChain || []));
+            setSignalStatus(prev => keepIfSame(prev, data.signalStatus || {}));
             
             // Only update mongoTrades from socket if we are on page 1 and not searching
             // This prevents the UI from "jumping" back to the start when paginating
@@ -237,9 +405,9 @@ export default function Dashboard() {
             //     setMongoTrades(data.mongoTrades || []);
             // }
 
-            setGlobalConfig(data.config?.globalSettings || {});
-            setSymbolConfig(data.config?.symbolConfigs || {});
-            setActiveConfig(data.config?.activeParams || {});
+            setGlobalConfig(prev => keepIfSame(prev, data.config?.globalSettings || {}));
+            setSymbolConfig(prev => keepIfSame(prev, data.config?.symbolConfigs || {}));
+            setActiveConfig(prev => keepIfSame(prev, data.config?.activeParams || {}));
         }
     });
 
@@ -324,9 +492,10 @@ export default function Dashboard() {
   useEffect(() => {
     if (!activityExpanded) return;
     let cancelled = false;
+    let first = true;   // the spinner is for the first load; a refresh every 8 s must not re-render twice
     const fetchActivity = async () => {
       try {
-        setActivityLoading(true);
+        if (first) setActivityLoading(true);
         const params = {
           types: activityFilters.types.join(','),
           limit: activityFilters.limit,
@@ -335,11 +504,12 @@ export default function Dashboard() {
         if (activityFilters.strategy) params.strategy = activityFilters.strategy;
         if (activityFilters.tradeId)  params.trade_id = activityFilters.tradeId.trim();
         const res = await axios.get(`${API_URL}/live-activity`, { params });
-        if (!cancelled) setActivityEvents(res.data?.events || []);
+        if (!cancelled) setActivityEvents(prev => keepIfSame(prev, res.data?.events || []));
       } catch (err) {
         if (!cancelled) console.warn('[Activity] fetch failed:', err.message);
       } finally {
-        if (!cancelled) setActivityLoading(false);
+        if (!cancelled && first) setActivityLoading(false);
+        first = false;
       }
     };
     fetchActivity();
@@ -443,46 +613,6 @@ export default function Dashboard() {
   // Per-position accordion toggle for the AI In-flight Review history.
   // Keyed by spotSymbol/symbol so each card's accordion is independent.
   const [reviewsExpanded, setReviewsExpanded] = useState({});
-  // Last-copied trade ID for a brief "copied" affordance on the badge.
-  const [copiedTradeId, setCopiedTradeId] = useState(null);
-
-  // Shortens a Mongo ObjectId (24 hex chars) for display: last 6 chars,
-  // uppercased. e.g. "67abc...01F4" → "01F4DE". Returns '—' for empty input.
-  const shortTradeId = (id) => {
-    if (!id || typeof id !== 'string') return '—';
-    return id.slice(-6).toUpperCase();
-  };
-  // Copy the full trade ID to clipboard with a transient visual confirmation.
-  // The user can paste it into the Trade History search box (which now also
-  // matches against trade_id) to filter every event tied to that trade.
-  const copyTradeId = (id) => {
-    if (!id) return;
-    try {
-      navigator.clipboard.writeText(id);
-      setCopiedTradeId(id);
-      setTimeout(() => setCopiedTradeId(prev => (prev === id ? null : prev)), 1500);
-    } catch { /* clipboard blocked — no-op */ }
-  };
-  // Self-contained badge component. Click copies the full ID.
-  const TradeIdBadge = ({ id, label = 'ID' }) => {
-    if (!id) return null;
-    const copied = copiedTradeId === id;
-    return (
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); copyTradeId(id); }}
-        title={`Trade ID: ${id}\nClick to copy. Paste into Trade History search to filter.`}
-        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-mono font-semibold transition-colors ${
-          copied
-            ? 'bg-emerald-800/60 text-success'
-            : 'bg-slate-700/60 hover:bg-slate-600/80 text-fg-3 hover:text-fg'
-        }`}
-      >
-        <span className="text-fg-5 font-sans tracking-wide">{label}</span>
-        <span>{copied ? '✓ copied' : shortTradeId(id)}</span>
-      </button>
-    );
-  };
   const handleClosePosition = async (pos) => {
       // Identify THIS position uniquely. spotSymbol is NOT unique — two
       // deployments can hold positions on the same underlying — so prefer
@@ -546,6 +676,11 @@ export default function Dashboard() {
       }
   };
 
+  // Stable identities for the memoised Deployments panel (inline handlers re-rendered it on every tick).
+  const stableTestClick = useStableCallback(handleTestClick);
+  const stableOpenSimulator = useStableCallback(openSimulator);
+  const stableOpenTradeModal = useStableCallback(openTradeModal);
+
   return (
     <div className="p-6 space-y-6">
       {/* Header — one PageHeader for every page; the mode and the broker
@@ -593,6 +728,9 @@ export default function Dashboard() {
           </>
         )}
       />
+
+      {/* What needs you right now (notifications) — nothing when all is clear */}
+      <AttentionStrip />
 
       {/* Web Session Health Banner — only renders when there's actually a problem */}
       {(sessionHealth.total_expired > 0 || sessionHealth.total_missing > 0) && (
@@ -680,9 +818,9 @@ export default function Dashboard() {
 
           {/* DeploymentsPanel — full width; self-contained accordion (its own header folds it). */}
           <DeploymentsPanel
-              onTest={handleTestClick}
-              onSim={openSimulator}
-              onManualTrade={openTradeModal}
+              onTest={stableTestClick}
+              onSim={stableOpenSimulator}
+              onManualTrade={stableOpenTradeModal}
               sessionHealth={sessionHealth}
               globalConfig={globalConfig}
           />
@@ -1865,123 +2003,7 @@ export default function Dashboard() {
                                       </td>
                                   </tr>
                               )}
-                              {activityEvents.map((ev, i) => {
-                                  const ts = new Date(ev.timestamp);
-                                  const tsStr = ts.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
-                                  let typeBadge, rowTone, pnlOrConf, detail;
-                                  if (ev.type === 'TRADE_ENTRY') {
-                                      typeBadge = <span className="px-1.5 py-0.5 rounded bg-emerald-800/40 text-success">🟢 ENTRY</span>;
-                                      rowTone = '';
-                                      // ai_confidence is already on a 0-100 scale (Python's native).
-                                      // No * 100 anywhere — that was the long-standing "6000%" bug.
-                                      pnlOrConf = ev.ai_confidence != null ? `AI ${Math.round(ev.ai_confidence)}%` : '—';
-                                      detail = (
-                                          <span className="text-fg-4 text-xs">
-                                              @ ₹{ev.price?.toFixed?.(2) ?? ev.price} · qty {ev.quantity ?? '?'} · {ev.reason || '—'}
-                                          </span>
-                                      );
-                                  } else if (ev.type === 'TRADE_EXIT') {
-                                      typeBadge = <span className="px-1.5 py-0.5 rounded bg-blue-800/40 text-blue-200">💰 EXIT</span>;
-                                      const pnl = ev.pnl || 0;
-                                      rowTone = pnl > 0 ? 'hover:bg-emerald-950/30' : (pnl < 0 ? 'hover:bg-rose-950/30' : '');
-                                      pnlOrConf = (
-                                          <span className={`font-mono font-bold ${pnl > 0 ? 'text-success' : pnl < 0 ? 'text-danger' : 'text-fg-3'}`}>
-                                              {pnl > 0 ? '+' : ''}₹{Math.round(pnl).toLocaleString()}
-                                          </span>
-                                      );
-                                      detail = (
-                                          <span className="text-fg-4 text-xs">
-                                              {ev.entryPrice?.toFixed?.(2)} → {ev.exitPrice?.toFixed?.(2)} · {ev.reason || '—'}
-                                          </span>
-                                      );
-                                  } else if (ev.type === 'AI_CONFIRM') {
-                                      typeBadge = <span className="px-1.5 py-0.5 rounded bg-teal-800/40 text-teal-200">✅ AI CONFIRM</span>;
-                                      rowTone = 'hover:bg-teal-950/20';
-                                      pnlOrConf = ev.ai_confidence != null
-                                          ? <span className="font-mono text-teal-300">{Math.round(ev.ai_confidence)}%</span>
-                                          : '—';
-                                      detail = (
-                                          <span className="text-teal-300/80 text-xs italic">
-                                              {ev.ai_reasoning?.slice(0, 100) || '(no reasoning)'}
-                                              {ev.ai_suggested_sl && ev.ai_suggested_tp ? (
-                                                  <span className="ml-2 text-fg-5 not-italic">
-                                                      · SL {ev.ai_suggested_sl} / TP {ev.ai_suggested_tp}
-                                                  </span>
-                                              ) : null}
-                                          </span>
-                                      );
-                                  } else if (ev.type === 'AI_REJECT') {
-                                      typeBadge = <span className="px-1.5 py-0.5 rounded bg-rose-800/40 text-danger">🛑 AI REJECT</span>;
-                                      rowTone = 'hover:bg-rose-950/20';
-                                      pnlOrConf = ev.ai_confidence != null ? `${Math.round(ev.ai_confidence)}%` : '—';
-                                      detail = (
-                                          <span className="text-danger/80 text-xs italic">
-                                              {ev.ai_reasoning || '(no reasoning)'}
-                                          </span>
-                                      );
-                                  } else if (ev.type === 'ENTRY_SKIPPED') {
-                                      typeBadge = <span className="px-1.5 py-0.5 rounded bg-orange-800/40 text-warning">⏭️ SKIPPED</span>;
-                                      rowTone = 'hover:bg-orange-950/20';
-                                      pnlOrConf = <span className="text-warning/80 text-2xs">no entry</span>;
-                                      detail = (
-                                          <span className="text-warning/80 text-xs italic">
-                                              {ev.ai_reasoning || '(no reason)'}
-                                          </span>
-                                      );
-                                  } else if (ev.type === 'AI_ERROR') {
-                                      typeBadge = <span className="px-1.5 py-0.5 rounded bg-amber-800/40 text-warning">⚠️ AI ERR</span>;
-                                      rowTone = 'hover:bg-amber-950/20';
-                                      pnlOrConf = ev.elapsed_ms ? `${(ev.elapsed_ms / 1000).toFixed(0)}s` : '—';
-                                      detail = (
-                                          <span className="text-warning/80 text-xs">
-                                              [{ev.failure_type}] {ev.ai_reasoning?.slice(0, 80) || '(no detail)'}
-                                          </span>
-                                      );
-                                  } else if (ev.type === 'ENGINE_ERROR') {
-                                      typeBadge = <span className="px-1.5 py-0.5 rounded bg-red-800/40 text-danger">🔥 {ev.category || 'ERR'}</span>;
-                                      rowTone = 'hover:bg-red-950/20';
-                                      pnlOrConf = ev.severity === 'critical' ? <span className="text-danger font-bold">CRITICAL</span> : '—';
-                                      detail = (
-                                          <span className="text-danger/80 text-xs">
-                                              {(ev.message || '').slice(0, 100)}
-                                          </span>
-                                      );
-                                  }
-                                  return (
-                                      <tr key={i} className={`text-fg-3 ${rowTone}`}>
-                                          <td className="p-2 font-mono text-2xs text-fg-4 whitespace-nowrap">{tsStr}</td>
-                                          <td className="p-2 text-2xs">{typeBadge}</td>
-                                          <td className="p-2 text-2xs">
-                                              {ev.trade_id ? (
-                                                  <span className="inline-flex items-center gap-1">
-                                                      <TradeIdBadge id={String(ev.trade_id)} label="" />
-                                                      <button
-                                                          type="button"
-                                                          onClick={() => setActivityFilters(f => ({ ...f, tradeId: String(ev.trade_id) }))}
-                                                          title="Filter feed by this trade ID"
-                                                          className="hit-target text-fg-5 hover:text-teal-300 text-2xs leading-none"
-                                                      >🔎</button>
-                                                  </span>
-                                              ) : (
-                                                  <span className="text-fg-5">—</span>
-                                              )}
-                                          </td>
-                                          <td className="p-2 text-xs truncate max-w-[11.25rem]" title={ev.symbol || ''}>{ev.symbol || '—'}</td>
-                                          <td className="p-2 text-xs text-fg-4 truncate max-w-[8.75rem]" title={ev.strategyName || ''}>{ev.strategyName || '—'}</td>
-                                          <td className="p-2 text-xs">{ev.side || '—'}</td>
-                                          <td className="p-2 text-right text-xs">{pnlOrConf}</td>
-                                          <td className="p-2">{detail}</td>
-                                          <td className="p-2 text-right">
-                                              <button
-                                                  onClick={() => setActivityDetail(ev)}
-                                                  className="text-3xs px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-fg-3"
-                                              >
-                                                  view
-                                              </button>
-                                          </td>
-                                      </tr>
-                                  );
-                              })}
+                              <ActivityRows events={activityEvents} onFilterTrade={filterActivityByTrade} onDetail={setActivityDetail} />
                           </tbody>
                       </table>
                   </div>

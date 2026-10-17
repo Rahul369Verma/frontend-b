@@ -7,6 +7,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within, fireEvent } from '@testing-library/react';
 import { DirectionConfidenceView } from './DirectionConfidencePanel.jsx';
+import { gateVerdict, sideMeaning } from './directionState.js';
 import { sideState } from './directionState.js';
 
 const base = {
@@ -33,6 +34,8 @@ describe('DirectionConfidenceView', () => {
     });
     it('scores blocking from real outcomes and counts unrecorded trades', () => {
         render(<DirectionConfidenceView data={base} onMode={() => {}} />);
+        expect(screen.queryByTestId('scorecard')).toBeNull();   // simple first: the maths is behind a button
+        fireEvent.click(screen.getByRole('button', { name: /Show details/ }));
         const sc = screen.getByTestId('scorecard');
         expect(within(sc).getByText('blocking would have helped')).toBeTruthy();
         expect(sc.textContent).toMatch(/would have saved/);
@@ -41,6 +44,8 @@ describe('DirectionConfidenceView', () => {
     it('says "cost" when the would-be-blocked trades made money', () => {
         const d = { ...base, scorecard: { ...base.scorecard, wouldBlock: { n: 12, net: 5000, wins: 9, savedIfEnforced: -5000 }, verdict: 'blocking would have cost money' } };
         render(<DirectionConfidenceView data={d} onMode={() => {}} />);
+        expect(screen.getByTestId('gate-verdict').textContent).toMatch(/would have cost ₹5,000/);
+        fireEvent.click(screen.getByRole('button', { name: /Show details/ }));
         expect(screen.getByTestId('scorecard').textContent).toMatch(/would have cost/);
     });
     it('mode switch reports the chosen mode', () => {
@@ -59,11 +64,34 @@ describe('DirectionConfidenceView', () => {
         const d = { ...base, mode: 'enforce', opts: { ...base.opts, trackBlocked: true },
             scorecard: { ...base.scorecard, enforce: { ghosts: 4, ghostNet: 2100, ghostsOpen: 1, knockOn: 2, knockOnNet: 300, blockedNotFollowed: 1 }, value: -1800, judged: 16, verdict: 'the gate has cost ₹1800 over 16 blocked trades' } };
         render(<DirectionConfidenceView data={d} onMode={() => {}} onTrackBlocked={onTrackBlocked} />);
+        expect(screen.getByTestId('gate-verdict').textContent).toMatch(/behind by ₹1,800/);
+        fireEvent.click(screen.getByRole('button', { name: /Show details/ }));
         const en = screen.getByTestId('scorecard-enforce').textContent;
         expect(en).toMatch(/4 blocked trades followed as ghosts would have made/);
         expect(en).toMatch(/\+1 still open/);
         expect(en).toMatch(/2 knock-on trades/);
         fireEvent.click(screen.getByLabelText('Follow blocked trades as ghosts'));
         expect(onTrackBlocked).toHaveBeenCalledWith(false);
+    });
+    it('says in words what the gate does to each side', () => {
+        const weak = { label: 'WEAK' };
+        expect(sideMeaning(weak, { mode: 'enforce', probeEvery: 3, left: 2, floor: 0.4 })).toBe('Below the 40% floor — these signals are blocked; 1 in 3 goes through as a probe (next probe in 2 signals).');
+        expect(sideMeaning(weak, { mode: 'shadow', probeEvery: 3, left: null, floor: 0.4 })).toMatch(/Enforce would block these signals; Shadow only records it/);
+        expect(sideMeaning({ label: 'NEUTRAL' }, { mode: 'enforce' })).toBe('Trusted enough — trades go ahead.');
+        expect(sideMeaning({ label: 'THIN DATA' }, { mode: 'enforce' })).toMatch(/Too few recent trades/);
+    });
+    it('the verdict line never overstates a small sample', () => {
+        const v = gateVerdict({ scorecard: { wouldBlock: { n: 3, net: 2000, savedIfEnforced: -2000 } } });
+        expect(v.level).toBe('info');
+        expect(v.text).toMatch(/would have cost ₹2,000 — too few blocked trades to judge yet/);
+        expect(gateVerdict({ scorecard: {} }).text).toMatch(/No weak-side trades/);
+    });
+    it('the blocked-trades and decisions slots render in the simple view', () => {
+        render(<DirectionConfidenceView data={base} onMode={() => {}} blocked={<div>BLOCKED-LIST</div>} decisions={<div>DECISIONS-LIST</div>} history={<div>HISTORY</div>} />);
+        expect(screen.getByText('BLOCKED-LIST')).toBeTruthy();
+        expect(screen.getByText('DECISIONS-LIST')).toBeTruthy();
+        expect(screen.queryByText('HISTORY')).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: /Show details/ }));
+        expect(screen.getByText('HISTORY')).toBeTruthy();
     });
 });

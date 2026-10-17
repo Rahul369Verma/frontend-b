@@ -499,7 +499,7 @@ export default function ResultsAnalytics({
 
                     {/* 5 ── how trades travelled before they exited */}
                     <Panel title="How trades travelled" subtitle="Worst and best point while open, and what a stop or target would have done" docs="glossary#mae-mfe" storageKey="fold:results|excursions">
-                        <ExcursionsPanel excursions={data?.excursions} />
+                        <ExcursionsPanel excursions={data?.excursions} canApplyStop />
                     </Panel>
                 </>
             )}

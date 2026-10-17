@@ -5,6 +5,7 @@ import { Zap, Plus, Play, Pause, Trash2, Activity, TrendingUp, TrendingDown, Clo
 import { INSTRUMENT_CONFIG, MONTH_NAMES } from '../constants';
 import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 import { pollInterval } from '../hooks/usePolling.js';
+import keepIfSame from '../utils/keepIfSame.js';
 import { API_URL, SOCKET_URL } from '../config/api.js';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { useConfirm } from '../components/confirmContext.js';
@@ -105,7 +106,7 @@ export default function TickStrategies() {
         // Server emits 'tick_strategy_event' with a snapshot piggy-backed
         // so the live feed updates without a full refetch.
         socket.on('tick_strategy_event', (payload) => {
-            if (payload?.snapshot) setSnapshot(payload.snapshot);
+            if (payload?.snapshot) setSnapshot(prev => keepIfSame(prev, payload.snapshot));
         });
         return () => socket.disconnect();
     }, []);
@@ -225,7 +226,8 @@ export default function TickStrategies() {
     const fetchRecordings = async () => {
         try {
             const r = await axios.get(`${API_URL}/tick-recordings`);
-            setRecordings(r.data.recordings || []);
+            // same list → no re-render (this poll runs every 3 s and re-rendered the whole page)
+            setRecordings(prev => keepIfSame(prev, r.data.recordings || []));
             // First successful fetch confirms the backend supports recordings.
             // (Idempotent — repeated sets to true are cheap.)
             setRecordingsSupported(true);

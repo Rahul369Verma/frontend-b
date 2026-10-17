@@ -24,8 +24,17 @@ import {
 } from 'lightweight-charts';
 import { useChartTheme } from '../viz/tokens';
 import { createTrendLinePrimitive, distanceToSegment } from './trendLines';
+import { createTradeOverlayPrimitive, barSeconds } from './tradeOverlay';
 
 const IST_SECONDS = 5.5 * 3600;
+// ── ONE empty list, not a new [] per render ─────────────────────────────────
+// A default of `= []` is a NEW array on every render, so every effect keyed on
+// it re-ran on every render: markers re-applied, price lines removed and
+// re-created. Each of those makes lightweight-charts re-emit a crosshair event,
+// whose hover callback re-rendered the page — a render loop that ran for as long
+// as the pointer rested on the chart (17-Oct-2026: 4–5 fps, ~0.9 s of script
+// per second while hovering). Module constants keep the identity stable.
+const NONE = Object.freeze([]);
 const STYLE = { solid: LineStyle.Solid, dotted: LineStyle.Dotted, dashed: LineStyle.Dashed, large: LineStyle.LargeDashed };
 
 /**
@@ -33,16 +42,30 @@ const STYLE = { solid: LineStyle.Solid, dotted: LineStyle.Dotted, dashed: LineSt
  * @param markers     [{ time, position, shape, color, text }]
  * @param priceLines  [{ price, color, style, title }]
  * @param onHover     called with { time, price, candle } | null as the crosshair moves
+ * @param trades      optional — this desk's trades drawn the readable way (tradeOverlay.js):
+ *                    small marks, entry→exit lines, numbered bubbles where they crowd,
+ *                    a position box for the selected one, words in a hover tooltip.
+ *                    [{ id, side, won, entry:{t,p,shape,anchor}, exit }] (UTC seconds)
+ * @param selectedTradeId / hoverTradeIds   which trade is focused / highlighted (e.g. a hovered table row)
+ * @param onTradeClick(id)      a mark was clicked (a bubble zooms in instead)
+ * @param onTradeHover(ids|null) the pointer is over these trades
+ * @param onClusterPick(ids) a bubble whose trades share one bar was clicked — zoom cannot
+ *        separate them, so the page lists them to pick from
+ * @param renderTradeTip(hit)   the tooltip body for { type:'trade', tradeId } | { type:'cluster', tradeIds }
+ * @param tradeLabelFor(trade)  { entry, exit } short labels drawn beside the SELECTED trade only
  */
 export default function PriceChart({
-    candles = [], markers = [], priceLines = [], height = 520,
+    candles = NONE, markers = NONE, priceLines = NONE, height = 520,
     showVolume = true, fitKey = null, onHover = null,
     // ── drawing + keyboard ──────────────────────────────────────────────────
     lockToData = false,        // pin the time scale to the loaded bars
     drawMode = false,          // true while the trend-line tool is armed
-    lines = [],                // committed lines, anchored in {time, price}
+    lines = NONE,              // committed lines, anchored in {time, price}
     onLinesChange = null,      // (nextLines) => void
     onDrawModeChange = null,   // (bool) => void — so Esc can disarm the tool
+    // ── trades (see tradeOverlay.js) ────────────────────────────────────────
+    trades = null, selectedTradeId = null, hoverTradeIds = null, showConnectors = true,
+    onTradeClick = null, onTradeHover = null, renderTradeTip = null, tradeLabelFor = null, onClusterPick = null,
 }) {
     const ct = useChartTheme();
     const boxRef = useRef(null);
@@ -55,6 +78,8 @@ export default function PriceChart({
     // render would thrash the chart), so the latest callback is kept in a ref —
     // updated in an effect, never during render.
     const hoverRef = useRef(onHover);
+    const lastHoverTimeRef = useRef(undefined);
+    const lockRef = useRef(lockToData);
     useEffect(() => { hoverRef.current = onHover; }, [onHover]);
 
     // ── DRAWING STATE ───────────────────────────────────────────────────────
@@ -77,6 +102,21 @@ export default function PriceChart({
         drawRef.current.colors = { line: ct.mark?.annotation || ct.diverging?.warning || '#f0a202' };
         primitiveRef.current?.repaint?.();
     }, [lines, selectedId, drawMode, ct]);
+
+    // ── TRADES STATE ────────────────────────────────────────────────────────
+    // Same pattern as the drawings: one primitive, attached once, reading this
+    // ref at paint time; the callbacks live in refs so the once-subscribed
+    // crosshair/click handlers always call the latest ones.
+    const tradeRef = useRef({ shapes: [], times: [], barsByIndex: [], barSec: 60, selectedId: null, hoverIds: new Set(), connectors: true, colors: {}, labelFor: null });
+    const tradePrimRef = useRef(null);
+    const tradeClickRef = useRef(onTradeClick);
+    const tradeHoverRef = useRef(onTradeHover);
+    useEffect(() => { tradeClickRef.current = onTradeClick; }, [onTradeClick]);
+    useEffect(() => { tradeHoverRef.current = onTradeHover; }, [onTradeHover]);
+    const clusterPickRef = useRef(onClusterPick);
+    useEffect(() => { clusterPickRef.current = onClusterPick; }, [onClusterPick]);
+    const [tip, setTip] = useState(null);      // { x, y, hit }
+    const tipKeyRef = useRef('');
 
     // Shift to IST once, here. Memoised so a re-render does not re-map 20k bars.
     const bars = useMemo(
@@ -110,6 +150,30 @@ export default function PriceChart({
         }).sort((a, b) => a.time - b.time),
         [markers],
     );
+
+    const tradeShapes = useMemo(() => (trades || []).map(t => ({
+        ...t,
+        entry: t.entry ? { ...t.entry, t: t.entry.t + IST_SECONDS } : null,
+        exit: t.exit ? { ...t.exit, t: t.exit.t + IST_SECONDS } : null,
+    })), [trades]);
+    useEffect(() => {
+        const times = bars.map(b => b.time);
+        tradeRef.current = {
+            shapes: tradeShapes, times, barsByIndex: bars, barSec: barSeconds(times),
+            selectedId: selectedTradeId, hoverIds: new Set(hoverTradeIds || []), connectors: showConnectors !== false,
+            labelFor: tradeLabelFor,
+            colors: {
+                win: ct.diverging.positive, loss: ct.diverging.negative, neutral: ct.text.muted || ct.text.secondary,
+                long: ct.categorical[0], short: ct.categorical[1], structure: ct.categorical[2],
+                cluster: ct.text.secondary, clusterText: ct.surface, surface: ct.surface,
+                labelBg: ct.tooltip.background, labelText: ct.tooltip.text, labelBorder: ct.tooltip.border,
+                alpha: ct.alpha,
+                // canvas text never sees rem or the Typeface axis — size and face from the theme (see the create effect)
+                fontSmall: `${ct.type?.['3xs'] ?? 11}px ${(typeof window !== 'undefined' && getComputedStyle(document.documentElement).fontFamily) || 'sans-serif'}`,
+            },
+        };
+        tradePrimRef.current?.repaint?.();
+    }, [tradeShapes, bars, selectedTradeId, hoverTradeIds, showConnectors, tradeLabelFor, ct]);
 
     // ── create once ─────────────────────────────────────────────────────────
     useEffect(() => {
@@ -166,8 +230,10 @@ export default function PriceChart({
                 // So: free by default, lockable on request. The "missing history"
                 // confusion is better answered by the Bars tile naming the
                 // requested range than by taking a control away.
-                fixLeftEdge: lockToData,
-                fixRightEdge: lockToData,
+                // The INITIAL value; later toggles go through applyOptions (the lock
+                // effect below) — rebuilding the chart for it left an empty chart.
+                fixLeftEdge: lockRef.current,
+                fixRightEdge: lockRef.current,
             },
             localization: {
                 // The data is IST-shifted, so format as UTC or the browser's own
@@ -188,6 +254,9 @@ export default function PriceChart({
         const primitive = createTrendLinePrimitive(() => drawRef.current);
         series.attachPrimitive(primitive);
         primitiveRef.current = primitive;
+        const tradePrim = createTradeOverlayPrimitive(() => tradeRef.current);
+        series.attachPrimitive(tradePrim);
+        tradePrimRef.current = tradePrim;
 
         if (showVolume) {
             const vol = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: 'vol' });
@@ -195,12 +264,41 @@ export default function PriceChart({
             volRef.current = vol;
         }
 
+        // While a button is held the user is PANNING: the chart scrolls under a still
+        // pointer, so every frame crossed new bars and marks and re-rendered the
+        // readout and the tooltip for nothing. Hover work waits for the release.
+        let panning = false;
+        const onDown = () => { panning = true; };
+        const onUp = () => { panning = false; };
+        el.addEventListener('pointerdown', onDown);
+        window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onUp);
+
         const onMove = (param) => {
+            if (panning) {
+                if (tipKeyRef.current) { tipKeyRef.current = ''; setTip(null); tradeHoverRef.current?.(null); }
+                return;
+            }
+            // trades under the pointer → tooltip + highlight (only when it CHANGES)
+            const hit = param?.point && tradeRef.current.shapes.length ? tradePrim.hitTest(param.point.x, param.point.y) : null;
+            const key = hit ? (hit.type === 'trade' ? `t:${hit.tradeId}` : `c:${hit.tradeIds.join(',')}`) : '';
+            if (key !== tipKeyRef.current) {
+                tipKeyRef.current = key;
+                setTip(hit ? { x: param.point.x, y: param.point.y, w: el.clientWidth, hit } : null);
+                tradeHoverRef.current?.(hit ? (hit.type === 'trade' ? [hit.tradeId] : hit.tradeIds) : null);
+                el.style.cursor = hit ? 'pointer' : '';
+            }
             const cb = hoverRef.current;
             if (!cb) return;
-            if (!param?.time || !param.point) { cb(null); return; }
+            // Only when the BAR under the pointer changes (or the pointer leaves) — not
+            // on every pixel, and never again for a crosshair event the chart re-emits
+            // after its own redraw.
+            const t = param?.time && param.point ? Number(param.time) : null;
+            if (t === lastHoverTimeRef.current) return;
+            lastHoverTimeRef.current = t;
+            if (t == null) { cb(null); return; }
             const bar = param.seriesData?.get(series);
-            cb({ time: Number(param.time) - IST_SECONDS, candle: bar || null });
+            cb({ time: t - IST_SECONDS, candle: bar || null });
         };
         chart.subscribeCrosshairMove(onMove);
 
@@ -213,15 +311,31 @@ export default function PriceChart({
 
         return () => {
             ro.disconnect();
+            el.removeEventListener('pointerdown', onDown);
+            window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onUp);
             chart.unsubscribeCrosshairMove(onMove);
-            try { series.detachPrimitive(primitive); } catch { /* chart already torn down */ }
+            try { series.detachPrimitive(primitive); series.detachPrimitive(tradePrim); } catch { /* chart already torn down */ }
             chart.remove();
             chartRef.current = null; seriesRef.current = null; volRef.current = null;
-            markerApiRef.current = null; linesRef.current = []; primitiveRef.current = null;
+            markerApiRef.current = null; linesRef.current = []; primitiveRef.current = null; tradePrimRef.current = null;
         };
         // Re-creating on a theme switch is deliberate and cheap: lightweight-charts
         // has no way to restyle a series' up/down colours wholesale.
-    }, [height, showVolume, ct, lockToData]);
+    }, [height, showVolume, ct]);
+
+    // ── lock / free zoom: an option of the existing chart, not a new chart ──
+    useEffect(() => {
+        lockRef.current = lockToData;
+        chartRef.current?.applyOptions({ timeScale: { fixLeftEdge: lockToData, fixRightEdge: lockToData } });
+    }, [lockToData]);
+
+    // ── EVERYTHING BELOW RE-APPLIES WHEN THE CHART IS REBUILT ────────────────
+    // The chart is rebuilt when its height, volume pane or theme changes. The
+    // effects that feed it (candles, markers, levels, the drawing handlers, the
+    // zoom) listed only their own inputs, so a rebuilt chart came back EMPTY —
+    // "Free zoom" rebuilt it (17-Oct-2026: blank chart after the toggle). They now
+    // also depend on what rebuilds it, so they run again, in order, right after.
 
     // ── data ────────────────────────────────────────────────────────────────
     useEffect(() => {
@@ -229,20 +343,23 @@ export default function PriceChart({
         if (!s) return;
         s.setData(bars);
         if (volRef.current) volRef.current.setData(vols);
-    }, [bars, vols]);
+    }, [bars, vols, height, showVolume, ct]);
 
     // ── markers (v5: a primitive attached to the series, not series.setMarkers) ──
     useEffect(() => {
         const s = seriesRef.current;
         if (!s) return;
-        if (!markerApiRef.current) markerApiRef.current = createSeriesMarkers(s, marks);
-        else markerApiRef.current.setMarkers(marks);
-    }, [marks]);
+        if (!markerApiRef.current) {
+            if (!marks.length) return;                 // nothing to draw: no marker layer at all
+            markerApiRef.current = createSeriesMarkers(s, marks);
+        } else markerApiRef.current.setMarkers(marks);
+    }, [marks, height, showVolume, ct]);
 
     // ── horizontal levels: stops, targets, strikes, break-evens ─────────────
     useEffect(() => {
         const s = seriesRef.current;
         if (!s) return;
+        if (!priceLines.length && !linesRef.current.length) return;   // nothing drawn, nothing to draw
         for (const l of linesRef.current) { try { s.removePriceLine(l); } catch { /* series already gone */ } }
         linesRef.current = priceLines.map(l => s.createPriceLine({
             price: l.price,
@@ -252,7 +369,7 @@ export default function PriceChart({
             axisLabelVisible: true,
             title: l.title || '',
         }));
-    }, [priceLines]);
+    }, [priceLines, height, showVolume, ct]);
 
     // ── DRAWING: two clicks make a line ─────────────────────────────────────
     // Click one anchors the start, the pointer previews a dashed draft, click
@@ -305,7 +422,20 @@ export default function PriceChart({
                 primitiveRef.current?.repaint?.();
                 return;
             }
-            // Not drawing → clicking near a line selects it (and near nothing clears).
+            // Not drawing → a trade mark selects that trade; a numbered bubble zooms
+            // in until its trades separate.
+            const tp = tradePrimRef.current;
+            const th = tp && tradeRef.current.shapes.length ? tp.hitTest(param.point.x, param.point.y) : null;
+            if (th && th.type === 'trade') { tradeClickRef.current?.(th.tradeId); return; }
+            if (th && th.type === 'cluster') {
+                const bs = tradeRef.current.barSec || 300;
+                const pad = Math.max(bs * 8, (th.tTo - th.tFrom) * 0.6);
+                chart.timeScale().setVisibleRange({ from: th.tFrom - pad, to: th.tTo + pad });
+                // one bar, one price: no zoom separates them — hand the list to the page to pick from
+                if (th.sameBar) clusterPickRef.current?.(th.tradeIds);
+                return;
+            }
+            // …else clicking near a line selects it (and near nothing clears).
             const p = primitiveRef.current;
             if (!p) return;
             let hit = null;
@@ -333,7 +463,7 @@ export default function PriceChart({
             // next time the tool is armed.
             draw.current.draft = null;
         };
-    }, [drawMode]);
+    }, [drawMode, height, showVolume, ct]);
 
     // ── KEYBOARD ────────────────────────────────────────────────────────────
     // Scoped to the chart container (tabIndex=0), never to window: a global key
@@ -410,9 +540,11 @@ export default function PriceChart({
         const span = Math.max(0, fitKey.to - fitKey.from);
         const pad = Math.min(THREE_HOURS, Math.max(HALF_HOUR, span * 1.5));
         chart.timeScale().setVisibleRange({ from: fitKey.from + IST_SECONDS - pad, to: fitKey.to + IST_SECONDS + pad });
-    }, [fitKey, bars]);
+    }, [fitKey, bars, height, showVolume, ct]);
 
+    const tipBody = tip && renderTradeTip ? renderTradeTip(tip.hit) : null;
     return (
+        <div style={{ position: 'relative', width: '100%' }}>
         <div
             ref={boxRef}
             style={{ width: '100%', height, outline: 'none' }}
@@ -423,5 +555,19 @@ export default function PriceChart({
             aria-label="Price chart. Plus and minus zoom, arrow keys pan, F fits, D toggles the trend-line tool, Delete removes the selected line."
             onKeyDown={onKeyDown}
         />
+        {tipBody && (
+            // follows the mark, flips left near the right edge so it never leaves the chart
+            <div role="tooltip" data-testid="trade-tip"
+                className="absolute z-20 pointer-events-none max-w-xs rounded border px-2 py-1.5 text-2xs shadow-lg"
+                style={{
+                    left: tip.x > tip.w - 260 ? undefined : tip.x + 14,
+                    right: tip.x > tip.w - 260 ? tip.w - tip.x + 14 : undefined,
+                    top: Math.max(4, Math.min(tip.y + 14, height - 120)),
+                    background: ct.tooltip.background, borderColor: ct.tooltip.border, color: ct.tooltip.text,
+                }}>
+                {tipBody}
+            </div>
+        )}
+        </div>
     );
 }

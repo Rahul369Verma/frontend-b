@@ -1,6 +1,7 @@
 import React from 'react';
 import { API_ORIGIN } from '../../config/api.js';
 import { nameOf } from './crossIndex';
+import { lotText, currentLot } from '../../utils/lots.js';
 import DocLink from '../DocLink.jsx';
 
 // Before Start: is each index's data good enough to judge a strategy on?
@@ -60,7 +61,7 @@ export default function DataCheckPanel({ symbols, dataSource, start, end, oosFra
                     <td className="py-1 pr-2 whitespace-nowrap">{v.firstDate ? `${v.firstDate} → ${v.lastDate}` : '—'}</td>
                     <td className="py-1 pr-2">{v.completeDayPct != null ? `${v.completeDayPct}%` : '—'}</td>
                     <td className="py-1 pr-2">{v.flatBarPct != null ? `${v.flatBarPct}%` : '—'}</td>
-                    <td className="py-1 pr-2">{v.lotSize ?? '—'}</td>
+                    <td className="py-1 pr-2" title="One lot today; each trade uses the lot listed on its own day">{lotText(currentLot(sym) ?? v.lotSize, v.lotWindow)}</td>
                     <td className="py-1">
                       {v.eligible ? <span className="text-success">✓ counts</span> : <span className="text-warning">Excluded from the count</span>}
                       {v.reasons?.length > 0 && <span className="block text-fg-5">{v.reasons.join('; ')}</span>}

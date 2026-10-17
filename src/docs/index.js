@@ -31,6 +31,7 @@ import parityAudit from './content/parityAudit.js';
 import marketRules from './content/marketRules.js';
 import dataManager from './content/dataManager.js';
 import settings from './content/settings.js';
+import notifications from './content/notifications.js';
 
 const GROUPS = [
     { title: 'Start here', ids: ['start', 'basics', 'glossary'] },
@@ -39,13 +40,13 @@ const GROUPS = [
     { title: 'Going live', ids: ['go-live', 'delta'] },
     { title: 'Tick engine', ids: ['tick-strategies', 'tick-results'] },
     { title: 'AI', ids: ['ai-manager', 'ai-score'] },
-    { title: 'System', ids: ['parity-audit', 'market-rules', 'data-manager', 'settings'] },
+    { title: 'System', ids: ['notifications', 'parity-audit', 'market-rules', 'data-manager', 'settings'] },
 ];
 
 const BY_ID = Object.fromEntries([
     start, basics, glossary, dashboard, livePortfolio, strategyDetail, charts, risk,
     backtest, optimizer, signalCombiner, multiLeg, alerts, goLive, delta, tickStrategies, tickResults,
-    aiManager, aiScore, parityAudit, marketRules, dataManager, settings,
+    aiManager, aiScore, parityAudit, marketRules, dataManager, notifications, settings,
 ].map(p => [p.id, p]));
 
 export const DOC_GROUPS = GROUPS

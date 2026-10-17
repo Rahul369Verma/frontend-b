@@ -334,7 +334,14 @@ Daily net P&L bars (by exit day) and the equity curve with the drawdown shaded b
 The same trades grouped by **Symbol, Structure, Exit reason, Deployment, Weekday, Month, IV regime at entry, Days to expiry at entry, Hold length, Entry hour, Entry slippage**, plus a **Calendar** of daily results. Columns: trades, win %, net, per trade, avg margin, per trade ÷ margin, costs ÷ gross. Click a column to sort.
 
 ### How trades travelled
-Each trade's worst and best point while open ([MAE / MFE](glossary#mae-mfe)), and what a tighter stop or a profit target would have done to the totals.
+Each trade's worst and best point while open ([MAE / MFE](glossary#mae-mfe)), and what a tighter stop or a profit target would have done to the totals. **Hover a dot** to see which trade it is, when it closed, and its worst point, best point and result.
+
+**Stop-loss from these trades** prices a rupee stop on the trades in view:
+- **Suggested stop** — the level that would have added most on the **older 70%** of trades, then checked on the **newest 30%** it never saw. It is only suggested when it helped on both; otherwise the panel says why not.
+- **Stop at −₹** — type any level: how many trades it would have closed, how many of those had gone on to finish in profit, and the net change (all trades, older, newest). The dashed line on the chart marks it.
+- **Set this stop on deployments…** — sets it as each chosen deployment's **Max loss ₹**: the whole structure closes once its mark, **net of the estimated charges to close it**, reaches minus that amount (exit reason **MAX_LOSS**). It applies from the next check, including to a structure that is open now (one already past the level closes at once — the window says which). The live engine and every backtest apply the same rule. **Turn off** removes it.
+
+The figures are upper bounds: every trade that touched the level is booked at exactly that loss, while a real stop fills a little worse and marks are about a minute apart. Filter Results to one deployment to price a stop for that deployment alone.
 
 ### Round-trips table
 Every booked structure: entry → exit, deployment, structure, index, mode, exit reason, credit per unit, IV percentile at entry, **margin** (~ = estimated), gross, charges, net and net ÷ margin. Click a row (or **Expand page**) to see its legs, its MTM path and details. Search and page through long lists. A row **struck through** is [quarantined](glossary#quarantined): booked on a price that was not real, shown but excluded from every total.`,

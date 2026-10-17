@@ -126,7 +126,7 @@ function fmtDate(v) {
     });
 }
 
-export default function DeploymentsPanel({ onTest, onSim, onManualTrade, sessionHealth, globalConfig }) {
+function DeploymentsPanel({ onTest, onSim, onManualTrade, sessionHealth, globalConfig }) {
     const confirm = useConfirm();
     const navigate = useNavigate();
     // Open the analytics view (equity curve / calendar / trades / distribution)
@@ -1325,3 +1325,7 @@ function EditDeployment({ deployment, onClose, onSaved }) {
         </div>
     );
 }
+
+// Memoised: the Dashboard re-renders on every socket snapshot and price tick; this panel
+// only needs to when its own props change (they are kept stable by the Dashboard).
+export default React.memo(DeploymentsPanel);

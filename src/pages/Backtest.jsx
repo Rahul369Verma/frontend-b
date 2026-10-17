@@ -76,7 +76,11 @@ import {
   buildEvidence, holdoutSplit, settingsCatalog, assumptionsOf, checkSuggestions,
   attributionSummary, vixSummary, summarize as summarizeTrades,
 } from '../utils/strategyReviewPack.js';
-import { ASSUMPTION_KEYS, withFormFallbacks } from '../utils/settingGuide.js';
+import { ASSUMPTION_KEYS } from '../utils/settingGuide.js';
+import { effectiveSettings, runSettings } from '../utils/backtestSettings.js';
+import { sizesByLots, currentLot } from '../utils/lots.js';
+import StrategyJsonControls from '../components/backtest/StrategyJsonControls.jsx';
+import { STRATEGY_CLASS_TO_ID } from '../utils/strategyJson.js';
 
 // Fallback model list — used only if /api/ai-confirmation/models fails.
 // Live list comes from Python's MODEL_REGISTRY via the API.
@@ -155,7 +159,25 @@ function modelBadgeFor(id) {
 }
 
 /** The trades table's columns in their default left-to-right order (the user can re-order them). */
-const TRADE_COLUMNS = ['chart', 'entry_time', 'symbol', 'volume', 'avg_vol', 'type', 'ai', 'model', 'entry', 'sl', 'tp', 'invested', 'exit_time', 'exit', 'pnl', 'reason', 'gate'];
+const TRADE_COLUMNS = ['chart', 'entry_time', 'symbol', 'volume', 'avg_vol', 'type', 'ai', 'model', 'entry', 'sl', 'tp', 'invested', 'qty', 'exit_time', 'exit', 'pnl', 'reason', 'gate'];
+
+// Keys that should persist across strategy changes
+const SYSTEM_KEYS = [
+    'symbol', 'start_date', 'end_date', 'capital', 'resolution', 
+    'lot_size', 'trade_start_time', 'trade_end_time', 
+    'backtest_mode', 'dataSource', 'broker', 'futures_expiry', 'trade_mode',
+    // Delta Exchange: venue settings survive a strategy change like the symbol does
+    'lots', 'holding_enabled', 'delta_leverage', 'delta_mode', 'delta_option_min_hours', 'delta_option_iv', 'delta_slippage_ticks',
+];
+
+// Helper: Get only system params from current state
+const getSystemParams = (currentParams) => {
+    const sys = {};
+    SYSTEM_KEYS.forEach(k => {
+        if (currentParams[k] !== undefined) sys[k] = currentParams[k];
+    });
+    return sys;
+};
 
 export default function Backtest() {
   const confirm = useConfirm();
@@ -187,6 +209,11 @@ export default function Backtest() {
   };
   const [instrumentConfig, setInstrumentConfig] = useState({});
   const [strategyDefaults, setStrategyDefaults] = useState({});
+  // EVERY setting as the form shows it — and exactly what Run sends, Copy JSON exports,
+  // Deploy and Save Config save (utils/backtestSettings.js). Fields read `shown`, never
+  // a `params.x || 5` of their own, so the screen cannot show a value the run does not use.
+  const shown = useMemo(() => effectiveSettings(params, { strategyDefaults }), [params, strategyDefaults]);
+  const sendable = useMemo(() => runSettings(params, { strategyDefaults }), [params, strategyDefaults]);
   const [strategyPresets, setStrategyPresets] = useState({});     // { stratId: [{id,label,desc,evidence,params}] }
   const [appliedPreset, setAppliedPreset] = useState('');         // "stratId:presetId" of the last applied preset
   const [savedConfigs, setSavedConfigs] = useState([]);
@@ -569,47 +596,21 @@ export default function Backtest() {
           console.log("📥 Received Params via Navigation:", location.state);
           
           setParams(prevParams => {
-              const newParams = { ...prevParams };
-              
-              if (location.state.symbol) newParams.symbol = location.state.symbol;
-              
               // Normalize Strategy Name (Class Name -> Internal ID)
               let strategyId = location.state.strategy;
-              const STRATEGY_MAPPING = {
-                  'MultiTimeframeStrategy': 'mta_ema_crossover',
-                  'VwapMomentumStrategy': 'vwap_momentum',
-                  'BollingerBandStrategy': 'bb_reversion',
-                  'InsideBarStrategy': 'inside_bar',
-                  'FalseInsideBarStrategy': 'false_inside_bar',
-                  'HybridInsideBarStrategy': 'hybrid_inside_bar',
-                  'OrbStrategy': 'orb_breakout',
-                  'SuperTrendStrategy': 'supertrend_adx',
-                  'UniversalStrategy': 'universal',
-                  'CandlestickPatternStrategy': 'candlestick_pattern',
-                  'BreakoutRangeStrategy': 'breakout_range',
-                  'PowerOfStocks5EmaStrategy': 'pos_5ema_scalp',
-                  'VwapScalpStrategy': 'vwap_scalp',
-                  'MomentumScalpStrategy': 'momentum_scalp',
-                  'TrendLineStrategy': 'trend_line',
-                  'RlStrategy': 'rl_agent',
-                  'ApexConfluenceStrategy': 'apex_confluence',
-                  'SmcOrderBlockStrategy': 'smc_ob',
-                  'LiquiditySweepStrategy': 'liquidity_sweep',
-                  'WyckoffSpringStrategy': 'wyckoff_spring',
-                  'FibonacciPullbackStrategy': 'fib_golden_pocket',
-                  'QuantumReversionStrategy': 'quantum_qho',
-                  'VolumeSurgeStrategy': 'volume_surge',
-                  'CouncilEnsembleStrategy': 'council_ensemble',
-                  'Rsi2ReversionStrategy': 'rsi2_reversion',
-                  'GapEdgeStrategy': 'gap_edge',
-                  'IntradayMomentumStrategy': 'intraday_momentum',
-                  'MomentumDivergenceStrategy': 'momentum_divergence',
-                  'OpenDriveTrendStrategy': 'open_drive_trend',
-                  'IchimokuKumoStrategy': 'ichimoku_kumo'
-              };
+              // Class names (older payloads) → ids: one shared map (utils/strategyJson.js)
+              const STRATEGY_MAPPING = STRATEGY_CLASS_TO_ID;
               if (STRATEGY_MAPPING[strategyId]) {
                   strategyId = STRATEGY_MAPPING[strategyId];
               }
+              // A different strategy starts from the system settings only — the previous
+              // strategy's parameters must not ride along into the run or the JSON
+              // (the rule Import JSON and a strategy change already follow).
+              const newParams = strategyId && strategyId !== prevParams.strategy
+                  ? { ...getSystemParams(prevParams) }
+                  : { ...prevParams };
+
+              if (location.state.symbol) newParams.symbol = location.state.symbol;
               newParams.strategy = strategyId;
 
               if (location.state.params) {
@@ -675,7 +676,6 @@ export default function Backtest() {
       const tunable = {};
       // Include what the form SHOWS for settings never explicitly set (their
       // fallbacks), or the AI is never told about them.
-      const shown = withFormFallbacks(params);
       Object.keys(shown).forEach(k => {
           if (ASKAI_EXCLUDE_KEYS.has(k)) return;
           // Modelling assumptions (slippage, brokerage, capital…) are context, not
@@ -761,7 +761,7 @@ export default function Backtest() {
               results_summary: buildStrategyReviewSummary(split ? shown : null),
               evidence: buildEvidence(shown),
               settings_catalog: catalog.map(({ _space, ...c }) => c),
-              assumptions: assumptionsOf(withFormFallbacks(params)),
+              assumptions: assumptionsOf(shown),
               strategy_profile: tuning ? { label: tuning.label, edge: tuning.profile?.edge || null, fails_when: tuning.profile?.fails_when || null } : null,
               ...(split ? { holdout: { hidden_from: split.cutoffDate, hidden_trades: split.hidden.length } } : {
                   attribution: attributionSummary(result?.attribution),
@@ -1031,10 +1031,11 @@ export default function Backtest() {
       const name = prompt("Enter a name for this configuration:");
       if (!name) return;
 
+      // What the form shows (the run's own settings), so loading it back runs the same.
       const strategyParams = {};
-      Object.keys(params).forEach(key => {
+      Object.keys(sendable).forEach(key => {
           if (!IGNORED_PARAMS.includes(key)) {
-              strategyParams[key] = params[key];
+              strategyParams[key] = sendable[key];
           }
       });
 
@@ -1055,33 +1056,7 @@ export default function Backtest() {
       }
   };
 
-  // --- Helper: Clean Payload for Backend ---
-  const preparePayload = (currentParams) => {
-      const clean = { ...currentParams };
-      
-      // Remove legacy/system keys that shouldn't go to backend logic if they are redundant
-      // 'interval' is legacy for 'resolution'. Backend uses 'resolution'.
-      if (clean.interval) delete clean.interval;
-      if (clean.period) delete clean.period;
-
-      // When ensemble mode is active, single model_file is irrelevant — only ensemble_models matters
-      if (clean.use_ensemble) delete clean.model_file;
-
-      Object.keys(clean).forEach(key => {
-          // Resolution should stay as string if originally string (Backtester expects safe string/number handling but Fyers prefers string)
-          if (key === 'resolution') return;
-
-          let val = clean[key];
-          // Try parse numeric strings
-          if (typeof val === 'string' && val.trim() !== '') {
-              // Check if valid number format (allow ints and floats)
-              if (!isNaN(Number(val))) {
-                  clean[key] = Number(val);
-              }
-          }
-      });
-      return clean;
-  };
+  // The request payload is utils/backtestSettings.runSettings (was preparePayload here).
 
   const handleDeployLive = async () => {
     if (!params.symbol) return toast.info("Please select a symbol.");
@@ -1094,11 +1069,8 @@ export default function Backtest() {
     const ok = await confirm(`Deploy this configuration for ${params.symbol} to the bot on PAPER?\n\nIt trades simulated fills. Real money only after you promote it on the Go-Live page (broker drill, evidence, canary).`);
     if (!ok) return;
 
-    // MERGE DEFAULTS: Ensure we save the EXACT snapshot of what the user sees
-    const currentDefaults = strategyDefaults[params.strategy] || {};
-    // Merge: Defaults -> Params
-    const mergedRaw = { ...currentDefaults, ...params };
-    const cleanParams = preparePayload(mergedRaw);
+    // The EXACT snapshot the form shows — the same object Run sends (utils/backtestSettings).
+    const cleanParams = sendable;
 
     try {
         // Deploy as a multi-strategy DEPLOYMENT (one row per symbol+strategy+
@@ -1187,7 +1159,7 @@ export default function Backtest() {
     backtestAbortRef.current = aborter;
 
     try {
-      const cleanParams = { ...preparePayload(overrideParams || params), ...gateParams(dirGate) };   // gate OFF adds nothing
+      const cleanParams = { ...(overrideParams ? runSettings(overrideParams, { strategyDefaults }) : sendable), ...gateParams(dirGate) };   // gate OFF adds nothing
       const res = await axios.post(`${API_URL}/engine/backtest/run`, cleanParams, { signal: aborter.signal });
       if (res.data.cancelled) {
         // Server confirmed clean cancel — no error, just bail.
@@ -1388,24 +1360,6 @@ export default function Backtest() {
 
   // Auto-fetch defaults on mount if strategy is set but empty params
   // Or handle change
-  // Keys that should persist across strategy changes
-  const SYSTEM_KEYS = [
-      'symbol', 'start_date', 'end_date', 'capital', 'resolution', 
-      'lot_size', 'trade_start_time', 'trade_end_time', 
-      'backtest_mode', 'dataSource', 'broker', 'futures_expiry', 'trade_mode',
-      // Delta Exchange: venue settings survive a strategy change like the symbol does
-      'lots', 'holding_enabled', 'delta_leverage', 'delta_mode', 'delta_option_min_hours', 'delta_option_iv', 'delta_slippage_ticks',
-  ];
-
-  // Helper: Get only system params from current state
-  const getSystemParams = (currentParams) => {
-      const sys = {};
-      SYSTEM_KEYS.forEach(k => {
-          if (currentParams[k] !== undefined) sys[k] = currentParams[k];
-      });
-      return sys;
-  };
-
   const handleStrategyChange = (e) => {
     const newStrategy = e.target.value;
     
@@ -1413,14 +1367,9 @@ export default function Backtest() {
     fetch(`${API_URL}/engine/defaults?strategy=${newStrategy}`)
         .then(res => res.json())
         .then(data => {
-            // RESET Logic: Keep System Params, Replace Strategy Params with Defaults
-            const systemParams = getSystemParams(params);
-            const newParams = { 
-                ...systemParams, 
-                strategy: newStrategy,
-                ...data 
-            };
-            setParams(newParams);
+            // RESET Logic: Keep System Params, Replace Strategy Params with Defaults.
+            // From the CURRENT state (an edit made while this was loading is kept).
+            setParams(prev => ({ ...getSystemParams(prev), strategy: newStrategy, ...data }));
         })
         .catch(err => console.error("Failed to load strategy defaults:", err));
 
@@ -1434,39 +1383,12 @@ export default function Backtest() {
         subtitle="Replay a single-leg strategy over archived candles — every trade, the equity curve, the AI overlay."
         actions={(
           <>
-<button 
-            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-fg-3 px-3 py-2 rounded border border-line text-sm transition-colors"
-            onClick={() => {
-                const json = prompt("Paste Parameters JSON here:");
-                if (json) {
-                    try {
-                        const parsed = JSON.parse(json);
-                        
-                        // Smart Import: 
-                        // 1. If JSON has "strategy", we assume it's a full config -> Replace All (but keep critical system keys if missing in JSON)
-                        // 2. If JSON is partial (no strategy), we merge into current.
-                        
-                        // Actually, user wants to Paste JSON and have it EXACTLY as is, usually.
-                        // But if they paste a snippet without Symbol/Date, they want to keep current Symbol/Date.
-                        
-                        // Strategy: Create a base from Current System Params, then Overwrite with JSON.
-                        // This cleans out OLD strategy params (unwanted 'ema_long' etc) that are NOT in the JSON.
-                        
-                        const systemDefaults = getSystemParams(params);
-                        
-                        // If JSON has its own system keys, they override current defaults.
-                        const newParams = { ...systemDefaults, ...parsed };
-                        
-                        setParams(newParams);
-                        toast.success("✅ Parameters Imported Successfully");
-                    } catch (e) {
-                        toast.error("❌ Invalid JSON: " + e.message);
-                    }
-                }
-            }}
-        >
-            <span className="font-mono text-xs">{`{ }`}</span> Import JSON
-        </button>
+{/* Copy / Download / Import the settings as one JSON (also what every Optimizer result copies).
+              Replaces the old prompt() import; keeps its rule: a JSON rebuilds the settings from the
+              page's system settings, so the previous strategy's parameters do not linger. */}
+          <StrategyJsonControls params={sendable} knownStrategies={Object.keys(strategyDefaults || {})}
+            buildNext={(cur, settings) => ({ ...getSystemParams(cur), ...settings })}
+            onImport={(next) => setParams(next)} />
         <Segmented value={btMode} onChange={setBtMode} size="md"
           options={[{ v: 'single', label: 'One strategy', hint: 'Backtest the strategy in the form' }, { v: 'together', label: 'Run together', hint: 'Several strategies on the same underlying, one combined book' }]} />
           </>
@@ -1699,7 +1621,7 @@ export default function Backtest() {
               <label htmlFor="backtest-resolution-timeframe-4" className="block text-sm font-medium text-fg-4 mb-1">Resolution (Timeframe)</label>
               <select id="backtest-resolution-timeframe-4" 
                 className="w-full bg-slate-900 border border-line rounded p-2 text-fg"
-                value={params.resolution || '5'}
+                value={shown.resolution}
                 onChange={e => {
                     const val = e.target.value;
                     // User Request: resolution should be number if possible
@@ -1724,7 +1646,7 @@ export default function Backtest() {
                      <input id="backtest-ai-confirmation-5"
                         type="checkbox"
                         className="w-4 h-4 accent-purple-500"
-                        checked={params.use_ai_confirmation || false}
+                        checked={!!shown.use_ai_confirmation}
                         onChange={e => setParams({...params, use_ai_confirmation: e.target.checked})}
                      />
                  </div>
@@ -1751,7 +1673,7 @@ export default function Backtest() {
                         id="backtest-gemini-risk-filter"
                         type="checkbox"
                         className="w-4 h-4 accent-purple-400 cursor-pointer"
-                        checked={params.enable_ai_confirmation || false}
+                        checked={!!shown.enable_ai_confirmation}
                         onChange={e => setParams({...params, enable_ai_confirmation: e.target.checked})}
                      />
                  </div>
@@ -1780,7 +1702,7 @@ export default function Backtest() {
                 <DeltaInstrumentPicker id="backtest-delta-symbol" value={params.symbol} onChange={(sym) => setParams({ ...params, symbol: sym })} />
                 <label htmlFor="backtest-delta-contracts" className="block text-xs text-fg-4">Contracts
                   <input id="backtest-delta-contracts" type="number" min="1" step="1" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                    value={params.lots || 1} onChange={e => setParams({ ...params, lots: Math.max(1, parseInt(e.target.value, 10) || 1) })} />
+                    value={shown.lots} onChange={e => setParams({ ...params, lots: Math.max(1, parseInt(e.target.value, 10) || 1) })} />
                 </label>
                 <DeltaParams symbol={params.symbol} params={params} onChange={setParams} idPrefix="backtest-delta" />
               </div>
@@ -1858,7 +1780,7 @@ export default function Backtest() {
               </label>
               <select id="backtest-data-broker-8"
                 className="w-full bg-slate-900 border border-blue-800 rounded p-2 text-fg text-sm"
-                value={params.broker || 'fyers'}
+                value={shown.broker}
                 onChange={e => setParams({...params, broker: e.target.value})}
               >
                 <option value="fyers">🔵 Fyers (NSE/BSE/MCX)</option>
@@ -1901,7 +1823,7 @@ export default function Backtest() {
                     <label htmlFor="backtest-backtest-mode-11" className="block text-sm font-medium text-fg-4 mb-1">Backtest Mode</label>
                     <select id="backtest-backtest-mode-11" 
                         className="w-full bg-slate-900 border border-line rounded p-2 text-fg"
-                        value={params.backtest_mode || 'Simulated Premium'}
+                        value={shown.backtest_mode}
                         onChange={e => setParams({...params, backtest_mode: e.target.value})}
                     >
                         <option value="Simulated Premium">Simulated Premium (Fast & Approx - 0.5 Delta)</option>
@@ -1951,7 +1873,7 @@ export default function Backtest() {
                      <label htmlFor="backtest-trading-mode-13" className="block text-sm font-medium text-purple-400 mb-1">Trading Mode</label>
                      <select id="backtest-trading-mode-13" 
                         className="w-full bg-slate-900 border border-purple-900 rounded p-2 text-fg"
-                        value={params.trade_mode || 'BUY'}
+                        value={shown.trade_mode}
                         onChange={e => setParams({...params, trade_mode: e.target.value})}
                      >
                          <option value="BUY">Buying (Long Options)</option>
@@ -2048,7 +1970,7 @@ export default function Backtest() {
                         type="checkbox" 
                         id="holding_enabled"
                         className="w-4 h-4 accent-blue-500 cursor-pointer"
-                        checked={params.holding_enabled || false}
+                        checked={!!shown.holding_enabled}
                         onChange={e => setParams({...params, holding_enabled: e.target.checked})}
                     />
                     <label htmlFor="holding_enabled" className="text-xs font-bold text-fg-3 cursor-pointer select-none">
@@ -2068,7 +1990,22 @@ export default function Backtest() {
                             value={params.capital}
                             onChange={e => setParams({...params, capital: e.target.value})} />
                     </div>
-                    {!isDeltaSymbol(params.symbol) && <div>
+                    {sizesByLots(params.symbol) ? (
+                        // Index and stock options are sized lots × the exchange lot listed on
+                        // each trade's own day (backtest and live engines alike). The old
+                        // "Lot Size (Total Qty)" box was never read for them: typing 130 for
+                        // two NIFTY lots still ran one.
+                        <div>
+                            <label htmlFor="backtest-lots-16" className="block text-xs text-fg-4 mb-1">Lots</label>
+                            <input id="backtest-lots-16" type="number" min="1" step="1"
+                                className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
+                                value={shown.lots}
+                                onChange={e => setParams({ ...params, lots: Math.max(1, parseInt(e.target.value, 10) || 1) })} />
+                            <span className="text-3xs text-fg-5" data-testid="lot-readout">
+                                1 lot = {currentLot(params.symbol) ?? '—'} today{currentLot(params.symbol) ? ` · ${shown.lots} × ${currentLot(params.symbol)} = ${shown.lots * currentLot(params.symbol)} qty` : ''}. Each trade uses the lot listed on its own day.
+                            </span>
+                        </div>
+                    ) : !isDeltaSymbol(params.symbol) && <div>
                         <label htmlFor="backtest-lot-size-total-qty-16" className="block text-xs text-fg-4 mb-1">Lot Size (Total Qty)</label>
                         <input id="backtest-lot-size-total-qty-16" type="number" 
                             step={instrumentConfig[params.symbol]?.lotSize || 1} 
@@ -2083,44 +2020,45 @@ export default function Backtest() {
                     <div>
                         <label htmlFor="backtest-max-daily-loss-17" className="block text-xs text-fg-4 mb-1">Max Daily Loss (₹)</label>
                         <input id="backtest-max-daily-loss-17" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                            value={params.max_daily_loss || 2000}
+                            value={shown.max_daily_loss}
                             onChange={e => setParams({...params, max_daily_loss: e.target.value})} />
                     </div>
                     <div>
                         <label htmlFor="backtest-max-single-loss-18" className="block text-xs text-fg-4 mb-1">Max Single Loss (₹)</label>
                         <input id="backtest-max-single-loss-18" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                            value={params.max_single_trade_loss || 2000}
+                            value={shown.max_single_trade_loss}
                             onChange={e => setParams({...params, max_single_trade_loss: e.target.value})} />
+                        <span className="text-3xs text-fg-5" data-testid="single-loss-note">Per lot: the stop is tightened so one lot risks at most this, as live does{Number(shown.lots) > 1 ? ` — ${shown.lots} lots risk up to ${shown.lots} × this` : ''}.</span>
                     </div>
                     <div>
                         <label htmlFor="backtest-max-trades-day-19" className="block text-xs text-fg-4 mb-1">Max Trades / Day</label>
                         <input id="backtest-max-trades-day-19" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                            value={params.max_trades_per_day || 10}
+                            value={shown.max_trades_per_day}
                             onChange={e => setParams({...params, max_trades_per_day: parseInt(e.target.value)})} />
                     </div>
                     <div>
                         <label htmlFor="backtest-trade-start-time-20" className="block text-xs text-fg-4 mb-1">Trade Start Time</label>
                         <input id="backtest-trade-start-time-20" type="time" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                            value={params.trade_start_time || "09:30"}
+                            value={shown.trade_start_time}
                             onChange={e => setParams({...params, trade_start_time: e.target.value})} />
                     </div>
                     <div>
                         <label htmlFor="backtest-trade-end-time-21" className="block text-xs text-fg-4 mb-1">Trade End Time</label>
                         <input id="backtest-trade-end-time-21" type="time" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                            value={params.trade_end_time || "15:00"}
+                            value={shown.trade_end_time}
                             onChange={e => setParams({...params, trade_end_time: e.target.value})} />
                     </div>
                     {/* Execution Friction */}
                     <div>
                         <label htmlFor="backtest-slippage-22" className="block text-xs text-fg-4 mb-1">Slippage (%)</label>
                         <input id="backtest-slippage-22" type="number" step="0.01" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                            value={params.slippage_percent || 0.05}
+                            value={shown.slippage_percent}
                             onChange={e => setParams({...params, slippage_percent: e.target.value})} />
                     </div>
                     <div>
                         <label htmlFor="backtest-brokerage-order-23" className="block text-xs text-fg-4 mb-1">Brokerage/Order (₹)</label>
                         <input id="backtest-brokerage-order-23" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                            value={params.brokerage_per_order || 20}
+                            value={shown.brokerage_per_order}
                             onChange={e => setParams({...params, brokerage_per_order: e.target.value})} />
                     </div>
                 </div>
@@ -2143,7 +2081,7 @@ export default function Backtest() {
                     <div>
                         <label htmlFor="backtest-stop-loss-type-24" className="block text-xs text-fg-4 mb-1">Stop-Loss Type</label>
                         <select id="backtest-stop-loss-type-24" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                            value={params.sl_type || 'ATR'}
+                            value={shown.sl_type}
                             onChange={e => setParams({...params, sl_type: e.target.value})}
                         >
                             <option value="ATR">ATR (Dynamic)</option>
@@ -2156,7 +2094,7 @@ export default function Backtest() {
                     <div>
                         <label htmlFor="backtest-strike-selection-25" className="block text-xs text-fg-4 mb-1">Strike Selection</label>
                         <select id="backtest-strike-selection-25" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                            value={params.strike_selection || 'ATM'}
+                            value={shown.strike_selection}
                             onChange={e => setParams({...params, strike_selection: e.target.value})}
                         >
                             <option value="ATM">ATM (Delta ~0.5)</option>
@@ -2171,7 +2109,7 @@ export default function Backtest() {
                         <label htmlFor="backtest-sl-tp-reference-chart-26" className="block text-xs text-fg-4 mb-1">SL/TP Reference Chart</label>
                         <select id="backtest-sl-tp-reference-chart-26"
                           className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                          value={params.sl_tp_type || 'SPOT_ATR'}
+                          value={shown.sl_tp_type}
                           onChange={e => setParams({...params, sl_tp_type: e.target.value})}
                         >
                           <option value="SPOT_ATR">Spot Index — ATR Based (Standard)</option>
@@ -2192,14 +2130,14 @@ export default function Backtest() {
                           <label htmlFor="backtest-swing-lookback-candles-27" className="block text-xs text-fg-4 mb-1">Swing Lookback (candles)</label>
                           <input id="backtest-swing-lookback-candles-27" type="number" min="3" max="50"
                             className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                            value={params.swing_lookback || 10}
+                            value={shown.swing_lookback}
                             onChange={e => setParams({...params, swing_lookback: parseInt(e.target.value) || 10})} />
                         </div>
                         <div>
                           <label htmlFor="backtest-risk-reward-ratio-28" className="block text-xs text-fg-4 mb-1">Risk : Reward Ratio</label>
                           <input id="backtest-risk-reward-ratio-28" type="number" step="0.5" min="1"
                             className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                            value={params.rr_ratio || 2.0}
+                            value={shown.rr_ratio}
                             onChange={e => setParams({...params, rr_ratio: parseFloat(e.target.value) || 2.0})} />
                         </div>
                       </>
@@ -2211,13 +2149,13 @@ export default function Backtest() {
                             <div>
                                 <label htmlFor="backtest-fixed-sl-pts-29" className="block text-xs text-fg-4 mb-1">Fixed SL (Pts)</label>
                                 <input id="backtest-fixed-sl-pts-29" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                                    value={params.fixed_sl_points || 40}
+                                    value={shown.fixed_sl_points}
                                     onChange={e => setParams({...params, fixed_sl_points: e.target.value})} />
                             </div>
                             <div>
                                 <label htmlFor="backtest-fixed-tp-pts-30" className="block text-xs text-fg-4 mb-1">Fixed TP (Pts)</label>
                                 <input id="backtest-fixed-tp-pts-30" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                                    value={params.fixed_tp_points || 100}
+                                    value={shown.fixed_tp_points}
                                     onChange={e => setParams({...params, fixed_tp_points: e.target.value})} />
                             </div>
                         </>
@@ -2229,7 +2167,7 @@ export default function Backtest() {
                         <div>
                             <label htmlFor="backtest-atr-period-31" className="block text-xs text-fg-4 mb-1">ATR Period</label>
                             <input id="backtest-atr-period-31" type="number" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                                value={params.atr_period || 14}
+                                value={shown.atr_period}
                                 onChange={e => setParams({...params, atr_period: parseInt(e.target.value) || 14})} />
                         </div>
                             <div>
@@ -2237,7 +2175,7 @@ export default function Backtest() {
                                     {params.strategy === 'rl_agent' ? 'ATR TP Mult (Legacy Fallback)' : 'ATR TP Multiplier'}
                                 </label>
                                 <input type="number" step="0.1" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                                    value={params.atr_tp_mult || 3.5}
+                                    value={shown.atr_tp_mult}
                                     onChange={e => setParams({...params, atr_tp_mult: parseFloat(e.target.value)})} />
                             </div>
                             <div>
@@ -2245,7 +2183,7 @@ export default function Backtest() {
                                     {params.strategy === 'rl_agent' ? 'ATR SL Mult (Legacy Fallback)' : params.sl_type === 'STRATEGY' ? 'ATR SL Mult (Fallback)' : 'ATR SL Multiplier'}
                                 </label>
                                 <input type="number" step="0.1" className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                                    value={params.atr_sl_mult || 1.8}
+                                    value={shown.atr_sl_mult}
                                     onChange={e => setParams({...params, atr_sl_mult: parseFloat(e.target.value)})} />
                             </div>
                       </>
@@ -2255,7 +2193,7 @@ export default function Backtest() {
                         <div className="col-span-2 flex items-center justify-between bg-blue-900/20 p-2 rounded border border-blue-800/50 mt-1">
                             <label htmlFor="backtest-use-smart-volatility-sl-adva-32" className="text-sm text-blue-300 font-bold">Use Smart Volatility SL (Advanced)</label>
                             <input id="backtest-use-smart-volatility-sl-adva-32" type="checkbox" className="w-4 h-4 accent-blue-500"
-                                checked={params.use_dynamic_sl || false}
+                                checked={!!shown.use_dynamic_sl}
                                 onChange={e => setParams({...params, use_dynamic_sl: e.target.checked})} />
                         </div>
                     )}
@@ -2276,7 +2214,7 @@ export default function Backtest() {
                          </div>
                          <div className="flex items-center gap-3">
                              <input type="checkbox"
-                                 checked={params.use_trailing_sl || false}
+                                 checked={!!shown.use_trailing_sl}
                                  onChange={e => setParams({...params, use_trailing_sl: e.target.checked})}
                                  className="w-4 h-4 accent-blue-500"
                              />
@@ -2285,7 +2223,7 @@ export default function Backtest() {
                                      <span className="text-3xs text-fg-4">Mult:</span>
                                      <input type="number" step="0.1"
                                          className="w-16 bg-slate-900 border border-line rounded p-1 text-xs text-fg"
-                                         value={params.trailing_sl_mult || 1.5}
+                                         value={shown.trailing_sl_mult}
                                          onChange={e => setParams({...params, trailing_sl_mult: parseFloat(e.target.value)})}
                                      />
                                  </div>
@@ -2310,7 +2248,7 @@ export default function Backtest() {
                         <input
                           type="checkbox"
                           className="w-4 h-4 accent-purple-500 cursor-pointer"
-                          checked={params.use_ai_confirmation || false}
+                          checked={!!shown.use_ai_confirmation}
                           onChange={e => setParams({...params, use_ai_confirmation: e.target.checked})}
                         />
                     </div>
@@ -2368,7 +2306,7 @@ export default function Backtest() {
                           type="checkbox"
                           id="enable_ai_confirmation"
                           className="w-4 h-4 accent-purple-400 cursor-pointer flex-shrink-0 ml-3"
-                          checked={params.enable_ai_confirmation || false}
+                          checked={!!shown.enable_ai_confirmation}
                           onChange={e => setParams({...params, enable_ai_confirmation: e.target.checked})}
                         />
                     </div>
@@ -2467,7 +2405,7 @@ export default function Backtest() {
                                         max="10"
                                         placeholder="1"
                                         className="w-full bg-slate-900 border border-purple-800/40 rounded p-1.5 text-fg text-xs"
-                                        value={params.ai_concurrency || 1}
+                                        value={shown.ai_concurrency}
                                         onChange={e => setParams({...params, ai_concurrency: Math.max(1, parseInt(e.target.value) || 1)})}
                                     />
                                     <p className="text-3xs text-fg-5 mt-0.5">
@@ -2524,7 +2462,7 @@ export default function Backtest() {
                                                 <label htmlFor="backtest-claude-model-38" className="block text-3xs text-warning mb-1">Claude model</label>
                                                 <select id="backtest-claude-model-38"
                                                     className="w-full bg-slate-900 border border-amber-700/40 rounded p-1.5 text-fg text-xs"
-                                                    value={params.claude_web_model || 'claude-web/claude-sonnet-4-6'}
+                                                    value={shown.claude_web_model}
                                                     onChange={e => setParams({
                                                         ...params,
                                                         claude_web_model: e.target.value,
@@ -2622,7 +2560,7 @@ export default function Backtest() {
                                                 <label htmlFor="backtest-gemini-model-39" className="block text-3xs text-cyan-300 mb-1">Gemini model</label>
                                                 <select id="backtest-gemini-model-39"
                                                     className="w-full bg-slate-900 border border-cyan-700/40 rounded p-1.5 text-fg text-xs"
-                                                    value={params.gemini_web_model || 'gemini-web/gemini-2.5-pro'}
+                                                    value={shown.gemini_web_model}
                                                     onChange={e => setParams({
                                                         ...params,
                                                         gemini_web_model: e.target.value,
@@ -2710,7 +2648,7 @@ export default function Backtest() {
                                                     </label>
                                                     <select id="backtest-thinking-effort-40"
                                                         className="w-full bg-slate-900 border border-orange-700/40 rounded p-1.5 text-fg text-xs"
-                                                        value={params.claude_effort || 'high'}
+                                                        value={shown.claude_effort}
                                                         onChange={e => {
                                                             const eff = e.target.value;
                                                             // Keep claude_thinking_budget in sync for the Anthropic API path,
@@ -2825,7 +2763,7 @@ export default function Backtest() {
                                                 min="5"
                                                 max="60"
                                                 step="5"
-                                                value={params.ai_inflight_review_interval_min ?? 15}
+                                                value={shown.ai_inflight_review_interval_min}
                                                 onChange={e => setParams({
                                                     ...params,
                                                     ai_inflight_review_interval_min: Math.max(5, Math.min(60, parseInt(e.target.value, 10) || 15)),
@@ -2868,7 +2806,7 @@ export default function Backtest() {
                                             max="3.0"
                                             step="0.1"
                                             className="w-16 bg-slate-900 border border-cyan-700/40 rounded p-1 text-fg text-2xs text-right"
-                                            value={params.ai_sl_safety_buffer ?? 1.5}
+                                            value={shown.ai_sl_safety_buffer}
                                             onChange={e => setParams({ ...params, ai_sl_safety_buffer: parseFloat(e.target.value) || 1.5 })}
                                         />
                                         <span className="text-3xs text-fg-5 leading-tight">
@@ -2991,7 +2929,7 @@ export default function Backtest() {
                                 <label htmlFor="backtest-range-duration-42" className="block text-xs text-fg-4 mb-1">Range Duration</label>
                                 <select id="backtest-range-duration-42" 
                                     className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                                    value={params.range_duration_min || 30}
+                                    value={shown.range_duration_min}
                                     onChange={e => setParams({...params, range_duration_min: parseInt(e.target.value)})}
                                 >
                                     <option value="15">15 Min</option>
@@ -3015,7 +2953,7 @@ export default function Backtest() {
                              <label htmlFor="backtest-breakout-range-mode-44" className="block text-xs text-blue-300 mb-1 font-bold">Breakout Range Mode</label>
                              <select id="backtest-breakout-range-mode-44" 
                                  className="w-full bg-slate-900 border border-blue-900/50 rounded p-2 text-fg text-sm"
-                                 value={params.breakout_mode || 'ORB'}
+                                 value={shown.breakout_mode}
                                  onChange={e => setParams({...params, breakout_mode: e.target.value})}
                              >
                                  <option value="ORB">Opening Range Breakout (ORB)</option>
@@ -3065,7 +3003,7 @@ export default function Backtest() {
                                         <label htmlFor="backtest-max-hold-candles-46" className="block text-xs text-fg-4 mb-1">⏰ Max Hold Candles</label>
                                         <input id="backtest-max-hold-candles-46" type="number" step="1" min="0"
                                             className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                                            value={params.max_hold_candles ?? 20}
+                                            value={shown.max_hold_candles}
                                             onChange={e => setParams({...params, max_hold_candles: parseInt(e.target.value) || 0})}
                                         />
                                         <div className="text-3xs text-fg-5 mt-1">Force exit after N candles. 0 = disabled. (20 = ~100 min on 5m)</div>
@@ -3074,7 +3012,7 @@ export default function Backtest() {
                                         <label htmlFor="backtest-adverse-exit-atr-47" className="block text-xs text-fg-4 mb-1">🛑 Adverse Exit (ATR×)</label>
                                         <input id="backtest-adverse-exit-atr-47" type="number" step="0.5" min="0"
                                             className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                                            value={params.adverse_atr_mult ?? 3.0}
+                                            value={shown.adverse_atr_mult}
                                             onChange={e => setParams({...params, adverse_atr_mult: parseFloat(e.target.value) || 3.0})}
                                         />
                                         <div className="text-3xs text-fg-5 mt-1">Exit if spot moves N×ATR against position. Prevents slow-bleed losses.</div>
@@ -3085,7 +3023,7 @@ export default function Backtest() {
                                             <div className="text-3xs text-fg-5">Catches trades the SL misses (slow drift, open all day)</div>
                                         </div>
                                         <input type="checkbox"
-                                            checked={params.adverse_exit_enabled ?? true}
+                                            checked={!!shown.adverse_exit_enabled}
                                             onChange={e => setParams({...params, adverse_exit_enabled: e.target.checked})}
                                         />
                                     </div>
@@ -3107,7 +3045,7 @@ export default function Backtest() {
                                             <div className="text-3xs text-fg-5">Stop entering new trades after hitting daily gain target</div>
                                         </div>
                                         <input type="checkbox"
-                                            checked={params.enable_daily_profit_lock ?? true}
+                                            checked={!!shown.enable_daily_profit_lock}
                                             onChange={e => setParams({...params, enable_daily_profit_lock: e.target.checked})}
                                         />
                                     </div>
@@ -3116,7 +3054,7 @@ export default function Backtest() {
                                             <label htmlFor="backtest-lock-after-gain-48" className="block text-xs text-fg-4 mb-1">Lock After Gain (%)</label>
                                             <input id="backtest-lock-after-gain-48" type="number" step="0.1" min="0.1" max="10"
                                                 className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                                                value={params.daily_profit_lock_pct ?? 0.5}
+                                                value={shown.daily_profit_lock_pct}
                                                 onChange={e => setParams({...params, daily_profit_lock_pct: parseFloat(e.target.value) || 0.5})}
                                             />
                                             <div className="text-3xs text-fg-5 mt-1">e.g. 0.5 = lock after 0.5% daily gain</div>
@@ -3129,7 +3067,7 @@ export default function Backtest() {
                                             <div className="text-3xs text-fg-5">Block low-quality entries after consecutive daily losses</div>
                                         </div>
                                         <input type="checkbox"
-                                            checked={params.enable_daily_loss_filter ?? true}
+                                            checked={!!shown.enable_daily_loss_filter}
                                             onChange={e => setParams({...params, enable_daily_loss_filter: e.target.checked})}
                                         />
                                     </div>
@@ -3138,7 +3076,7 @@ export default function Backtest() {
                                             <label htmlFor="backtest-max-losses-before-block-49" className="block text-xs text-fg-4 mb-1">Max Losses Before Block</label>
                                             <select id="backtest-max-losses-before-block-49"
                                                 className="w-full bg-slate-900 border border-line rounded p-2 text-fg text-sm"
-                                                value={params.max_daily_losses ?? 3}
+                                                value={shown.max_daily_losses}
                                                 onChange={e => setParams({...params, max_daily_losses: parseInt(e.target.value)})}
                                             >
                                                 <option value={1}>1 loss → filter entries</option>
@@ -3162,7 +3100,7 @@ export default function Backtest() {
                                 <div className="flex items-center justify-between mb-2">
                                     <div className="text-xs font-bold text-purple-400">🤝 Ensemble Mode</div>
                                     <input type="checkbox"
-                                        checked={params.use_ensemble || false}
+                                        checked={!!shown.use_ensemble}
                                         onChange={e => setParams({...params, use_ensemble: e.target.checked})}
                                     />
                                 </div>
@@ -3923,6 +3861,25 @@ export default function Backtest() {
                     cell: (trade) => (
                     <td className="px-4 py-3 text-xs">₹{trade.invested_amount ? Number(trade.invested_amount).toFixed(2) : '-'}</td>
                     ),
+                  },
+                  qty: {
+                    // lots × the lot listed that day — so a 2-lot run shows 2 lots (130 = 2 × 65,
+                    // 150 = 2 × 75 before 31 Dec 2025). "cap" = the max-single-loss rule
+                    // tightened this trade's stop (live's rule: per lot).
+                    label: 'Qty', thClass: 'px-4 py-3 bg-slate-800',
+                    header: 'Qty',
+                    cell: (trade) => {
+                      const q = Number(trade.quantity), lot = Number(trade.lot_size);
+                      const lotsN = q > 0 && lot > 0 && Number.isInteger(q / lot) ? q / lot : null;
+                      const cap = trade.slDetails && trade.slDetails.max_loss_cap;
+                      return (
+                        <td className="px-4 py-3 text-xs whitespace-nowrap tabular-nums" data-testid="trade-qty">
+                          {q > 0 ? q : '-'}
+                          {lotsN != null && <span className="text-fg-5"> ({lotsN} × {lot})</span>}
+                          {cap && <span className="ml-1 text-warning" title={`Stop tightened ${cap.from} → ${cap.to} pts so each lot risks at most ₹${cap.cap} (Max Single Loss, per lot)`}>cap</span>}
+                        </td>
+                      );
+                    },
                   },
                   exit_time: {
                     label: 'Exit Time', thClass: 'px-4 py-3 bg-slate-800',

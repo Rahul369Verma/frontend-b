@@ -29,7 +29,9 @@ Long runs can take hours; they keep their place if paused, and restart themselve
         {
             id: 'data-check',
             title: 'Data check',
-            md: `Before the run, each index's data is checked: days available, date range, how complete it is, and **flat bars** (candles where the price did not move — a sign of bad data). Indexes with poor data are **excluded from the count** rather than silently judged on bad prices.`,
+            md: `Before the run, each index's data is checked: days available, date range, how complete it is, and **flat bars** (candles where the price did not move — a sign of bad data). Indexes with poor data are **excluded from the count** rather than silently judged on bad prices.
+
+**Lot** shows one lot **today**, and every lot change the window crosses — e.g. NIFTY *65 — window: 75 until 30 Dec 2025, then 65*. Each simulated trade uses the lot listed on its own day (as the Backtester and the live engine do), and **Test**, **JSON** and **Save** hand over today's lot. Older runs that stored the start date's lot are corrected when you open them.`,
         },
         {
             id: 'progress',
@@ -59,7 +61,7 @@ Strategies that did **not** hold up on k indexes are listed separately (folded).
 ### By index
 Every index separately. Per row: **Score**, **Full P&L** (whole period), **Win %**, **Trades**, **Max DD**, **Verdict** — **Held up** (good on the held-out test) or **Overfit** (good only on the period it was tuned on) — and the **Params**. **Test P&L / win % / PF / trades** are the held-out figures; **Full window** is the whole period.
 
-**Save where it held up** saves the settings as a preset only for the indexes where they held up — never as a global default. **Test** runs a single setting on one index in the Backtest page.`,
+**Save where it held up** saves the settings as a preset only for the indexes where they held up — never as a global default. **Test** runs a single setting on one index in the Backtest page. **JSON** copies that same setting (with its index, dates, data source, costs and min SL points) as text you can paste into **Backtest → Import JSON** — or keep, or share. It is on every index card, every *By index* row, the single-index leaderboard and the best-result card, and works the same in old runs opened from *Recent runs*. See [importing settings](backtest#strategy-json).`,
         },
         {
             id: 'consistency',
