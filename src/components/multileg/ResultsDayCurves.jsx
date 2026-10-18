@@ -7,19 +7,27 @@
  * GET /api/multileg/trades/paths (the filter bar's trades, marks as compact
  * [ms, net] pairs) once the section scrolls into view, and again when the filter
  * changes while it is shown. The curves are built exactly as before
- * (normalizeMultilegTrade → buildDayCurves, quarantined trades excluded and counted).
+ * (normalizeMultilegTrade → buildDayCurves, quarantined trades excluded and counted),
+ * in a Web Worker — on prod's history that work froze the page for 0.3-0.7 s.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { API_URL } from '../../config/api.js';
-import { expandPathRow, curvesOf } from './resultsCurves.js';
+import { buildCurves } from './curvesInWorker.js';
 import { filterParams } from './useResultsTable.js';
 import DayEquityCurves from '../viz/DayEquityCurves';
+
+/** The server's own words from a failed answer (it arrives as text here). */
+function errorText(e) {
+    const d = e?.response?.data;
+    if (typeof d === 'string') { try { return JSON.parse(d).error || e.message; } catch { return e.message; } }
+    return d?.error || e?.message;
+}
 
 export default function ResultsDayCurves({ filter, since }) {
     const boxRef = useRef(null);
     const [seen, setSeen] = useState(() => typeof IntersectionObserver === 'undefined');
-    const [rows, setRows] = useState(null);
+    const [curves, setCurves] = useState(null);
     const [error, setError] = useState(null);
 
     // load when the section comes near the screen (once seen, it stays loaded)
@@ -34,13 +42,14 @@ export default function ResultsDayCurves({ filter, since }) {
     useEffect(() => {
         if (!seen) return undefined;
         let dead = false;
-        axios.get(`${API_URL}/multileg/trades/paths`, { params, timeout: 120000 })
-            .then((r) => { if (!dead) { setRows((Array.isArray(r.data) ? r.data : []).map(expandPathRow)); setError(null); } })
-            .catch((e) => { if (!dead) setError(e?.response?.data?.error || e.message); });
+        // the TEXT goes to the worker: parsing it is part of the work kept off this thread
+        axios.get(`${API_URL}/multileg/trades/paths`, { params, timeout: 120000, responseType: 'text', transformResponse: [(d) => d] })
+            .then((r) => buildCurves(r.data))
+            .then((c) => { if (!dead) { setCurves(c); setError(null); } })
+            .catch((e) => { if (!dead) setError(errorText(e)); });
         return () => { dead = true; };
     }, [seen, params]);
 
-    const curves = useMemo(() => (rows ? curvesOf(rows) : null), [rows]);
     return (
         <div ref={boxRef} className="bg-surface rounded-xl border border-line p-4" data-testid="results-day-curves">
             {curves ? (

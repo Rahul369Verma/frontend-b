@@ -73,9 +73,10 @@ Messages carry the environment tag — **[PRODUCTION]** or **[DEV]**. The develo
 
 | Watched | Slow when |
 |---|---|
-| **Server froze** | the server's single thread was held ≥ 300 ms — every request, price update and engine check waited. It names what was running. ≥ 2 s is urgent. |
+| **Server froze** | the server's single thread was held ≥ 300 ms — every request, price update and engine check waited. It names what was running, and WHY: *busy in JavaScript* (our code — the named work is the suspect) or *the server barely ran* (the machine was busy or swapping — not our code), plus any garbage-collection pause inside it. ≥ 2 s is urgent. |
 | **Slow API** | a request took ≥ 2 s or sent ≥ 1 MB (backtests, optimizer runs and exports: ≥ 10 min) |
-| **Slow database query** | one MongoDB command took ≥ 500 ms — by collection, with the filter's field names |
+| **Slow database query** | one MongoDB command took ≥ 500 ms — by collection, with the filter's field names (a batched write gets 5 ms more per extra statement; start-up index checks are not counted). When the link itself is slow it says how much of the time the link accounts for. |
+| **Slow database link** | one round trip to the database (a ping, once a minute) ≥ 100 ms. Every query pays it before any work — on production (Oct 2026) ~225 ms, because the server is in the US and the database in Mumbai. The fix is the same region; code can only make fewer trips. |
 | **Slow outside call** | the broker, NSE, Telegram… took ≥ 5 s (AI models: ≥ 90 s) |
 | **Engine loop running late** | a live, position-watch or multi-leg loop took longer than its own interval |
 | **Memory pressure** | the server's memory ≥ 85% full, or a garbage-collection pause ≥ 300 ms |

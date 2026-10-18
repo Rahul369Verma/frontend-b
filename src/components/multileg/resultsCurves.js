@@ -24,3 +24,9 @@ export function curvesOf(rows) {
     const res = buildDayCurves(norm);
     return { days: res?.days || [], excluded: { ...(res?.excluded || {}), quarantined, unreadable } };
 }
+
+/** The /paths answer (its text, or already parsed) → curves. What the worker runs. */
+export function curvesFromBody(body) {
+    const rows = typeof body === 'string' ? JSON.parse(body) : body;
+    return curvesOf((Array.isArray(rows) ? rows : []).map(expandPathRow));
+}
