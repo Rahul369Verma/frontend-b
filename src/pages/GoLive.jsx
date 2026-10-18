@@ -37,13 +37,15 @@ function DrillDialog({ plan, running, result, onRun, onClose }) {
             ) : (
                 <>
                     <button type="button" onClick={onClose} disabled={running} className="px-3 py-1.5 rounded text-xs text-fg-3 border border-line disabled:opacity-40">Cancel</button>
-                    <button type="button" onClick={onRun} disabled={running} className="px-3 py-1.5 rounded text-xs font-semibold bg-danger-fill text-white disabled:opacity-40">
+                    <button type="button" onClick={onRun} disabled={running || (plan && plan.available === false)} className="px-3 py-1.5 rounded text-xs font-semibold bg-danger-fill text-white disabled:opacity-40">
                         {running ? 'Sending…' : 'Send the drill order'}
                     </button>
                 </>
             )}>
             {plan && !result && (
                 <div className="space-y-2 text-xs">
+                    {plan.available === false && <StatusBadge level="warning">Not possible right now</StatusBadge>}
+                    {plan.available === false && <p className="text-warning">{plan.unavailableReason}</p>}
                     <p className="text-fg-3">This sends a <strong className="text-fg">real order</strong> to your account, built so the market cannot fill it:</p>
                     <dl className="space-y-1.5">
                         <div><dt className="text-2xs uppercase tracking-wide text-fg-5">Account</dt><dd className="text-fg-2">{plan.env}</dd></div>
