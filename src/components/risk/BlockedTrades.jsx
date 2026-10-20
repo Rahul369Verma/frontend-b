@@ -112,7 +112,7 @@ export function BlockedTradesView({ data, days, onDays, limit = 8 }) {
                                 <span className="text-fg-2">{istDateTime(r.at)} · {r.strategy || '—'} · {r.index} {r.side}</span>
                                 <Chip tone={effectTone(r.gateEffect)}>{r.verdict}</Chip>
                             </div>
-                            <div>{r.result}</div>
+                            <div className={r.lost ? 'text-warning' : undefined}>{r.result}{r.inferred ? ' *' : ''}</div>
                             <button type="button" className={BTN} onClick={() => setDetail(r)}><Info className="w-3 h-3" aria-hidden="true" />Details</button>
                         </li>
                     ))}
@@ -124,7 +124,7 @@ export function BlockedTradesView({ data, days, onDays, limit = 8 }) {
                         { key: 'strategy', header: 'Strategy', render: (r) => r.strategy || '—' },
                         { key: 'index', header: 'Index', render: (r) => `${r.index || '—'} ${r.side || ''}` },
                         { key: 'mode', header: 'Gate', render: (r) => <Chip tone={r.mode === 'enforce' ? 'critical' : 'muted'} title={r.why}>{r.mode === 'enforce' ? 'Blocked' : 'Shadow'} · {pct(r.confidence)}</Chip> },
-                        { key: 'result', header: 'What happened', render: (r) => <span className="text-fg-3">{r.result}</span> },
+                        { key: 'result', header: 'What happened', render: (r) => <span className={r.lost ? 'text-warning' : 'text-fg-3'}>{r.result}{r.inferred ? ' *' : ''}</span> },
                         { key: 'verdict', header: 'Blocking…', render: (r) => <Chip tone={effectTone(r.gateEffect)}>{r.verdict}</Chip> },
                         { key: 'more', header: '', render: (r) => <button type="button" className={BTN} onClick={() => setDetail(r)} aria-label={`Details of the ${r.side} ${r.strategy || ''} block at ${istDateTime(r.at)}`}><Info className="w-3 h-3" aria-hidden="true" />Details</button> },
                     ]} />
@@ -132,6 +132,12 @@ export function BlockedTradesView({ data, days, onDays, limit = 8 }) {
             {rows.length > limit && (
                 <button type="button" className={BTN} onClick={() => setAll((a) => !a)}>{all ? 'Show fewer' : `Show all ${rows.length}`}</button>
             )}
+            {rows.some((r) => r.inferred) && (
+                <p className="text-3xs text-fg-5">* The engine&apos;s note of what happened next was not saved for these (a write-order bug, fixed 20-Oct-2026); they were outside the deployment&apos;s entry window, worked out from their time.</p>
+            )}
+            <p className="text-3xs text-fg-5">
+                Only blocks are listed here. Signals the gate let through in Enforce mode — <b>Allowed</b> (the side at or above the floor) and <b>Probe</b> (a weak side let through on purpose, one in every few) — are trades: see <b>Latest gate decisions</b> below and Trade History&apos;s Gate column.
+            </p>
             <DetailModal row={detail} onClose={() => setDetail(null)} />
         </div>
     );

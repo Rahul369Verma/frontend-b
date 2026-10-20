@@ -5,6 +5,7 @@ import DeploymentsPanel from '../components/DeploymentsPanel';
 import DirectionConfidencePanel from '../components/risk/DirectionConfidencePanel';
 import AttentionStrip from '../components/notify/AttentionStrip.jsx';
 import TradeDetailsModal from '../components/TradeDetailsModal';
+import RoundTripsTable from '../components/singleleg/RoundTripsTable.jsx';
 import CollapsibleCard from '../components/CollapsibleCard';
 import { StatRow, StatTile, PageHeader, Chip, ModeChip, Spinner, Panel } from '../components/viz/primitives';
 import useCollapse from '../hooks/useCollapse.js';
@@ -18,7 +19,7 @@ import { API_ORIGIN, API_URL } from '../config/api.js';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { useConfirm } from '../components/confirmContext.js';
 import { toast } from '../components/toastStore.js';
-import { inr, premium, istDateTime, pnlTone } from '../components/viz/tokens.js';
+import { pnlTone } from '../components/viz/tokens.js';
 
 // API Base URL
 
@@ -191,15 +192,12 @@ export default function Dashboard() {
   const [pnl, setPnl] = useState({ daily_pnl: 0, trades_count: 0 });
   const [positions, setPositions] = useState([]);
   const [optionChain, setOptionChain] = useState([]);
-  const [mongoTrades, setMongoTrades] = useState([]);
   // Per-symbol signal-check timeline (from /api/engine/dashboard).
   // Shape: { [symbol]: { current: {action, type, reason, ts, strategyName},
   //                       history: [...last 20 entries] } }
   const [signalStatus, setSignalStatus] = useState({});
-  const [tradesPage, setTradesPage] = useState(1);
-  const [tradesTotal, setTradesTotal] = useState(0);
-  const [tradesSearch, setTradesSearch] = useState("");
-  const [tradesLimit, setTradesLimit] = useState(10);
+  // bumped when the engine reports an ENTRY/EXIT (socket), so Trade History refetches its page
+  const [tradesRefresh, setTradesRefresh] = useState(0);
   // Trade History → Details modal (full doc + direction-gate verdict for that trade)
   const [detailTradeId, setDetailTradeId] = useState(null);
   // Trade History fold state (persisted, same key as before). Default OPEN. Shared
@@ -229,14 +227,6 @@ export default function Dashboard() {
   const [sessionHealth, setSessionHealth] = useState({ results: {}, total_expired: 0, total_missing: 0, checked_at: null });
   const [sessionHealthLoading, setSessionHealthLoading] = useState(false);
 
-  // Refs to track current pagination/search for socket listener (prevents stale closure)
-  const tradesPageRef = React.useRef(1);
-  const tradesSearchRef = React.useRef("");
-
-  useEffect(() => {
-      tradesPageRef.current = tradesPage;
-      tradesSearchRef.current = tradesSearch;
-  }, [tradesPage, tradesSearch]);
   const [globalConfig, setGlobalConfig] = useState(null);
   const [, setSymbolConfig] = useState(null);
   const [, setActiveConfig] = useState(null);
@@ -290,33 +280,6 @@ export default function Dashboard() {
   };
 
   
-  useEffect(() => {
-      const fetchMongoTrades = async () => {
-        try {
-            // Smart filter: if the search box contains hex-only chars (6+) it's
-            // probably a trade ID short suffix — route it to the trade_id filter.
-            // Anything else goes to the symbol filter as before.
-            const term = (tradesSearch || '').trim();
-            const looksLikeTradeId = /^[a-fA-F0-9]{6,24}$/.test(term);
-            const params = new URLSearchParams({
-                page: String(tradesPage),
-                limit: String(tradesLimit),
-            });
-            if (term) {
-                if (looksLikeTradeId) params.set('trade_id', term);
-                else params.set('symbol', term);
-            }
-            const response = await axios.get(`${API_URL}/trades?${params.toString()}`);
-            if (response.data) {
-                 setMongoTrades(response.data.trades || []);
-                 setTradesTotal(response.data.total || 0);
-            }
-        } catch (err) {
-            console.error("Failed to fetch paginated trades", err);
-        }
-      };
-      fetchMongoTrades();
-  }, [tradesPage, tradesSearch, tradesLimit]); 
 
   const fetchData = async () => {
     try {
@@ -331,7 +294,6 @@ export default function Dashboard() {
           setPositions(data.positions || []);
           setOptionChain(data.optionChain || []);
           setSignalStatus(data.signalStatus || {});
-          // mongoTrades is now handled entirely by specialized fetchMongoTrades hook
           // New Config Data
           setGlobalConfig(data.config?.globalSettings || {});
           setSymbolConfig(data.config?.symbolConfigs || {});
@@ -389,6 +351,8 @@ export default function Dashboard() {
         // emits a partial dashboard_update ({mongoTrades} only, execution.js) on
         // every ENTRY/EXIT; applying it blanked the panel — positions [], P&L 0,
         // engine "stopped" — until the next full emit.
+        // the partial update an ENTRY/EXIT emits: Trade History refetches its current page
+        if (data && !Array.isArray(data.positions) && data.mongoTrades) setTradesRefresh((x) => x + 1);
         if (data && Array.isArray(data.positions)) {
             // keepIfSame: a snapshot every 2 s whose content usually did not change must
             // not re-render the page (it rebuilt every panel, every 2 s, all day).
@@ -399,12 +363,6 @@ export default function Dashboard() {
             setOptionChain(prev => keepIfSame(prev, data.optionChain || []));
             setSignalStatus(prev => keepIfSame(prev, data.signalStatus || {}));
             
-            // Only update mongoTrades from socket if we are on page 1 and not searching
-            // This prevents the UI from "jumping" back to the start when paginating
-            // if (tradesPageRef.current === 1 && tradesSearchRef.current === "") {
-            //     setMongoTrades(data.mongoTrades || []);
-            // }
-
             setGlobalConfig(prev => keepIfSame(prev, data.config?.globalSettings || {}));
             setSymbolConfig(prev => keepIfSame(prev, data.config?.symbolConfigs || {}));
             setActiveConfig(prev => keepIfSame(prev, data.config?.activeParams || {}));
@@ -1693,9 +1651,14 @@ export default function Dashboard() {
           )}
       </div>
 
-      {/* MongoDB Trade History */}
+      {/* Trade History — every single-leg row, one server page at a time
+          (components/singleleg/RoundTripsTable, GET /api/trades/page). Each row says
+          its mode, the direction-gate verdict (why an Enforce-mode trade was let
+          through), net after charges or "before charges", worst/best point and every
+          exceptional state with its reason; a row opens into its minute-by-minute
+          path with India VIX and the no-stop replay. */}
       <div className="bg-surface rounded-xl border border-line p-6">
-          <div className="flex justify-between items-center mb-4">
+          <div className="flex justify-between items-center mb-4 gap-2 flex-wrap">
               <div className="flex items-center gap-2">
               <button
                   type="button"
@@ -1706,162 +1669,16 @@ export default function Dashboard() {
               >
                 {tradesExpanded ? <ChevronDown className="w-4 h-4 text-fg-4" /> : <ChevronRight className="w-4 h-4 text-fg-4" />}
                 <Database className="w-5 h-5 text-primary-ink" /> Trade History
-                {tradesTotal > 0 && <span className="text-xs font-normal text-fg-5">({tradesTotal})</span>}
               </button>
               <DocLink to="dashboard#trade-history" />
               </div>
-              {tradesExpanded && (
-              <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2">
-                      <span className="text-xs text-fg-5 font-medium whitespace-nowrap">Show:</span>
-                      <select 
-                          value={tradesLimit}
-                          onChange={(e) => {
-                              setTradesLimit(parseInt(e.target.value));
-                              setTradesPage(1); // Reset to page 1 on limit change
-                          }}
-                          className="bg-slate-900 border border-line rounded px-2 py-1 text-sm text-fg font-mono focus:border-primary outline-none cursor-pointer hover:border-line-3 transition-colors"
-                      >
-                          <option value={10}>10</option>
-                          <option value={20}>20</option>
-                          <option value={50}>50</option>
-                          <option value={100}>100</option>
-                      </select>
-                  </div>
-                  <input 
-                      type="text" 
-                      placeholder="Search Symbol..." 
-                      value={tradesSearch}
-                      onChange={(e) => {
-                          setTradesSearch(e.target.value);
-                          setTradesPage(1); // Reset to page 1 on new search
-                      }}
-                      className="bg-slate-900 border border-line rounded px-3 py-1 text-sm text-fg font-mono focus:border-primary outline-none"
-                  />
-              </div>
-              )}
+              {tradesExpanded && <span className="text-2xs text-fg-5">Single-leg engine · open a row for its path, India VIX and the no-stop replay · Details = every stored field</span>}
           </div>
-          {tradesExpanded && (<>
-          {mongoTrades.length > 0 ? (
-            <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
-                <table className="w-full text-left border-collapse text-sm">
-                    <thead className="sticky top-0 z-10 bg-surface">
-                        <tr className="text-fg-4 border-b border-line">
-                            <th className="p-3"><span className="sr-only">Details</span></th>
-                            <th className="p-3">Trade ID</th>
-                            <th className="p-3">Entry Time</th>
-                            <th className="p-3">Exit Time</th>
-                            <th className="p-3">Status</th>
-                            <th className="p-3">Symbol</th>
-                            <th className="p-3">Strategy</th>
-                            <th className="p-3">Action</th>
-                            <th className="p-3">Qty</th>
-                            <th className="p-3">Price (En/Ex)</th>
-                            <th className="p-3">P&L</th>
-                            <th className="p-3">Reason</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {mongoTrades.map((trade, i) => (
-                            <tr key={i} className="border-b border-line-0 hover:bg-slate-800/50">
-                                {/* Trade ID — same ObjectId for ENTRY + EXIT (the
-                                    same doc is updated, not duplicated). Click to
-                                    copy the full hex for searching everywhere. */}
-                                <td className="p-3">
-                                    <button type="button"
-                                        onClick={() => setDetailTradeId(String(trade.trade_id || trade._id))}
-                                        className="px-2 py-0.5 rounded border border-line-2 text-2xs text-fg-3 hover:text-fg hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                                        title="All details, incl. the direction-gate verdict and CE/PE confidence at entry">
-                                        Details
-                                    </button>
-                                </td>
-                                <td className="p-3">
-                                    <TradeIdBadge id={trade.trade_id || trade._id} label="" />
-                                </td>
-                                {/* Entry Time (Fallback to timestamp for old logs if action is BUY/ENTRY) */}
-                                <td className="p-3 text-fg-3">
-                                    {trade.entryTime
-                                        ? istDateTime(trade.entryTime)
-                                        : (trade.action === 'ENTRY' || trade.action === 'BUY' ? istDateTime(trade.timestamp) : '-')}
-                                </td>
-                                
-                                {/* Exit Time (Fallback to timestamp for old logs if action is EXIT/SELL) */}
-                                <td className="p-3 text-fg-4">
-                                    {trade.exitTime 
-                                        ? istDateTime(trade.exitTime) 
-                                        : (trade.action === 'EXIT' || trade.action === 'SELL' ? istDateTime(trade.timestamp) : '-')}
-                                </td>
-                                
-                                <td className="p-3">
-                                    {trade.status ? (
-                                        <span className={`px-2 py-0.5 rounded text-3xs font-bold ${trade.status === 'OPEN' ? 'bg-blue-500/20 text-blue-400' : 'bg-slate-700 text-fg-3'}`}>
-                                            {trade.status}
-                                        </span>
-                                    ) : (
-                                        <span className="text-fg-5 text-xs italic">Legacy</span>
-                                    )}
-                                </td>
-                                
-                                <td className="p-3 font-medium text-fg">{trade.tradingsymbol || trade.symbol}</td>
-                                <td className="p-3 text-fg-3 text-xs truncate max-w-[8.75rem]" title={trade.strategyName || trade.strategy || ''}>
-                                    {trade.strategyName || trade.strategy || <span className="text-fg-5">—</span>}
-                                </td>
-                                <td className={`p-3 font-bold ${trade.action === 'BUY' || trade.action === 'ENTRY' ? 'text-success' : 'text-danger'}`}>{trade.action}</td>
-                                <td className="p-3 text-fg-3">{trade.quantity}</td>
-                                
-                                {/* Price Column handles both Unified and Legacy */}
-                                <td className="p-3 text-fg-3">
-                                    {trade.status ? (
-                                        <div className="flex flex-col gap-0.5">
-                                            <span className="text-xs text-fg-4">En: {premium(trade.entryPrice ?? trade.price, trade.symbol)}</span>
-                                            {trade.exitPrice && <span>Ex: <span className="text-fg">{premium(trade.exitPrice, trade.symbol)}</span></span>}
-                                        </div>
-                                    ) : (
-                                        <span>{premium(trade.price, trade.symbol)}</span>
-                                    )}
-                                </td>
-
-                                {/* inr(), not `₹{trade.pnl}`. Raw interpolation put JS float noise
-                                    on screen in the P&L column — "₹2826.0000000000014",
-                                    "₹-2753.9999999999986" — across every visible row. */}
-                                <td className={`p-3 font-bold ${pnlTone(trade.pnl)}`}>{inr(trade.pnl)}</td>
-                                <td className="p-3 text-fg-4 text-xs">{trade.reason}</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-          ) : (
-            <div className="flex items-center justify-center h-32 text-fg-5 bg-slate-900/50 rounded-lg">
-                No trade history found.
-            </div>
+          {tradesExpanded && (
+              <RoundTripsTable history filters={{}} refreshKey={tradesRefresh} onDetails={setDetailTradeId}
+                  depLabel={(id, strategy) => strategy || id} emptyText="No trade history found." />
           )}
-          
           <TradeDetailsModal tradeId={detailTradeId} onClose={() => setDetailTradeId(null)} />
-
-          {/* Pagination Controls */}
-          {tradesTotal > 0 && (
-              <div className="flex justify-between items-center mt-4 border-t border-line-0 pt-4">
-                  <button 
-                      disabled={tradesPage === 1}
-                      onClick={() => setTradesPage(p => Math.max(1, p - 1))}
-                      className={`px-3 py-1 rounded text-sm font-medium ${tradesPage === 1 ? 'bg-slate-800 text-fg-5 cursor-not-allowed' : 'bg-slate-700 hover:bg-slate-600 text-fg'}`}
-                  >
-                      Previous
-                  </button>
-                  <span className="text-sm border border-line bg-slate-800 rounded px-4 py-1 font-mono text-fg-3">
-                      Page {tradesPage} of {Math.max(1, Math.ceil(tradesTotal / tradesLimit))}
-                  </span>
-                  <button
-                      disabled={tradesPage >= Math.ceil(tradesTotal / tradesLimit)}
-                      onClick={() => setTradesPage(p => p + 1)}
-                      className={`px-3 py-1 rounded text-sm font-medium ${tradesPage >= Math.ceil(tradesTotal / tradesLimit) ? 'bg-slate-800 text-fg-5 cursor-not-allowed' : 'bg-slate-700 hover:bg-slate-600 text-fg'}`}
-                  >
-                      Next
-                  </button>
-              </div>
-          )}
-          </>)}
        </div>
 
       {/* ════════════════════════════════════════════════════════════════════ */}

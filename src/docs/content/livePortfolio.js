@@ -80,7 +80,47 @@ Every tab adds up to the header total: trades with no deployment or strategy are
         {
             id: 'excursions',
             title: 'How trades travelled',
-            md: `For each trade, the worst and best point it reached while open ([MAE and MFE](glossary#mae-mfe)), and what a stop or a target placed at a given level would have done on its own. Use it to test questions like "would a tighter stop have helped?" — on real trades, not a backtest.`,
+            md: `For each trade, the worst and best point it reached while open ([MAE and MFE](glossary#mae-mfe)), and what a stop or a target placed at a given level would have done on its own. Use it to test questions like "would a tighter stop have helped?" — on real trades, not a backtest.
+
+**Stop-loss from these trades** suggests a stop level. It picks the level on the older 70% of trades and only offers it if it also helped on the newest 30%. You can type any level and see what it would have changed.
+
+**Set this stop on deployments…** (both engines):
+- **Multi-leg:** sets each chosen deployment's rupee stop (*Max loss ₹*). The whole structure closes when its net mark reaches the level.
+- **Single-leg:** sets each chosen deployment's stop cap (\`max_single_trade_loss\`, stored **per lot**, so the dialog divides the level by the deployment's lots). From the next entry, a stop that would risk more than the level is pulled in to it. A tighter stop is left alone, and an open position keeps its stop. The live engine, the backtests and the optimizer apply the same rule.
+
+Single-leg marks are taken **before charges**, so this book compares each trade's worst point with its **gross** result.`,
+        },
+        {
+            id: 'deployments',
+            title: 'Deployments (single-leg)',
+            where: 'Cards under the summary',
+            md: `One card per deployment (a strategy on one index, in one mode), ranked by net: its curve, net, per trade, win rate, max drawdown, and the last 7 and 30 days.
+
+**Click a card** to show only that deployment everywhere on the page: the tiles, breakdowns, how trades travelled, every round trip and the day-by-day curves. The **Deployment** box at the top does the same. **All deployments** clears it, and the choice is kept in the link (\`?dep=\`). **Open page** opens the deployment's own page.`,
+        },
+        {
+            id: 'round-trips',
+            title: 'Round trips (single-leg)',
+            where: 'Table near the bottom',
+            md: `Every closed trade in the window, 50 to a page, searchable (contract, index, strategy, exit reason or a trade-id fragment) and sortable. Each row shows:
+
+| Column | Meaning |
+|---|---|
+| **Gate** | The direction gate's verdict at entry. **Allowed** means the side was at or above the floor. **Probe** means a weak side was let through on purpose, one in every few. These are how a trade happens while the gate is enforcing. |
+| **Gross / Chg / Net** | P&L before charges, the charges, and P&L after them. A trade from before 23 Sep 2026 has no charges recorded, so its P&L is marked *before charges*. |
+| **Worst / Best** | The worst and best mark while open (recorded since 7 Oct 2026). |
+| **Flags** | Anything unusual, with the reason on hover: *never filled*, *closed by recovery*, *orphan close*, *scale-out slice*, *no exit time*, or *index price, not premium* (an old bug recorded the index level as the option price, so that P&L is void). |
+
+**Open a row** to see:
+- Its **minute-by-minute path**: recorded by the engine, or rebuilt from the option-chain archive.
+- **India VIX** while it was held, drawn on the same chart.
+- **What if the stop had not hit?** This holds the same contract on the recorded chain until its own target or the time exit (\`trade_end_time\`, 15:00 when unset), then compares that with the replay's mark at the real exit. It says whether the stop **saved** or **cost** money and whether the trade came back afterwards. The replay uses prices before charges, once a minute. It does not replay trailing stops, strategy exit signals or AI reviews.`,
+        },
+        {
+            id: 'day-by-day',
+            title: 'Day by day (single-leg)',
+            where: 'Last section (folded)',
+            md: `One curve per day: the book's P&L minute by minute, with every trade of that day under it. Tick **India VIX** to draw VIX on each opened day and to see **VIX while held** for each trade. It loads when you open it, because paths of older trades are rebuilt from the archive. The **All** window covers the last 90 days here. Trades that cannot be drawn (never filled, unknown exit, old format) are counted beside it, not hidden.`,
         },
     ],
 };

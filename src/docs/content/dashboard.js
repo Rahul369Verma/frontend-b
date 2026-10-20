@@ -244,20 +244,22 @@ A long run of grey is normal: most candles produce no signal.`,
             id: 'trade-history',
             title: 'Trade History',
             where: 'Folding table',
-            md: `Every single-option trade, newest first. Search by symbol at the top.
+            md: `Every single-option trade, newest first, 20 to a page. Search by contract, index, strategy, exit reason or a trade-id fragment. **Rows** chooses all rows, only closed, only open, or only the old format. The page refreshes itself when a trade opens or closes.
 
 | Column | Meaning |
 |---|---|
-| **Trade ID** | A short code that identifies the trade everywhere (feed, details, Telegram). |
-| **Entry / Exit Time** | When it opened and closed. |
-| **Status** | OPEN or CLOSED. |
-| **Symbol / Strategy** | The option contract and the strategy that traded it. |
-| **Action / Qty** | Direction and number of units. |
-| **Price (En/Ex)** | Entry and exit premium. |
-| **P&L** | Profit in rupees. |
-| **Reason** | Why it closed (stop loss, target, time limit, AI close, manual, …). |
+| **Trade** | A short code that identifies the trade everywhere (feed, details, Telegram), and the row's kind: OPEN, CLOSED, or OLD · ENTRY / OLD · EXIT. Before Mar-2026, a trade's entry and exit were stored as two separate rows. |
+| **Entry → Exit (IST)** | When it opened and closed, and how long it was held. |
+| **Deployment / strategy** | Which deployment traded it. *Symbol-config mode* means it was traded before deployments existed. |
+| **Contract** | The index, CE or PE, bought or sold, and the option contract. |
+| **Mode** | PAPER or LIVE (old rows also show SIMULATED-LIVE). |
+| **Gate** | The direction gate's verdict at entry. **Allowed** means the side was at or above the floor. **Probe** means a weak side was let through on purpose as a test. This is how trades still happen while the gate is in Enforce mode. Blocked signals never become trades. They are listed under [Blocked trades](#direction-confidence). |
+| **Premium in → out** | Entry and exit premium. |
+| **Gross / Chg / Net** | P&L before charges, the charges, and the P&L after charges. A trade from before 23 Sep 2026 has no charges recorded, so its P&L is marked *before charges*. An old ENTRY row has no P&L of its own. |
+| **Worst / Best** | The worst and best mark while open. |
+| **Exit reason** | Why it closed, plus a flag for anything unusual, with the reason on hover. Flags: *never filled*, *closed by recovery*, *orphan close*, *manual*, *broker sync*, *scale-out slice*, *no exit time*, *index price, not premium*. The last one means an old bug recorded the index level as the premium, so that P&L is void and shown struck through. |
 
-**Details** opens a window with everything recorded about the trade: its stop and target, the AI conversation, and the [direction gate](#direction-confidence) verdict with both sides' confidence at the moment of entry. Rows marked **Legacy** come from an older format with fewer fields.`,
+**Open a row** for its minute-by-minute path with India VIX, and to replay it with no stop (see [Live Portfolio → Round trips](live-portfolio#round-trips)). **All details** opens everything recorded about the trade: stop and target, the AI conversation, the [direction gate](#direction-confidence) verdict with both sides' confidence at entry, and every stored field.`,
         },
         {
             id: 'activity-feed',

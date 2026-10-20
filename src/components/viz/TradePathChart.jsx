@@ -53,6 +53,17 @@
  * A trade with no path gets one quiet sentence naming the reason (the server's
  * `pathReason` when it gave one) — never an empty chart frame, which reads as
  * "the trade did nothing".
+ *
+ * OVERLAYS (optional) — other paths of the SAME trade, e.g. a replay with no stops:
+ *   overlays = [{ key, name, points: [{ t, net }], slot?: 1|2, dashed?, faint? }]
+ *   markers  = [{ t, text }]   vertical lines (e.g. where a stop fired)
+ * They are drawn on the ₹ axis beside the recorded marks and listed in the tooltip;
+ * the stat strip stays about what the trade actually did. *
+ * INDIA VIX (optional) — vix = [{ ms, v }] 1-minute bars (the close, stamped when the bar
+ * ENDED). Each row shows VIX as it was known at that instant (utils/vixOverlay vixAt: the
+ * last bar that had closed, never back-filled), on its own right-hand axis — or a hidden
+ * one when spot already has it. Option premiums carry vega, so a mark that falls while VIX
+ * falls is part direction, part volatility; this puts the two side by side.
  */
 import React, { useMemo, useState } from 'react';
 import {
@@ -66,6 +77,8 @@ import {
 } from './tokens';
 import { Chip } from './primitives';
 import { toMs as parseInstant } from '../../utils/dayCurves';
+import { mergeOverlayRows } from './tradePathRows.js';
+import { vixAt } from '../../utils/vixOverlay.js';
 
 // ── Parsing — ABSENT IS NOT ZERO ─────────────────────────────────────────────
 // `Number(null) === 0` is finite, so a naive coercion turns a missing MAE into
@@ -131,24 +144,33 @@ export function PathSourceChip({ source }) {
 }
 
 /** Tooltip body: IST time plus every number the mark carries. */
-function PathTooltip({ active, payload, ct, fmtAt, markName, bookedName = 'booked net', symbol = null }) {
+function PathTooltip({ active, payload, ct, fmtAt, markName, bookedName = 'booked net', symbol = null, overlays = [] }) {
     if (!active || !Array.isArray(payload) || !payload.length) return null;
     const r = payload[0]?.payload;
     if (!r) return null;
+    // an overlay-only row carries the recorded mark from just before it (`netHeld`)
+    const net = r.net ?? r.netHeld;
     return (
         <div className="px-2 py-1 space-y-0.5" style={ct.tooltipStyle({ fontSize: ct.type['3xs'] })}>
             <div className="font-semibold">{fmtAt(r.ms)} IST</div>
             {r.booked != null
                 ? <div>{bookedName} {rup(r.booked)}</div>
-                : <div>{markName} {rup(r.net)}</div>}
+                : net != null && <div>{markName} {rup(net)}</div>}
+            {overlays.map((o) => (r[`ovHeld_${o.key}`] != null
+                ? <div key={o.key}>{o.name} {rup(r[`ovHeld_${o.key}`])}</div>
+                : null))}
             {r.gross != null && <div>gross {rup(r.gross)}</div>}
             {r.ltp != null && <div>option {premium(r.ltp, symbol)}</div>}
             {r.spot != null && <div>spot {fmtNum(r.spot, 0)}</div>}
+            {r.vix != null && <div>India VIX {r.vix.toFixed(2)}</div>}
         </div>
     );
 }
 
-export default function TradePathChart({ trade, istTime, istDateTime, istSpan }) {
+const NO_OVERLAYS = [];
+const NO_MARKERS = [];
+
+export default function TradePathChart({ trade, istTime, istDateTime, istSpan, overlays = NO_OVERLAYS, markers = NO_MARKERS, vix = null }) {
     const ct = useChartTheme();
     const [showGross, setShowGross] = useState(true);
     const fmtTime = istTime || defaultTime;
@@ -176,22 +198,35 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan })
             pts.push({ ms, net, gross: finite(p?.gross), spot: finite(p?.spot), ltp: finite(p?.ltp) });
         }
         pts.sort((a, b) => a.ms - b.ms);
+        // overlay points: their own rows, merged by instant
+        const ovPts = [];
+        for (const o of overlays) {
+            for (const p of (Array.isArray(o?.points) ? o.points : [])) {
+                const ms = toMs(p?.t);
+                const v = finite(p?.net);
+                if (ms != null && v != null) ovPts.push({ ms, key: o.key, v });
+            }
+        }
         // A bare "13:42" is ambiguous the moment a position is held overnight,
         // so a path that spans sessions gets the date on its ticks.
-        const first = pts.length ? pts[0].ms : null;
+        const allMs = [...pts.map((p) => p.ms), ...ovPts.map((p) => p.ms)];
+        const first = allMs.length ? Math.min(...allMs) : null;
+        const lastAll = allMs.length ? Math.max(...allMs) : null;
         const last = pts.length ? pts[pts.length - 1].ms : null;
-        const spansNight = first != null && ((last - first) > 12 * 3600e3
+        const spansNight = first != null && ((lastAll - first) > 12 * 3600e3
             || (exitMs != null && istDayIndex(exitMs) !== istDayIndex(first)));
         const lab = spansNight ? fmtDateTime : fmtTime;
         const out = pts.map((r) => ({ ...r, booked: null, label: lab(r.ms) }));
         // The booked net as its own point at the exit — the line's end and the
         // headline number are different things and both are drawn.
-        if (out.length && booked != null) {
+        if (pts.length && booked != null) {
             const at = exitMs != null && exitMs >= last ? exitMs : last;
             out.push({ ms: at, net: null, gross: null, spot: null, ltp: null, booked, label: lab(at), isExit: true });
         }
-        return { rows: out, marks: pts, dropped: skipped, overnight: spansNight };
-    }, [trade, exitMs, booked, fmtTime, fmtDateTime]);
+        const merged = mergeOverlayRows({ rows: out, points: ovPts, keys: overlays.map((o) => o.key), lastMarkMs: last, label: lab });
+        if (Array.isArray(vix) && vix.length) for (const r of merged) r.vix = vixAt(vix, r.ms);
+        return { rows: merged, marks: pts, dropped: skipped, overnight: spansNight };
+    }, [trade, exitMs, booked, fmtTime, fmtDateTime, overlays, vix]);
 
     const mae = finite(trade?.maeRupees);
     const mfe = finite(trade?.mfeRupees);
@@ -203,6 +238,7 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan })
 
     const hasGross = marks.some((r) => r.gross != null);
     const hasSpot = marks.some((r) => r.spot != null);
+    const hasVix = rows.some((r) => r.vix != null);
     // With a gross series beside it, `net` already deducts estimated costs
     // (multileg). Without one, the mark is the pre-cost MTM (single-leg).
     const marksAreNet = hasGross;
@@ -243,6 +279,12 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan })
     }
 
     const fmtAt = overnight ? fmtDateTime : fmtTime;
+    // a marker sits on the first drawn row at or after its instant (the x axis is categorical)
+    const markerRows = markers.map((m) => {
+        const ms = toMs(m?.t);
+        const row = ms == null ? null : rows.find((r) => r.ms >= ms);
+        return row ? { label: row.label, text: m.text } : null;
+    }).filter(Boolean);
 
     return (
         <div className="border border-line-0 rounded p-2 bg-slate-800/20">
@@ -303,7 +345,7 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan })
             </div>
 
             <ZoomableChart data={rows} height={200} controls={rows.length > 8}>
-                <ComposedChart margin={{ top: 8, right: hasSpot ? 4 : 10, bottom: 2, left: 4 }}>
+                <ComposedChart margin={{ top: 8, right: hasSpot || hasVix ? 4 : 10, bottom: 2, left: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                     <XAxis dataKey="label" tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} minTickGap={34} />
                     <YAxis yAxisId="pnl" width={52} tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }}
@@ -316,8 +358,13 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan })
                             tick={{ fontSize: ct.type['5xs'], fill: ct.text.muted }}
                             tickFormatter={(v) => fmtNum(v, 0)} />
                     )}
+                    {hasVix && (
+                        <YAxis yAxisId="vix" orientation="right" hide={hasSpot} width={hasSpot ? 0 : 40} domain={['auto', 'auto']}
+                            tick={{ fontSize: ct.type['5xs'], fill: ct.text.muted }}
+                            tickFormatter={(v) => String(+Number(v).toFixed(2))} />
+                    )}
                     <Tooltip cursor={{ stroke: ct.mark.live, strokeDasharray: '3 3' }}
-                        content={<PathTooltip ct={ct} fmtAt={fmtAt} markName={marksAreNet ? 'net' : 'mark (pre-cost)'} bookedName={bookedName} symbol={trade && trade.symbol} />} />
+                        content={<PathTooltip ct={ct} fmtAt={fmtAt} markName={marksAreNet ? 'net' : 'mark (pre-cost)'} bookedName={bookedName} symbol={trade && trade.symbol} overlays={overlays} />} />
                     <Legend wrapperStyle={{ fontSize: ct.type['5xs'] }} />
                     <ReferenceLine yAxisId="pnl" y={0} stroke={ct.axis} ifOverflow="extendDomain" />
                     {/* extendDomain, not the default: MAE/MFE can sit outside the
@@ -336,12 +383,26 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan })
                         <Line yAxisId="spot" type="monotone" name="spot" dataKey="spot" stroke={ct.mark.live}
                             dot={false} strokeWidth={1} strokeDasharray="5 3" connectNulls isAnimationActive={false} />
                     )}
+                    {hasVix && (
+                        <Line yAxisId="vix" type="stepAfter" name="India VIX" dataKey="vix" stroke={ct.categorical[3] || ct.text.muted}
+                            dot={false} strokeWidth={1} strokeDasharray="2 2" connectNulls isAnimationActive={false} />
+                    )}
                     {hasGross && showGross && (
                         <Line yAxisId="pnl" type="monotone" name="gross" dataKey="gross" stroke={ct.mark.equity} strokeOpacity={0.45}
                             dot={false} strokeWidth={1} connectNulls isAnimationActive={false} />
                     )}
                     <Line yAxisId="pnl" type="monotone" name={markName} dataKey="net" stroke={ct.categorical[0]}
-                        dot={false} strokeWidth={2} isAnimationActive={false} />
+                        dot={false} strokeWidth={2} connectNulls={overlays.length > 0} isAnimationActive={false} />
+                    {overlays.map((o) => (
+                        <Line key={o.key} yAxisId="pnl" type="monotone" name={o.name} dataKey={`ov_${o.key}`}
+                            stroke={ct.categorical[o.slot === 2 ? 2 : 1]} strokeOpacity={o.faint ? 0.55 : 1}
+                            strokeDasharray={o.dashed ? '6 3' : undefined} dot={false} strokeWidth={o.faint ? 1 : 2}
+                            connectNulls isAnimationActive={false} />
+                    ))}
+                    {markerRows.map((m, i) => (
+                        <ReferenceLine key={`mk${i}`} yAxisId="pnl" x={m.label} stroke={ct.status.warning} strokeDasharray="2 3"
+                            label={{ value: m.text, fontSize: ct.type['5xs'], fill: ct.status.warning, position: 'insideTopRight' }} />
+                    ))}
                     {booked != null && (
                         <Line yAxisId="pnl" name="booked" dataKey="booked" stroke={ct.text.primary} legendType="circle"
                             dot={{ r: 4, fill: ct.text.primary, stroke: ct.surface, strokeWidth: 2 }}

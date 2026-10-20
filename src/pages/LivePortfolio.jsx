@@ -57,6 +57,10 @@ import ZoomableChart from '../components/charts/ZoomableChart';
 import PnlCalendar from '../components/charts/PnlCalendar.jsx';
 import ResultsAnalytics from '../components/multileg/ResultsAnalytics.jsx';
 import ExcursionsPanel from '../components/multileg/ExcursionsPanel.jsx';
+import RoundTripsTable from '../components/singleleg/RoundTripsTable.jsx';
+import SingleLegDayByDay from '../components/singleleg/SingleLegDayByDay.jsx';
+import ApplySingleStopDialog from '../components/singleleg/ApplySingleStopDialog.jsx';
+import TradeDetailsModal from '../components/TradeDetailsModal';
 import { API_URL } from '../config/api.js';
 import { ROUTES, strategyDetailHref } from '../config/routes.js';
 
@@ -223,7 +227,11 @@ function StrategyCard({ g, color, selected, expanded, onToggleSelect, onToggleEx
         >
             <header className="flex items-start justify-between gap-2 min-w-0">
                 <div className="min-w-0">
-                    <h3 className="text-sm font-semibold text-fg truncate" title={g.key}>{g.key}</h3>
+                    {/* the name opens the card's Details panel — a card is clickable, not only its buttons */}
+                    <h3 className="text-sm font-semibold text-fg truncate">
+                        <button type="button" onClick={onToggleExpand} aria-expanded={expanded} className="truncate max-w-full text-left hover:text-primary-ink hover:underline"
+                            title={`${g.key} — ${expanded ? 'hide' : 'show'} its daily P&L, exit reasons and deployments`}>{g.key}</button>
+                    </h3>
                     <div className="flex flex-wrap items-center gap-1 mt-1">
                         {(g.symbols || []).map((sym) => <Chip key={sym} title="Underlying">{sym}</Chip>)}
                         {modes.map((m) => (
@@ -299,6 +307,102 @@ function StrategyCard({ g, color, selected, expanded, onToggleSelect, onToggleEx
                 )}
             </div>
         </article>
+    );
+}
+
+// ── deployment cards ─────────────────────────────────────────────────────────
+
+/**
+ * One card per DEPLOYMENT (a strategy on one index, in one mode) — the unit that
+ * actually trades. Clicking a card filters the whole page to it: tiles, breakdowns,
+ * how trades travelled, every round trip and the day-by-day curves. The selected card
+ * is ringed; "All deployments" clears it. A deployment with no trades in the window
+ * still appears when it is selected, so a filter never silently empties the list.
+ */
+function DeploymentCards({ deployments, selected, onSelect, linkForDeployment }) {
+    const ct = useChartTheme();
+    if (!deployments.length) return <Placeholder>No deployment closed a trade in this window.</Placeholder>;
+    return (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3" data-testid="deployment-cards">
+            {deployments.map((d) => {
+                const s = d.summary || {};
+                const m = d.meta || {};
+                const id = String(d.key);
+                const on = selected === id;
+                const net = n(s.netPnl) ?? 0;
+                const trades = n(s.trades) ?? 0;
+                const label = m.name || (id === 'no deployment (symbol-config mode)' ? 'No deployment (symbol-config mode)' : `${m.strategyName || 'strategy'} · ${String(m.symbol || '').replace(/^(NSE|BSE):/, '').replace(/-INDEX$/, '')}`);
+                const href = linkForDeployment(d);
+                const filterId = id === 'no deployment (symbol-config mode)' ? 'none' : id;
+                return (
+                    <article key={id} className={`rounded-lg border p-3 flex flex-col gap-2 min-w-0 transition-shadow ${on ? 'border-primary ring-1 ring-primary/60 bg-primary/5' : net < 0 ? 'border-red-500/40' : 'border-line/60'} bg-surface`}>
+                        <button type="button" onClick={() => onSelect(on ? null : filterId)} aria-pressed={on}
+                            className="text-left space-y-2 min-w-0 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                            title={on ? 'Showing only this deployment — click to show all again' : 'Show only this deployment on this page: its trades, breakdowns, day by day and stop analysis'}>
+                            <div className="flex items-start justify-between gap-2 min-w-0">
+                                <div className="min-w-0">
+                                    <h3 className="text-sm font-semibold text-fg truncate" title={label}>{label}</h3>
+                                    <div className="flex flex-wrap items-center gap-1 mt-1">
+                                        {m.strategyName && <Chip title="Strategy">{m.strategyName}</Chip>}
+                                        {(d.symbols || []).map((sym) => <Chip key={sym} title="Underlying">{sym}</Chip>)}
+                                        {m.mode && <Chip tone={String(m.mode).toUpperCase() === 'LIVE' ? 'live' : 'paper'}>{String(m.mode).toUpperCase()}</Chip>}
+                                        {m.timeframe && <Chip title="Candle timeframe">{m.timeframe}m</Chip>}
+                                    </div>
+                                </div>
+                                <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                                    {m.active ? <StatusBadge level="good">Running</StatusBadge> : d.meta ? <span className="text-3xs text-fg-5">stopped</span> : null}
+                                    {trades < MIN_TRADES && <Chip title={`Only ${trades} closed trade${trades === 1 ? '' : 's'} — too few to tell a working strategy from luck. A verdict needs ${MIN_TRADES}.`}>too few to judge ({trades}/{MIN_TRADES})</Chip>}
+                                </div>
+                            </div>
+                            <Sparkline daily={d.daily} color={net < 0 ? ct.diverging.negative : ct.diverging.positive} height={36} />
+                            <div className="grid grid-cols-3 gap-x-3 gap-y-1 text-2xs">
+                                <div><div className="text-3xs uppercase tracking-wide text-fg-5">Net · {int(trades)}</div><Money v={s.netPnl} bold className="text-sm" /></div>
+                                <div><div className="text-3xs uppercase tracking-wide text-fg-5">Per trade</div><Money v={s.perTrade} /></div>
+                                <div><div className="text-3xs uppercase tracking-wide text-fg-5">Win</div><span className="text-fg-3 tabular-nums">{pct(s.winRate)}</span></div>
+                                <div><div className="text-3xs uppercase tracking-wide text-fg-5">Max DD</div><Money v={s.maxDrawdown} /></div>
+                                <div><div className="text-3xs uppercase tracking-wide text-fg-5">7d</div><Money v={s.net7d} /></div>
+                                <div><div className="text-3xs uppercase tracking-wide text-fg-5">30d</div><Money v={s.net30d} /></div>
+                            </div>
+                        </button>
+                        <div className="flex items-center justify-between gap-2 border-t border-line-0 pt-2">
+                            <span className="text-3xs text-fg-5">last {istStamp(s.lastTradeAt)}</span>
+                            {href ? (
+                                <Link to={href} className="inline-flex items-center gap-1 text-2xs text-primary-ink hover:underline" title="Open this deployment's own page">
+                                    Open page <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                                </Link>
+                            ) : <span className="text-3xs text-fg-5">no detail page</span>}
+                        </div>
+                    </article>
+                );
+            })}
+        </div>
+    );
+}
+
+/** The single-leg view's filter bar: every deployment of the window, or one. */
+function DeploymentFilter({ dep, setDep, cards, depName }) {
+    const opts = cards.map((d) => {
+        const id = String(d.key) === 'no deployment (symbol-config mode)' ? 'none' : String(d.key);
+        return { id, label: depName(id), n: n(d.summary?.trades) };
+    });
+    if (dep && !opts.some((o) => o.id === dep)) opts.unshift({ id: dep, label: depName(dep), n: null });
+    return (
+        <div className="flex flex-wrap items-center gap-2" data-testid="deployment-filter">
+            <label className="flex items-center gap-1.5 text-2xs text-fg-4">Deployment
+                <select value={dep || 'all'} onChange={(e) => setDep(e.target.value === 'all' ? null : e.target.value)}
+                    className="h-8 max-w-[22rem] bg-slate-800 border border-line rounded-md px-2 text-xs text-fg-2" aria-label="Show one deployment">
+                    <option value="all">All deployments</option>
+                    {opts.map((o) => <option key={o.id} value={o.id}>{o.label}{o.n != null ? ` (${o.n})` : ''}</option>)}
+                </select>
+            </label>
+            {dep && (
+                <span className="inline-flex items-center gap-1.5 text-2xs text-primary-ink">
+                    Showing only <b className="font-semibold">{depName(dep)}</b>
+                    <button type="button" onClick={() => setDep(null)} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-fg"
+                        aria-label="Show all deployments"><X className="w-3 h-3" aria-hidden="true" />All deployments</button>
+                </span>
+            )}
+        </div>
     );
 }
 
@@ -505,6 +609,14 @@ export default function LivePortfolio() {
 
     const [days, setDays] = useState(30);
     const [nonce, setNonce] = useState(0);
+    // One deployment (a clicked card) filters the whole single-leg view. In the URL so a
+    // link lands on the same deployment; 'none' = trades from symbol-config mode.
+    const [dep, setDepState] = useState(() => searchParams.get('dep') || null);
+    const setDep = useCallback((id) => {
+        setDepState(id || null);
+        setSearchParams((prev) => { const p = new URLSearchParams(prev); if (id) p.set('dep', id); else p.delete('dep'); return p; }, { replace: true });
+    }, [setSearchParams]);
+    const [detailId, setDetailId] = useState(null);
     const [tab, setTab] = useState(0);
     const [sort, setSort] = useState({ k: 'net', dir: 'desc' });
     const [expanded, setExpanded] = useState(null);
@@ -516,16 +628,35 @@ export default function LivePortfolio() {
     // setState inside the effect — which would paint last window's P&L under this
     // window's heading for a frame.
     const [res, setRes] = useState({ key: null, data: null, err: null });
-    const reqKey = useMemo(() => JSON.stringify([days, nonce]), [days, nonce]);
+    const reqKey = useMemo(() => JSON.stringify([days, nonce, dep]), [days, nonce, dep]);
+    // The deployment cards always list EVERY deployment of the window (not only the
+    // selected one), so they are kept from the unfiltered answer, per window.
+    const cardsKey = JSON.stringify([days, nonce]);
+    const [cardsRes, setCardsRes] = useState({ key: null, list: [] });
     useEffect(() => {
         let dead = false;
         const params = {};
         if (days !== 'all') params.days = days;
+        if (dep) params.deploymentId = dep;
         axios.get(`${API_URL}/analytics/live-portfolio`, { params })
-            .then((r) => { if (!dead) setRes({ key: reqKey, data: r.data || null, err: null }); })
+            .then((r) => {
+                if (dead) return;
+                setRes({ key: reqKey, data: r.data || null, err: null });
+                if (!dep && Array.isArray(r.data?.groups?.deployment)) setCardsRes({ key: cardsKey, list: r.data.groups.deployment });
+            })
             .catch((e) => { if (!dead) setRes({ key: reqKey, data: null, err: e?.response?.data?.error || e.message }); });
         return () => { dead = true; };
-    }, [reqKey, days]);
+    }, [reqKey, days, dep, cardsKey]);
+    useEffect(() => {
+        if (!dep || cardsRes.key === cardsKey) return undefined;
+        let dead = false;
+        const params = {};
+        if (days !== 'all') params.days = days;
+        axios.get(`${API_URL}/analytics/live-portfolio`, { params })
+            .then((r) => { if (!dead && Array.isArray(r.data?.groups?.deployment)) setCardsRes({ key: cardsKey, list: r.data.groups.deployment }); })
+            .catch(() => { /* the filtered answer's own list is shown instead */ });
+        return () => { dead = true; };
+    }, [dep, cardsKey, cardsRes.key, days]);
 
     // Template names for the multi-leg view's Structure breakdown. Fetched only
     // once that view is opened; a failure leaves slugs, never a broken page.
@@ -549,7 +680,14 @@ export default function LivePortfolio() {
     const hasGroups = !!(data && data.groups && Array.isArray(data.groups.strategy));
     const strategies = useMemo(() => (hasGroups ? data.groups.strategy : []), [data, hasGroups]);
     const deployments = useMemo(() => (hasGroups && Array.isArray(data.groups.deployment) ? data.groups.deployment : []), [data, hasGroups]);
-    const depById = useMemo(() => new Map(deployments.map((d) => [String(d.key), d])), [deployments]);
+    const deploymentCards = useMemo(() => (cardsRes.key === cardsKey && cardsRes.list.length ? cardsRes.list : deployments), [cardsRes, cardsKey, deployments]);
+    // names for every deployment of the window, even while one is selected
+    const depById = useMemo(() => new Map([...deploymentCards, ...deployments].map((d) => [String(d.key), d])), [deploymentCards, deployments]);
+    const depName = useCallback((id) => {
+        if (id === 'none') return 'No deployment (symbol-config mode)';
+        const m = depById.get(String(id))?.meta;
+        return m ? (m.name || `${m.strategyName || 'strategy'} · ${String(m.symbol || '').replace(/^(NSE|BSE):/, '').replace(/-INDEX$/, '')}`) : String(id);
+    }, [depById]);
 
     // Card ↔ line colour: the strategy's index in the ranked list, so the same
     // strategy keeps its hue as the selection changes.
@@ -788,6 +926,9 @@ export default function LivePortfolio() {
             )}
 
             {/* ══════════════════ SINGLE-LEG BOOK ══════════════════ */}
+            {/* the filter sits above every state (loading, empty, error) so a
+                selected deployment with no trades can always be cleared */}
+            {view === 'single' && <DeploymentFilter dep={dep} setDep={setDep} cards={deploymentCards} depName={depName} />}
             {view === 'single' && (err ? (
                 <Card collapsible={false} title="Portfolio unavailable">
                     <p className="text-xs text-danger">{String(err)}</p>
@@ -827,6 +968,13 @@ export default function LivePortfolio() {
                             hint={`Best day ${inr(summary.bestDay)} · worst day ${inr(summary.worstDay)}`} />
                     </StatRow>
                     <CostLine costs={summary.costs} />
+
+                    {/* ── 1b · Deployments — click one to filter the page ─── */}
+                    <Card docs="live-portfolio#strategies" title="Deployments"
+                        subtitle="One card per deployment, ranked by net. Click a card to see only its results on this page — trades, breakdowns, day by day and the stop analysis."
+                        right={<span>{int(deploymentCards.length)} deployment{deploymentCards.length === 1 ? '' : 's'}{dep ? ' · 1 selected' : ''}</span>}>
+                        <DeploymentCards deployments={deploymentCards} selected={dep} onSelect={setDep} linkForDeployment={linkForDeployment} />
+                    </Card>
 
                     {/* ── 2 · Strategies ─────────────────────────────────── */}
                     <Card docs="live-portfolio#strategies"
@@ -974,8 +1122,24 @@ export default function LivePortfolio() {
                     <Card docs="live-portfolio#excursions" title="How trades travelled"
                         subtitle="Worst and best point while open, and what a stop or target at that level alone would have done.">
                         <ExcursionsPanel excursions={data?.excursions} basis="gross"
-                            missingNote="the live engine started recording each trade's path on 7 Oct 2026" />
+                            missingNote="the live engine started recording each trade's path on 7 Oct 2026"
+                            canApplyStop ApplyDialog={ApplySingleStopDialog}
+                            applyNote=" Setting it caps each chosen deployment's stop-loss from its next entry (the per-lot max_single_trade_loss the live engine and every backtest apply): a wider stop is pulled in to this level, a tighter one is left alone." />
                     </Card>
+
+                    {/* ── 9 · Every round trip ───────────────────────────── */}
+                    <Card docs="live-portfolio#round-trips" title={`Round trips${dep ? ` — ${depName(dep)}` : ''}`}
+                        subtitle="Every closed trade in this window. Open a row for its minute-by-minute path with India VIX, and to replay it with no stop (held to its target or the time exit).">
+                        <RoundTripsTable filters={{ deploymentId: dep || 'all', days }} depLabel={(id, s) => `${depName(id)}${s && !depName(id).includes(s) ? ` · ${s}` : ''}`} onDetails={setDetailId}
+                            emptyText={`No closed trade${days !== 'all' ? ` in the last ${days} days` : ''}.`} />
+                    </Card>
+
+                    {/* ── 10 · Day by day (longest section — last) ───────── */}
+                    <Card docs="live-portfolio#day-by-day" title="Day by day" defaultOpen={false}
+                        subtitle="Each day's P&L minute by minute, every trade of the day under it, and India VIX (tick the box). Loaded when opened.">
+                        <SingleLegDayByDay days={days} deploymentId={dep} />
+                    </Card>
+                    <TradeDetailsModal tradeId={detailId} onClose={() => setDetailId(null)} />
                 </>
             ))}
         </div>

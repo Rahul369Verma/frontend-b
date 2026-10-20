@@ -42,6 +42,7 @@ import { ROUTES } from '../../config/routes.js';
 import useLocalStorage from '../../hooks/useLocalStorage';
 import StrategyScorecard, { OpenNow } from './StrategyScorecard';
 import ExcursionsPanel from './ExcursionsPanel';
+import { StopGridPanel } from './StopReplay.jsx';
 import useScorecard from './useScorecard';
 import DocLink from '../DocLink.jsx';
 import { Panel } from '../viz/primitives';
@@ -501,6 +502,13 @@ export default function ResultsAnalytics({
                     <Panel title="How trades travelled" subtitle="Worst and best point while open, and what a stop or target would have done" docs="glossary#mae-mfe" storageKey="fold:results|excursions">
                         <ExcursionsPanel excursions={data?.excursions} canApplyStop />
                     </Panel>
+
+                    {/* 6 ── the same trades replayed with other stops (recorded option chain) */}
+                    {deploymentId && deploymentId !== 'all' && (
+                        <Panel title="Which stops, on these trades" subtitle="Each trade replayed on the recorded option chain with other stop settings, and with none" storageKey="fold:results|stopgrid">
+                            <StopGridPanel deploymentId={deploymentId} />
+                        </Panel>
+                    )}
                 </>
             )}
         </div>

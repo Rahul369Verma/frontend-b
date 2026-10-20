@@ -40,9 +40,10 @@ export function DotTip({ active, payload, ct, basis }) {
 /**
  * A stop-loss priced on these trades: a suggestion that held up on the newest
  * trades, a level you can change, and — on the multi-leg book — a button that sets
- * it as the deployments' rupee stop (Max loss ₹), so it changes future trades.
+ * it as the deployments' rupee stop (Max loss ₹), so it changes future trades. The
+ * single-leg book passes its own `ApplyDialog` (a per-lot stop cap) and `applyNote`.
  */
-function StopLossPicker({ rows, level, setLevel, canApply, basis }) {
+function StopLossPicker({ rows, level, setLevel, canApply, basis, ApplyDialog = ApplyStopDialog, applyNote = null }) {
     const sug = useMemo(() => suggestStop(rows), [rows]);
     const { older, newer } = useMemo(() => splitByTime(rows), [rows]);
     const eff = useMemo(() => ({ all: stopEffect(rows, level), older: stopEffect(older, level), newer: stopEffect(newer, level) }), [rows, older, newer, level]);
@@ -87,10 +88,10 @@ function StopLossPicker({ rows, level, setLevel, canApply, basis }) {
             <p className="text-3xs text-fg-5">
                 Upper-bound estimates: every trade that touched the level is booked at exactly −that, while a real stop fills a little worse
                 and marks are about a minute apart{basis === 'gross' ? ' (this book compares gross results)' : ''}.
-                {canApply ? ' Setting it makes the live engine (and every backtest) close the whole structure when its net mark reaches the level.' : ''}
+                {canApply ? (applyNote || ' Setting it makes the live engine (and every backtest) close the whole structure when its net mark reaches the level.') : ''}
             </p>
             {canApply && applyOpen && (
-                <ApplyStopDialog open={applyOpen} level={T} scopeIds={scopeIds} onClose={() => setApplyOpen(false)} />
+                <ApplyDialog open={applyOpen} level={T} scopeIds={scopeIds} onClose={() => setApplyOpen(false)} />
             )}
         </div>
     );
@@ -103,7 +104,7 @@ function StopLossPicker({ rows, level, setLevel, canApply, basis }) {
  * book explain why trades lack marks (single-leg recorded none before the
  * path sampler shipped).
  */
-export default function ExcursionsPanel({ excursions: x, basis = 'net', missingNote = '', canApplyStop = false }) {
+export default function ExcursionsPanel({ excursions: x, basis = 'net', missingNote = '', canApplyStop = false, ApplyDialog, applyNote }) {
     const ct = useChartTheme();
     const rows = useMemo(() => rowsOf(x?.points), [x]);
     const [level, setLevel] = useState(null);
@@ -149,7 +150,7 @@ export default function ExcursionsPanel({ excursions: x, basis = 'net', missingN
                 </ScatterChart>
             </ResponsiveContainer>
 
-            <StopLossPicker rows={rows} level={shownLevel} setLevel={setLevel} canApply={canApplyStop} basis={basis} />
+            <StopLossPicker rows={rows} level={shownLevel} setLevel={setLevel} canApply={canApplyStop} basis={basis} ApplyDialog={ApplyDialog} applyNote={applyNote} />
 
             <div className="overflow-x-auto">
                 <table className="w-full text-2xs text-fg-3">

@@ -8,7 +8,7 @@ import { Layers, Play, Pause, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskCon
 import StructureAttributionPanel from '../components/viz/StructureAttributionPanel';
 import StrategyBuilder from '../components/multileg/StrategyBuilder';
 import ResultsAnalytics from '../components/multileg/ResultsAnalytics';
-import TradePathChart from '../components/viz/TradePathChart';
+import { TradeStopReplay } from '../components/multileg/StopReplay.jsx';
 import AutoRunProgress from '../components/multileg/AutoRunProgress';
 import { estimateStageSizes, sizesForRequest, runSummary, useRunTracker } from '../components/multileg/runProgress';
 import ZoomableChart from '../components/charts/ZoomableChart';
@@ -3059,7 +3059,7 @@ export default function MultiLeg() {
                                                     <div className="text-3xs text-fg-4 mb-1">Held {full.exitAt ? fmtSpan(full.entryAt, full.exitAt) : fmtDur(full.entryAt)} · spot {fmt(full.entrySpot)} → {fmt(full.exitSpot)} · net credit at entry ₹{fmt(full.origCredit, 1)}/u{full.lots ? ` · ${full.lots} lot(s)` : ''}</div>
                                                     {/* What it DID while open — MAE/MFE and the gave-back number.
                                                         Renders its own explanation for pre-feature trades. */}
-                                                    <div className="mb-2"><TradePathChart trade={full} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} /></div>
+                                                    <div className="mb-2"><TradeStopReplay trade={full} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} /></div>
                                                     {allLegs.length > 0 ? (
                                                         <table className="w-full text-3xs font-mono text-fg-3">
                                                             <thead><tr className="text-fg-5 text-left"><th>Leg</th><th>Strike</th><th className="text-right">Entry ₹</th><th className="text-right">Exit ₹</th><th>Close</th></tr></thead>

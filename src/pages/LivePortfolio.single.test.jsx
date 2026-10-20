@@ -5,7 +5,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const row = (key, over = {}) => ({ key, trades: 3, net: 900, perTrade: 300, winRate: 67, best: 500, worst: -100, lastTradeAt: '2026-10-13T05:55:00Z', gross: 1200, charges: 300, chargesN: 3, costPct: 25, ...over });
@@ -66,5 +66,37 @@ describe('LivePortfolio single-leg view', () => {
         renderPage();
         expect(await screen.findByText(/2 trades in this filter have no recorded worst\/best mark .* 7 Oct 2026/)).toBeInTheDocument();
         expect(screen.getByText(/before charges, about one a minute/)).toBeInTheDocument();
+    });
+});
+
+describe('LivePortfolio single-leg — deployments, round trips, day by day', () => {
+    beforeEach(() => localStorage.clear());
+
+    it('a deployment card filters the whole page to it, and can be cleared', async () => {
+        const axios = (await import('axios')).default;
+        renderPage();
+        const cards = await screen.findByTestId('deployment-cards');
+        const card = within(cards).getByRole('button', { name: /uni_opti_bn/ });
+        expect(card).toHaveAttribute('aria-pressed', 'false');
+        fireEvent.click(card);
+        expect(await screen.findByText('Showing only')).toBeInTheDocument();
+        const calls = axios.get.mock.calls.filter(([u]) => String(u).endsWith('/analytics/live-portfolio'));
+        expect(calls.at(-1)[1].params).toMatchObject({ deploymentId: 'd1', days: 30 });
+        // the round trips follow the filter
+        await waitFor(() => {
+            const pages = axios.get.mock.calls.filter(([u]) => String(u).endsWith('/trades/page'));
+            expect(pages.at(-1)[1].params).toMatchObject({ deploymentId: 'd1', status: 'closed' });
+        });
+        fireEvent.click(screen.getByRole('button', { name: 'Show all deployments' }));
+        const after = axios.get.mock.calls.filter(([u]) => String(u).endsWith('/analytics/live-portfolio'));
+        expect(after.at(-1)[1].params.deploymentId).toBeUndefined();
+    });
+
+    it('offers to set the stop on single-leg deployments, and folds the day-by-day section until asked', async () => {
+        renderPage();
+        expect(await screen.findByRole('button', { name: /Set this stop on deployments/ })).toBeInTheDocument();
+        expect(screen.getByText(/caps each chosen deployment's stop-loss from its next entry/)).toBeInTheDocument();
+        const day = screen.getByRole('button', { name: /^Day by day$/ });
+        expect(day).toHaveAttribute('aria-expanded', 'false');
     });
 });

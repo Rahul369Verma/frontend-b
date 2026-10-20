@@ -13,9 +13,13 @@ import { API_URL } from '../config/api.js';
 import { Modal, Chip, ModeChip, Meter, Spinner, Placeholder, DataTable } from './viz/primitives';
 import { inr, premium, istDateTime, istTime, pnlTone } from './viz/tokens.js';
 import { pctOf, gateTone, marginText, verdictVsOutcome, flatten, holdText } from './tradeDetailsUtil.js';
+import { flagTone } from './singleleg/singleLegFormat.js';
 
 const n = (v) => { if (v == null || v === '') return null; const x = Number(v); return Number.isFinite(x) ? x : null; };
 const num = (v, dp = 2) => (n(v) == null ? '—' : n(v).toFixed(dp));
+// premium()/inr() print ₹0 for null (Number(null) is 0) — absent stays a dash
+const prem = (v, sym) => (n(v) == null ? '—' : premium(v, sym));
+const money = (v, opts) => (n(v) == null ? '—' : inr(v, opts));
 
 function Row({ label, children }) {
     return (
@@ -87,9 +91,11 @@ export function TradeDetailsView({ data }) {
     const t = data?.trade;
     if (!t) return null;
     const pos = data.position || {};
-    const net = n(t.net_pnl) ?? n(t.pnl);
+    const netRec = n(t.net_pnl);
     const gross = n(t.gross_pnl) ?? n(t.pnl);
-    const charges = n(t.charges?.total) ?? (gross != null && n(t.net_pnl) != null ? gross - n(t.net_pnl) : null);
+    const charges = n(t.charges?.total) ?? (gross != null && netRec != null ? gross - netRec : null);
+    const open = t.status === 'OPEN';
+    const flags = data.view?.flags || [];
     const er = t.entry_risk || {}, xr = t.exit_risk || {};
     const reviews = (data.aiLogs || []).filter(l => l.phase === 'in_trade');
     const all = flatten(t);
@@ -99,9 +105,15 @@ export function TradeDetailsView({ data }) {
                 <span className="text-sm font-semibold text-fg">{t.symbol}</span>
                 {t.type && <Chip tone={t.type === 'CE' ? 'info' : 'warning'}>{t.type}</Chip>}
                 <Chip>{t.strategyName || t.strategy || '—'}</Chip>
-                <ModeChip mode={t.isPaper === false ? 'LIVE' : 'PAPER'} />
+                <ModeChip mode={data.view?.mode === 'LIVE' || t.isPaper === false ? 'LIVE' : 'PAPER'} />
                 <Chip tone={t.status === 'OPEN' ? 'live' : 'muted'}>{t.status || 'legacy'}</Chip>
             </div>
+
+            {flags.length > 0 && (
+                <ul className="space-y-1" data-testid="trade-flags">
+                    {flags.map((f) => <li key={f.code} className="text-2xs text-fg-4 flex items-start gap-1.5"><Chip tone={flagTone(f.code)}>{f.label}</Chip><span>{f.why}</span></li>)}
+                </ul>
+            )}
 
             <GateSection gate={data.gate} trade={t} />
 
@@ -112,13 +124,15 @@ export function TradeDetailsView({ data }) {
                         <Row label="Exit">{t.exitTime ? istDateTime(t.exitTime, { seconds: true }) : '—'}</Row>
                         <Row label="Held">{holdText(t.entryTime, t.exitTime)}</Row>
                         <Row label="Qty / lots">{t.quantity ?? '—'}{pos.lots ? ` (${pos.lots} lot${pos.lots > 1 ? 's' : ''})` : ''}</Row>
-                        <Row label="Entry price">{premium(t.entryPrice ?? t.price, t.symbol)}{n(pos.entryPrice) != null && n(pos.entryPrice) !== n(t.entryPrice) ? ` (fill ${premium(pos.entryPrice, t.symbol)})` : ''}</Row>
-                        <Row label="Exit price">{premium(t.exitPrice, t.symbol)}</Row>
-                        <Row label="Gross P&L"><span className={pnlTone(gross)}>{inr(gross, { sign: true })}</span></Row>
-                        <Row label="Charges">{inr(charges)}</Row>
-                        <Row label="Net P&L"><span className={`font-semibold ${pnlTone(net)}`}>{inr(net, { sign: true })}</span></Row>
-                        <Row label="Exit reason">{t.reason || '—'}</Row>
-                        <Row label="Deployment">{t.deploymentId || '—'}</Row>
+                        <Row label="Entry price">{prem(t.entryPrice ?? t.price, t.symbol)}{n(pos.entryPrice) != null && n(pos.entryPrice) !== n(t.entryPrice) ? ` (fill ${prem(pos.entryPrice, t.symbol)})` : ''}</Row>
+                        <Row label="Exit price">{n(t.exitPrice) != null ? prem(t.exitPrice, t.symbol) : open ? 'still open' : 'not recorded'}</Row>
+                        <Row label="Gross P&L">{open ? 'still open' : <span className={pnlTone(gross)}>{money(gross, { sign: true })}</span>}</Row>
+                        <Row label="Charges">{charges != null ? money(charges) : open ? 'booked at exit' : <span title="Charges are recorded per trade since 23 Sep 2026">not recorded</span>}</Row>
+                        <Row label={netRec != null || open ? 'Net P&L' : 'P&L (before charges)'}>{open ? 'still open' : <span className={`font-semibold ${pnlTone(netRec ?? gross)}`}>{money(netRec ?? gross, { sign: true })}</span>}</Row>
+                        <Row label="Exit reason">{t.reason || (open ? 'still open' : '—')}</Row>
+                        <Row label="Deployment">{t.deploymentId || <span title="Traded before deployments existed">none (symbol-config mode)</span>}</Row>
+                        <Row label="Mode">{data.view?.mode || (t.isPaper === false ? 'LIVE' : 'PAPER')}</Row>
+                        <Row label="Worst / best while open">{n(t.maeRupees) != null ? `${money(t.maeRupees)} / ${money(t.mfeRupees)}` : <span title="The engine records each trade's path since 7 Oct 2026">not recorded</span>}</Row>
                     </div>
                 </Section>
                 <Section title="Levels & greeks" testId="levels-section">

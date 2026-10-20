@@ -7,6 +7,7 @@ import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import TradePathChart from './TradePathChart.jsx';
+import { mergeOverlayRows } from './tradePathRows.js';
 
 const at = (min) => new Date(Date.UTC(2026, 8, 28, 4, 0) + min * 60000).toISOString();
 
@@ -155,5 +156,38 @@ describe('TradePathChart', () => {
         expect(screen.queryByText('Exit step')).toBeNull();
         expect(document.body.textContent).not.toMatch(/actually booked/);
         expect(screen.getByText(/Void fill: this round-trip/)).toBeTruthy();
+    });
+});
+
+// ── overlays: another path of the same trade (e.g. replayed with no stops) ─────
+
+describe('TradePathChart overlays', () => {
+    const lab = (ms) => String(ms);
+    const rows = [
+        { ms: 100, net: -40, label: '100' },
+        { ms: 300, net: -250, label: '300' },
+        { ms: 300, net: null, booked: -270, isExit: true, label: '300' },
+    ];
+    it('interleaves overlay points by instant and carries every series to the tooltip', () => {
+        const out = mergeOverlayRows({ rows, points: [{ ms: 50, key: 'ns', v: 0 }, { ms: 200, key: 'ns', v: -100 }, { ms: 500, key: 'ns', v: 900 }], keys: ['ns'], lastMarkMs: 300, label: lab });
+        expect(out.map((r) => r.ms)).toEqual([50, 100, 200, 300, 300, 500]);
+        expect(out[4].isExit).toBe(true);
+        // at 200: the recorded mark from 100 and the overlay's own value
+        expect(out[2].netHeld).toBe(-40);
+        expect(out[2].ovHeld_ns).toBe(-100);
+        // after the trade's exit the recorded mark is not carried — the trade was closed
+        expect(out[5].netHeld).toBeNull();
+        expect(out[5].ovHeld_ns).toBe(900);
+        // before the first overlay point nothing is invented
+        expect(out[0].netHeld).toBeNull();
+    });
+    it('without overlays the rows are untouched', () => {
+        expect(mergeOverlayRows({ rows, points: [], keys: [], lastMarkMs: 300, label: lab })).toBe(rows);
+    });
+    it('an overlay does not change what the stat strip says about the trade itself', () => {
+        render(<TradePathChart trade={singleLeg} overlays={[{ key: 'ns', name: 'replay · no stops', points: [{ t: at(3), net: 500 }, { t: at(30), net: 900 }] }]}
+            markers={[{ t: at(2), text: 'CE stopped' }]} />);
+        expect(screen.getByText('Gave back').nextElementSibling.textContent).toBe('₹360');
+        expect(screen.getByText(/4 marks, ~1\/min/)).toBeTruthy();
     });
 });
