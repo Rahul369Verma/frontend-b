@@ -68,6 +68,24 @@ export function firedLines(trade) {
     return out;
 }
 
+/**
+ * The STOP-LOSS alone (structure stop + rupee stop; the leg stops stay — they are part of
+ * how the strategy trades): what it did on this trade, and what the trade did after it.
+ */
+export function stopLossText(d) {
+    if (!d || !d.noStopLoss || d.noStopLoss.net == null || d.configured?.net == null) return null;
+    if (!d.stopLossFired) return 'The stop-loss (structure + rupee stop) did not fire in the replay — without it, the trade is the same.';
+    const eff = d.stopLossEffect;
+    const what = eff > 0 ? `SAVED ${rup(eff)}` : eff < 0 ? `COST ${rup(-eff)}` : 'made no difference';
+    const r = d.stopLossRecovery;
+    const after = !r ? '' : r.bestAfterStop == null
+        ? ' There were no recorded minutes after it.'
+        : ` After the ${reasonText(r.stopKind)} at ${hhmm(r.stoppedAt)} IST, managed by the leg stops only, it ${r.wentPositiveAfterStop
+            ? `came back into profit — best ${signed(r.bestAfterStop)}`
+            : `never got back above ₹0 — best ${signed(r.bestAfterStop)}`} — and would have finished at ${signed(d.noStopLoss.net)} (${reasonText(d.noStopLoss.reason)}).`;
+    return `The stop-loss ${what} on this trade (leg stops kept either way).${after}`;
+}
+
 /** The sentence that answers "would it have gone positive again?" */
 export function recoveryText(d) {
     if (!d || d.noStops?.net == null) return null;

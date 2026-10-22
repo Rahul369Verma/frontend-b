@@ -5,7 +5,7 @@
  */
 import React from 'react';
 import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import TradePathChart from './TradePathChart.jsx';
 import { mergeOverlayRows } from './tradePathRows.js';
 
@@ -62,6 +62,37 @@ describe('TradePathChart', () => {
         expect(screen.getByText('gross (pre-cost)')).toBeTruthy();
         expect(screen.getByText(/net of estimated costs/)).toBeTruthy();
         expect(screen.getByText(/estimated and actual charges/)).toBeTruthy();
+    });
+
+    it('the legend is a row of checkboxes — every line on the chart, all on by default, each switchable', () => {
+        const multileg = {
+            entryAt: at(0), exitAt: at(5), netPnl: -269.27, maeRupees: -400, mfeRupees: 50,
+            path: [
+                { t: at(0), net: -40, gross: 0, spot: 54300 },
+                { t: at(5), net: -250, gross: -210, spot: 54350 },
+            ],
+        };
+        const overlays = [
+            { key: 'noStopLoss', name: 'replay · no stop-loss (leg stops kept)', points: [{ t: at(0), net: -40 }, { t: at(9), net: 300 }], slot: 2, dashed: true },
+            { key: 'noStops', name: 'replay · no stops at all', points: [{ t: at(0), net: -40 }, { t: at(9), net: 500 }], slot: 1, dotted: true },
+        ];
+        render(<TradePathChart trade={multileg} overlays={overlays} />);
+        const row = screen.getByTestId('series-toggles');
+        const labels = within(row).getAllByRole('checkbox').map((c) => c.closest('label').textContent);
+        expect(labels).toEqual(['booked net', 'net', 'gross (pre-cost)', 'replay · no stop-loss (leg stops kept)', 'replay · no stops at all', 'spot']);
+        expect(within(row).getAllByRole('checkbox').every((c) => c.checked)).toBe(true);
+        const spot = screen.getByLabelText('spot');
+        fireEvent.click(spot);
+        expect(screen.getByLabelText('spot').checked).toBe(false);
+        expect(screen.getByLabelText('net').checked).toBe(true);
+        fireEvent.click(screen.getByLabelText('spot'));
+        expect(screen.getByLabelText('spot').checked).toBe(true);
+    });
+
+    it('a single-leg trade lists only what it draws (no gross, no booked basis it lacks)', () => {
+        render(<TradePathChart trade={singleLeg} />);
+        const labels = within(screen.getByTestId('series-toggles')).getAllByRole('checkbox').map((c) => c.closest('label').textContent);
+        expect(labels).toEqual(['booked net', 'mark']);
     });
 
     it('shows the server reason when there is no path, and no chart', () => {

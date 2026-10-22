@@ -56,7 +56,7 @@ vi.mock('axios', () => {
 
 import axios from 'axios';
 import { TradeStopReplay, StopGridPanel } from './StopReplay.jsx';
-import { reasonText, stopsText, recoveryText, firedLines, tradeStopsText } from './stopReplayFormat.js';
+import { reasonText, stopsText, recoveryText, firedLines, tradeStopsText, stopLossText } from './stopReplayFormat.js';
 
 const trade = {
     _id: 't1', symbol: 'NSE:NIFTY50-INDEX', entryAt: at(9, 20), exitAt: at(15, 10), netPnl: -1500, maeRupees: -2900, mfeRupees: 300,
@@ -130,9 +130,9 @@ describe('TradeStopReplay', () => {
         render(<TradeStopReplay trade={trade} />);
         expect(axios.get).not.toHaveBeenCalled();
         fireEvent.click(screen.getByText('Replay without stops'));
-        await waitFor(() => expect(screen.getByText(/The stops COST ₹6,100 on this trade/)).toBeTruthy());
+        await waitFor(() => expect(screen.getByText(/All stops together \(leg \+ stop-loss\) COST ₹6,100 on this trade/)).toBeTruthy());
         expect(axios.get.mock.calls[0][0]).toMatch(/\/multileg\/trades\/t1\/stop-whatif$/);
-        expect(screen.getByText(/Replay with no stops/)).toBeTruthy();
+        expect(screen.getByText(/With no stops at all/)).toBeTruthy();
         expect(screen.getByText(/it DID come back into profit/)).toBeTruthy();
         expect(screen.getByText(/Stops replayed: leg stop 1.4× entry/)).toBeTruthy();
         expect(screen.queryByText('Replay without stops')).toBeNull();
@@ -142,6 +142,41 @@ describe('TradeStopReplay', () => {
         render(<TradeStopReplay trade={trade} />);
         fireEvent.click(screen.getByText('Replay without stops'));
         await waitFor(() => expect(screen.getByText(/Not enough recorded quotes to replay this trade \(no archived quotes/)).toBeTruthy());
+    });
+});
+
+// the 22-Oct trade's question: the leg stop is the strategy; what did the STOP-LOSS do?
+const WITH_SL = {
+    ...REPORT,
+    booked: { net: -3290, reason: 'MAX_LOSS' },
+    configured: { net: -3023, reason: 'MAX_LOSS', exitAt: at(11, 47), legStops: [{ leg: '22600CE', at: at(10, 23), price: 247 }], path: [{ t: at(9, 21), net: -40 }, { t: at(11, 47), net: -3023 }] },
+    noStopLoss: { net: -1450, reason: 'SQUARE_OFF', legStops: [{ leg: '22600CE', at: at(10, 23), price: 247 }], path: [{ t: at(9, 21), net: -40 }, { t: at(13, 0), net: 420 }, { t: at(15, 10), net: -1450 }] },
+    noStops: { net: 1239, reason: 'SQUARE_OFF', legStops: [], path: [{ t: at(9, 21), net: -40 }, { t: at(15, 10), net: 1239 }] },
+    stopLossFired: true, stopLossEffect: -1573,
+    stopLossRecovery: { stoppedAt: at(11, 47), stopKind: 'MAX_LOSS', bestAfterStop: 420, wentPositiveAfterStop: true, endedPositive: false },
+    stopEffect: -4262,
+};
+
+describe('the stop-loss apart from the leg stops (22-Oct-2026)', () => {
+    it('says what the stop-loss alone did, and what the trade did after it with only its leg stops', () => {
+        expect(stopLossText(WITH_SL)).toBe('The stop-loss COST ₹1,573 on this trade (leg stops kept either way). After the rupee stop at 11:47 IST, managed by the leg stops only, it came back into profit — best +₹420 — and would have finished at -₹1,450 (square-off).');
+        expect(stopLossText({ ...WITH_SL, stopLossFired: false, stopLossRecovery: null, stopLossEffect: 0 })).toMatch(/did not fire in the replay — without it, the trade is the same/);
+        expect(stopLossText({ ...WITH_SL, noStopLoss: undefined })).toBe(null);   // an older server
+    });
+    it('draws both what-ifs, each can be hidden, and states both effects', async () => {
+        axios.get.mockImplementationOnce(() => Promise.resolve({ data: WITH_SL }));
+        render(<TradeStopReplay trade={stoppedTrade} />);
+        fireEvent.click(screen.getByText('Replay without stops'));
+        await waitFor(() => expect(screen.getByText(/The stop-loss COST ₹1,573 on this trade/)).toBeTruthy());
+        expect(screen.getByText(/All stops together \(leg \+ stop-loss\) COST ₹4,262/)).toBeTruthy();
+        expect(screen.getByText(/Without the stop-loss \(leg stops kept\)/)).toBeTruthy();
+        // every replay is a checkbox in the chart's legend, on by default
+        const box = screen.getByLabelText('replay · no stop-loss (leg stops kept)');
+        expect(box.checked).toBe(true);
+        expect(screen.getByLabelText('replay · no stops at all').checked).toBe(true);
+        expect(screen.getByLabelText('replay · its stops').checked).toBe(true);
+        fireEvent.click(box);
+        expect(screen.getByLabelText('replay · no stop-loss (leg stops kept)').checked).toBe(false);
     });
 });
 

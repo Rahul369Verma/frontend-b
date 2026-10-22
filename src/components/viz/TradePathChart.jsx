@@ -55,7 +55,8 @@
  * "the trade did nothing".
  *
  * OVERLAYS (optional) — other paths of the SAME trade, e.g. a replay with no stops:
- *   overlays = [{ key, name, points: [{ t, net }], slot?: 1|2, dashed?, faint? }]
+ *   overlays = [{ key, name, points: [{ t, net }], slot?: 1|2, dashed?, dotted?, faint?, muted? }]
+ *              (muted = drawn in the muted ink, for a line that is only a cross-check)
  *   markers  = [{ t, text }]   vertical lines (e.g. where a stop fired)
  *   stopLines = [{ y, label }]  horizontal lines on the ₹ axis where a stop sits (e.g. the
  *              rupee stop at −₹3,000 net) — drawn even when no recorded mark reached them
@@ -69,7 +70,7 @@
  */
 import React, { useMemo, useState } from 'react';
 import {
-    ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Legend,
+    ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
 } from 'recharts';
 import ZoomableChart from '../charts/ZoomableChart';
 import { useChartTheme } from '../../theme/chartTheme.js';
@@ -146,25 +147,46 @@ export function PathSourceChip({ source }) {
 }
 
 /** Tooltip body: IST time plus every number the mark carries. */
-function PathTooltip({ active, payload, ct, fmtAt, markName, bookedName = 'booked net', symbol = null, overlays = [] }) {
+function PathTooltip({ active, payload, ct, fmtAt, markName, bookedName = 'booked net', symbol = null, overlays = [], hidden = NO_HIDDEN }) {
     if (!active || !Array.isArray(payload) || !payload.length) return null;
     const r = payload[0]?.payload;
     if (!r) return null;
     // an overlay-only row carries the recorded mark from just before it (`netHeld`)
     const net = r.net ?? r.netHeld;
+    const on = (k) => !hidden.has(k);   // a series switched off in the legend is not read out either
     return (
         <div className="px-2 py-1 space-y-0.5" style={ct.tooltipStyle({ fontSize: ct.type['3xs'] })}>
             <div className="font-semibold">{fmtAt(r.ms)} IST</div>
             {r.booked != null
-                ? <div>{bookedName} {rup(r.booked)}</div>
-                : net != null && <div>{markName} {rup(net)}</div>}
-            {overlays.map((o) => (r[`ovHeld_${o.key}`] != null
+                ? on('booked') && <div>{bookedName} {rup(r.booked)}</div>
+                : net != null && on('net') && <div>{markName} {rup(net)}</div>}
+            {overlays.map((o) => (r[`ovHeld_${o.key}`] != null && on(`ov:${o.key}`)
                 ? <div key={o.key}>{o.name} {rup(r[`ovHeld_${o.key}`])}</div>
                 : null))}
-            {r.gross != null && <div>gross {rup(r.gross)}</div>}
+            {r.gross != null && on('gross') && <div>gross {rup(r.gross)}</div>}
             {r.ltp != null && <div>option {premium(r.ltp, symbol)}</div>}
-            {r.spot != null && <div>spot {fmtNum(r.spot, 0)}</div>}
-            {r.vix != null && <div>India VIX {r.vix.toFixed(2)}</div>}
+            {r.spot != null && on('spot') && <div>spot {fmtNum(r.spot, 0)}</div>}
+            {r.vix != null && on('vix') && <div>India VIX {r.vix.toFixed(2)}</div>}
+        </div>
+    );
+}
+
+/**
+ * The legend as checkboxes: every line on the chart can be switched off and on again
+ * (all on by default). Each item carries a swatch in the line's own colour and dash.
+ */
+function SeriesToggles({ items, hidden, onToggle }) {
+    return (
+        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 mt-1 text-4xs text-fg-4" data-testid="series-toggles">
+            {items.map((it) => (
+                <label key={it.key} className="inline-flex items-center gap-1 cursor-pointer select-none">
+                    <input type="checkbox" checked={!hidden.has(it.key)} onChange={() => onToggle(it.key)} className="accent-sky-500" />
+                    {it.style === 'dot'
+                        ? <span aria-hidden="true" style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 9999, background: it.color }} />
+                        : <span aria-hidden="true" style={{ display: 'inline-block', width: 14, borderTop: `2px ${it.style} ${it.color}`, opacity: it.faint ? 0.6 : 1 }} />}
+                    {it.label}
+                </label>
+            ))}
         </div>
     );
 }
@@ -172,10 +194,14 @@ function PathTooltip({ active, payload, ct, fmtAt, markName, bookedName = 'booke
 const NO_OVERLAYS = [];
 const NO_MARKERS = [];
 const NO_STOP_LINES = [];
+const NO_HIDDEN = new Set();
 
 export default function TradePathChart({ trade, istTime, istDateTime, istSpan, overlays = NO_OVERLAYS, markers = NO_MARKERS, stopLines = NO_STOP_LINES, vix = null }) {
     const ct = useChartTheme();
-    const [showGross, setShowGross] = useState(true);
+    // which lines are switched off in the legend (all on by default)
+    const [hidden, setHidden] = useState(NO_HIDDEN);
+    const toggle = (k) => setHidden((h) => { const n = new Set(h); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+    const on = (k) => !hidden.has(k);
     const fmtTime = istTime || defaultTime;
     const fmtDateTime = istDateTime || defaultDateTime;
 
@@ -282,6 +308,17 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan, o
     }
 
     const fmtAt = overnight ? fmtDateTime : fmtTime;
+    const spotOn = hasSpot && on('spot');
+    const vixOn = hasVix && on('vix');
+    const overlayColor = (o) => (o.muted ? ct.text.muted : ct.categorical[o.slot === 2 ? 2 : 1]);
+    const legend = [
+        booked != null && { key: 'booked', label: bookedName, color: ct.text.primary, style: 'dot' },
+        { key: 'net', label: markName, color: ct.categorical[0], style: 'solid' },
+        hasGross && { key: 'gross', label: 'gross (pre-cost)', color: ct.mark.equity, style: 'solid', faint: true },
+        ...overlays.map((o) => ({ key: `ov:${o.key}`, label: o.name, color: overlayColor(o), style: o.dashed ? 'dashed' : o.dotted ? 'dotted' : 'solid', faint: o.faint })),
+        hasSpot && { key: 'spot', label: 'spot', color: ct.mark.live, style: 'dashed' },
+        hasVix && { key: 'vix', label: 'India VIX', color: ct.categorical[3] || ct.text.muted, style: 'dotted' },
+    ].filter(Boolean);
     // a marker sits on the first drawn row at or after its instant (the x axis is categorical)
     const markerRows = markers.map((m) => {
         const ms = toMs(m?.t);
@@ -299,12 +336,6 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan, o
                     </span>
                     <PathSourceChip source={trade?.pathSource} />
                 </div>
-                {hasGross && (
-                    <label className="flex items-center gap-1 text-4xs text-fg-5 cursor-pointer">
-                        <input type="checkbox" checked={showGross} onChange={(e) => setShowGross(e.target.checked)} className="accent-sky-500" />
-                        gross (pre-cost)
-                    </label>
-                )}
             </div>
 
             {/* Stat strip — the numbers the path exists to expose. */}
@@ -348,7 +379,7 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan, o
             </div>
 
             <ZoomableChart data={rows} height={200} controls={rows.length > 8}>
-                <ComposedChart margin={{ top: 8, right: hasSpot || hasVix ? 4 : 10, bottom: 2, left: 4 }}>
+                <ComposedChart margin={{ top: 8, right: spotOn || vixOn ? 4 : 10, bottom: 2, left: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                     <XAxis dataKey="label" tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} minTickGap={34} />
                     <YAxis yAxisId="pnl" width={52} tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }}
@@ -356,19 +387,18 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan, o
                     {/* Spot rides its own right-hand axis on its own domain — see
                         the header note. 'auto' (not dataMin/dataMax) so a flat
                         session still gets a sane band instead of a zero range. */}
-                    {hasSpot && (
+                    {spotOn && (
                         <YAxis yAxisId="spot" orientation="right" width={46} domain={['auto', 'auto']}
                             tick={{ fontSize: ct.type['5xs'], fill: ct.text.muted }}
                             tickFormatter={(v) => fmtNum(v, 0)} />
                     )}
-                    {hasVix && (
-                        <YAxis yAxisId="vix" orientation="right" hide={hasSpot} width={hasSpot ? 0 : 40} domain={['auto', 'auto']}
+                    {vixOn && (
+                        <YAxis yAxisId="vix" orientation="right" hide={spotOn} width={spotOn ? 0 : 40} domain={['auto', 'auto']}
                             tick={{ fontSize: ct.type['5xs'], fill: ct.text.muted }}
                             tickFormatter={(v) => String(+Number(v).toFixed(2))} />
                     )}
                     <Tooltip cursor={{ stroke: ct.mark.live, strokeDasharray: '3 3' }}
-                        content={<PathTooltip ct={ct} fmtAt={fmtAt} markName={marksAreNet ? 'net' : 'mark (pre-cost)'} bookedName={bookedName} symbol={trade && trade.symbol} overlays={overlays} />} />
-                    <Legend wrapperStyle={{ fontSize: ct.type['5xs'] }} />
+                        content={<PathTooltip ct={ct} fmtAt={fmtAt} markName={marksAreNet ? 'net' : 'mark (pre-cost)'} bookedName={bookedName} symbol={trade && trade.symbol} overlays={overlays} hidden={hidden} />} />
                     <ReferenceLine yAxisId="pnl" y={0} stroke={ct.axis} ifOverflow="extendDomain" />
                     {/* extendDomain, not the default: MAE/MFE can sit outside the
                         sampled marks (the extreme can be tracked every tick, the path
@@ -386,37 +416,40 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan, o
                         <ReferenceLine key={`stop${i}`} yAxisId="pnl" y={s.y} stroke={ct.status.critical} strokeWidth={1.5} ifOverflow="extendDomain"
                             label={{ value: s.label, fontSize: ct.type['5xs'], fill: ct.status.critical, position: 'insideBottomRight' }} />
                     ))}
-                    {hasSpot && (
+                    {spotOn && (
                         <Line yAxisId="spot" type="monotone" name="spot" dataKey="spot" stroke={ct.mark.live}
                             dot={false} strokeWidth={1} strokeDasharray="5 3" connectNulls isAnimationActive={false} />
                     )}
-                    {hasVix && (
+                    {vixOn && (
                         <Line yAxisId="vix" type="stepAfter" name="India VIX" dataKey="vix" stroke={ct.categorical[3] || ct.text.muted}
                             dot={false} strokeWidth={1} strokeDasharray="2 2" connectNulls isAnimationActive={false} />
                     )}
-                    {hasGross && showGross && (
+                    {hasGross && on('gross') && (
                         <Line yAxisId="pnl" type="monotone" name="gross" dataKey="gross" stroke={ct.mark.equity} strokeOpacity={0.45}
                             dot={false} strokeWidth={1} connectNulls isAnimationActive={false} />
                     )}
-                    <Line yAxisId="pnl" type="monotone" name={markName} dataKey="net" stroke={ct.categorical[0]}
-                        dot={false} strokeWidth={2} connectNulls={overlays.length > 0} isAnimationActive={false} />
-                    {overlays.map((o) => (
+                    {on('net') && (
+                        <Line yAxisId="pnl" type="monotone" name={markName} dataKey="net" stroke={ct.categorical[0]}
+                            dot={false} strokeWidth={2} connectNulls={overlays.length > 0} isAnimationActive={false} />
+                    )}
+                    {overlays.filter((o) => on(`ov:${o.key}`)).map((o) => (
                         <Line key={o.key} yAxisId="pnl" type="monotone" name={o.name} dataKey={`ov_${o.key}`}
-                            stroke={ct.categorical[o.slot === 2 ? 2 : 1]} strokeOpacity={o.faint ? 0.55 : 1}
-                            strokeDasharray={o.dashed ? '6 3' : undefined} dot={false} strokeWidth={o.faint ? 1 : 2}
+                            stroke={overlayColor(o)} strokeOpacity={o.faint ? 0.55 : 1}
+                            strokeDasharray={o.dashed ? '6 3' : o.dotted ? '2 3' : undefined} dot={false} strokeWidth={o.faint ? 1 : 2}
                             connectNulls isAnimationActive={false} />
                     ))}
                     {markerRows.map((m, i) => (
                         <ReferenceLine key={`mk${i}`} yAxisId="pnl" x={m.label} stroke={ct.status.warning} strokeDasharray="2 3"
                             label={{ value: m.text, fontSize: ct.type['5xs'], fill: ct.status.warning, position: 'insideTopRight' }} />
                     ))}
-                    {booked != null && (
+                    {booked != null && on('booked') && (
                         <Line yAxisId="pnl" name="booked" dataKey="booked" stroke={ct.text.primary} legendType="circle"
                             dot={{ r: 4, fill: ct.text.primary, stroke: ct.surface, strokeWidth: 2 }}
                             activeDot={{ r: 5 }} isAnimationActive={false} />
                     )}
                 </ComposedChart>
             </ZoomableChart>
+            <SeriesToggles items={legend} hidden={hidden} onToggle={toggle} />
 
             {showExitStep && (
                 <p className="text-4xs text-fg-5 mt-1">

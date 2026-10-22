@@ -17,7 +17,7 @@ import axios from 'axios';
 import { API_URL } from '../../config/api.js';
 import TradePathChart from '../viz/TradePathChart';
 import { istDateTime as tokIstDateTime } from '../viz/tokens';
-import { rup, signed, tone, hhmm, reasonText, stopsText, recoveryText, tradeStopsText, firedLines } from './stopReplayFormat.js';
+import { rup, signed, tone, hhmm, reasonText, stopsText, recoveryText, tradeStopsText, firedLines, stopLossText } from './stopReplayFormat.js';
 import { Spinner } from '../viz/primitives';
 
 const BTN = 'inline-flex items-center gap-1 px-2 py-1 rounded border border-line-2 bg-card-2 text-2xs text-fg-3 hover:text-fg disabled:opacity-50';
@@ -34,9 +34,12 @@ export function TradeStopReplay({ trade, istTime, istDateTime, istSpan }) {
             .catch((e) => setSt({ id, status: 'error', error: e.response?.data?.error || e.message }));
     };
     const d = st.status === 'done' ? st.data : null;
+    // every replay is drawn; the chart's legend checkboxes switch each one off and on
     const overlays = useMemo(() => (d ? [
-        d.noStops?.path?.length ? { key: 'noStops', name: 'replay · no stops', points: d.noStops.path, slot: 1, dashed: true } : null,
-        d.configured?.path?.length ? { key: 'withStops', name: 'replay · its stops', points: d.configured.path, slot: 2, faint: true } : null,
+        // the two what-ifs get the two colours; "its stops" is only a check on the replay → muted
+        d.noStopLoss?.path?.length ? { key: 'noStopLoss', name: 'replay · no stop-loss (leg stops kept)', points: d.noStopLoss.path, slot: 2, dashed: true } : null,
+        d.noStops?.path?.length ? { key: 'noStops', name: 'replay · no stops at all', points: d.noStops.path, slot: 1, dotted: true } : null,
+        d.configured?.path?.length ? { key: 'withStops', name: 'replay · its stops', points: d.configured.path, muted: true, faint: true } : null,
     ].filter(Boolean) : undefined), [d]);
     // what the trade itself ran with and what fired (from the server: exitRules.stopLevels)
     const stops = trade?.stops || null;
@@ -71,7 +74,7 @@ export function TradeStopReplay({ trade, istTime, istDateTime, istSpan }) {
                             title="Replay this exact trade (its strikes, fills and size) on the recorded option chain, once with its stops and once with none">
                             Replay without stops
                         </button>
-                        <span className="text-fg-5">What would it have done with no stop? Follows this trade on the recorded option prices past its exit, to the time it would have closed.</span>
+                        <span className="text-fg-5">What would it have done without its stop-loss (leg stops kept), and with no stops at all? Follows this trade on the recorded option prices past its exit, to the time it would have closed.</span>
                     </div>
                 )}
                 {st.status === 'loading' && <Spinner size="xs" label="Replaying on the recorded option chain…" />}
@@ -89,15 +92,21 @@ function ReplaySummary({ d }) {
         return <div className="text-warning">Not enough recorded quotes to replay this trade{d.archive?.note ? ` (${d.archive.note})` : ''}.</div>;
     }
     const eff = d.stopEffect;
+    const sl = stopLossText(d);
+    const slEff = d.stopLossEffect;
     return (
         <div className="space-y-1">
             <div className="flex flex-wrap gap-x-5 gap-y-1">
                 <span>Booked <b className={tone(d.booked?.net)}>{signed(d.booked?.net)}</b> <span className="text-fg-5">({reasonText(d.booked?.reason)})</span></span>
                 <span>Replay with its stops <b className={tone(d.configured.net)}>{signed(d.configured.net)}</b> <span className="text-fg-5">({reasonText(d.configured.reason)})</span></span>
-                <span>Replay with no stops <b className={tone(d.noStops.net)}>{signed(d.noStops.net)}</b> <span className="text-fg-5">({reasonText(d.noStops.reason)})</span></span>
+                {d.noStopLoss?.net != null && (
+                    <span>Without the stop-loss (leg stops kept) <b className={tone(d.noStopLoss.net)}>{signed(d.noStopLoss.net)}</b> <span className="text-fg-5">({reasonText(d.noStopLoss.reason)})</span></span>
+                )}
+                <span>With no stops at all <b className={tone(d.noStops.net)}>{signed(d.noStops.net)}</b> <span className="text-fg-5">({reasonText(d.noStops.reason)})</span></span>
             </div>
+            {sl && <div className={`font-semibold ${!d.stopLossFired ? 'text-fg-3' : slEff > 0 ? 'text-success' : slEff < 0 ? 'text-danger' : 'text-fg-3'}`}>{sl}</div>}
             <div className={`font-semibold ${eff > 0 ? 'text-success' : eff < 0 ? 'text-danger' : 'text-fg-3'}`}>
-                {eff > 0 ? `The stops SAVED ${rup(eff)} on this trade.` : eff < 0 ? `The stops COST ${rup(-eff)} on this trade.` : d.stopped ? 'The stops made no difference.' : 'No stop fired.'}
+                {eff > 0 ? `All stops together (leg + stop-loss) SAVED ${rup(eff)} on this trade.` : eff < 0 ? `All stops together (leg + stop-loss) COST ${rup(-eff)} on this trade.` : d.stopped ? 'The stops made no difference.' : 'No stop fired.'}
             </div>
             <div>{recoveryText(d)}</div>
             <div className="text-fg-5">
