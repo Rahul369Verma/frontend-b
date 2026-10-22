@@ -101,9 +101,11 @@ Old trades fade with a **half-life of 3 sessions** (a trade from 3 sessions ago 
 | **Shadow** (recommended) | On every signal the gate decides what it *would* do and **records** it on the trade — but never blocks anything. |
 | **Enforce** | Signals on a weak side are actually **rejected**, except **probes**. |
 
-**Probe:** when a side is weak, every Nth signal (default **1 in 3**) is still let through on purpose, as a small test. If the market has changed and probes start winning, the side's confidence recovers and blocking stops. Without probes a blocked side could never prove itself again.
+**Probe:** when a side is weak, every Nth signal (default **1 in 3**) is still let through on purpose, as a small test. If the market has changed and probes start winning, the side's confidence recovers and blocking stops. Without probes a blocked side could never prove itself again. The count toward the next probe is kept in the decision journal, so a restart or a deploy does not reset it (before 21-Oct-2026 it did — a deploy at 12:09 turned the next probe into a block).
 
 **Follow blocked trades as ghosts (enforce):** when on, each signal that Enforce blocks is still followed on paper as a [ghost trade](glossary#ghost-trade) — same entry, same exits, real prices, no order — so you can later see what the block cost or saved.
+
+**Blocked trades count toward confidence (enforce, on by default):** once a ghost closes, its result teaches the side's confidence exactly like a taken trade. A blocked side then earns its way back — or stays shut — on what its signals really did, not only on 1 probe in N. Each side's **Numbers** shows how many of its trades were blocked ones. Switch it off to learn from taken trades only. Backtests follow the same rule: a blocked signal's result is the gate-off run's trade for that signal.
 
 ## Scorecard — would blocking have helped?
 Over roughly the last 4 weeks:
@@ -177,7 +179,7 @@ A row reading *14-Oct · enforce + shadow · 5 signals · would-block 1 · −�
 ## Blocked trades, followed as ghosts
 A table of every ghost: when it was blocked, strategy, contract, side, entry and exit price, the exit reason, what it would have made, its worst and best points ([MAE / MFE](glossary#mae-mfe)), any AI reviews it received, and a *caveat* chip when its price had to be estimated.
 
-> **Note:** Ghosts are never orders, never in your P&L, never in Telegram and never fed back into the gate's own confidence. A deployment can hold at most one ghost at a time.`,
+> **Note:** Ghosts are never orders, never in your P&L and never in Telegram. Once closed they DO count toward the gate's confidence while *Blocked trades count toward confidence* is on (the default); a ghost settled at its last price after a restart never does. A deployment can hold at most one ghost at a time.`,
         },
         {
             id: 'market-data',

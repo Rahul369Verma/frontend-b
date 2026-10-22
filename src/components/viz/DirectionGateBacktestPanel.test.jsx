@@ -18,7 +18,12 @@ describe('gateParams', () => {
     it('shadow/enforce send the same keys the live Settings use, as numbers', () => {
         expect(gateParams({ mode: 'enforce', floor: '0.45', halfLife: '5', probeEvery: '4', minNeff: '2' })).toEqual({
             direction_gate_mode: 'enforce', direction_gate_floor: 0.45, direction_gate_half_life: 5, direction_gate_probe_every: 4, direction_gate_min_neff: 2,
+            direction_gate_learn_blocked: true,
         });
+    });
+    it('enforce: blocked trades count unless switched off; shadow blocks nothing so it sends no such key', () => {
+        expect(gateParams({ ...GATE_DEFAULTS, mode: 'enforce', learnBlocked: false }).direction_gate_learn_blocked).toBe(false);
+        expect('direction_gate_learn_blocked' in gateParams({ ...GATE_DEFAULTS, mode: 'shadow' })).toBe(false);
     });
 });
 
@@ -33,6 +38,15 @@ describe('DirectionGateControls', () => {
     it('shows the knobs when on', () => {
         render(<DirectionGateControls value={{ ...GATE_DEFAULTS, mode: 'shadow' }} onChange={() => {}} />);
         expect(screen.getByLabelText('probe every')).toBeTruthy();
+        expect(screen.queryByLabelText('blocked trades count')).toBeNull();      // shadow blocks nothing
+    });
+    it('enforce: the blocked-trades switch is on by default and reports a change', () => {
+        const onChange = vi.fn();
+        render(<DirectionGateControls value={{ ...GATE_DEFAULTS, mode: 'enforce' }} onChange={onChange} />);
+        const box = screen.getByLabelText('blocked trades count');
+        expect(box.checked).toBe(true);
+        fireEvent.click(box);
+        expect(onChange).toHaveBeenCalledWith({ ...GATE_DEFAULTS, mode: 'enforce', learnBlocked: false });
     });
 });
 
@@ -56,6 +70,17 @@ describe('DirectionGateBacktestPanel', () => {
         expect(screen.getByTestId('dir-gate-compare').textContent).toMatch(/added ₹4813/);
         expect(screen.getByText('Gate enforced')).toBeTruthy();
         expect(screen.getByText(/Blocked signals \(110, first 1 shown\)/)).toBeTruthy();
+    });
+    it('enforce: says what each blocked signal would have made, and how the run learned from them', () => {
+        render(<DirectionGateBacktestPanel data={{ mode: 'enforce', settings, decisions: 9, counts: { BLOCK: 3 }, comparison: { skipped: 'x' },
+            blocked: [
+                { at: '2026-01-05T05:30:00Z', side: 'PE', ce: 0.6, pe: 0.3, reason: 'weak side', ghost: 'followed', ghostNet: -2255 },
+                { at: '2026-01-05T06:30:00Z', side: 'PE', ce: 0.6, pe: 0.3, reason: 'weak side', ghost: 'unmatched' },
+            ], blockedTotal: 2, learnsFrom: 'x',
+            learnsFromBlocked: { on: true, followed: 1, followedNet: -2255, unmatched: 1, unavailable: 0, note: '1 blocked signal(s) were followed' } }} />);
+        expect(screen.getByText('Would have')).toBeTruthy();
+        expect(screen.getByText('no gate-off trade at this candle')).toBeTruthy();
+        expect(screen.getByTestId('dir-gate-learns-blocked').textContent).toMatch(/1 blocked signal\(s\) were followed.*would have made/);
     });
     it('enforce with AI on: says why there is no comparison', () => {
         render(<DirectionGateBacktestPanel data={{ mode: 'enforce', settings, decisions: 3, counts: {}, comparison: { skipped: 'AI confirmation/prediction is on' }, blocked: [], blockedTotal: 0, learnsFrom: 'x' }} />);

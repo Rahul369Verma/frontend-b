@@ -13,7 +13,7 @@ import React, { useRef } from 'react';
 import { Chip, StatusBadge, DataTable, Segmented } from './primitives';
 import { inr, istDateTime, pnlTone } from './tokens.js';
 import useRemWidth from '../../hooks/useRemWidth.js';
-import { DECISION_TONE, DIAG_LEVEL, pct0, settingsLine, settingsToGate } from './directionGateFormat.js';
+import { DECISION_TONE, DIAG_LEVEL, pct0, settingsLine, settingsToGate, blockedOutcome } from './directionGateFormat.js';
 
 const numIn = 'w-16 bg-card-2 border border-line-2 rounded px-1.5 py-0.5 text-2xs text-fg tabular-nums';
 
@@ -42,6 +42,14 @@ export function DirectionGateControls({ value, onChange }) {
                     <label className="text-2xs text-fg-4 inline-flex items-center gap-1" title="Effective trades needed before the gate may block">
                         min evidence <input aria-label="min evidence" type="number" step="1" min="0" max="50" value={value.minNeff} onChange={set('minNeff')} className={numIn} />
                     </label>
+                    {value.mode === 'enforce' && (
+                        <label className="text-2xs text-fg-4 inline-flex items-center gap-1"
+                            title="Live follows every blocked signal at real prices and lets its result count toward the side's confidence. Here the blocked signal's result is the gate-off run's trade for the same signal.">
+                            <input type="checkbox" aria-label="blocked trades count" checked={value.learnBlocked !== false}
+                                onChange={(e) => onChange({ ...value, learnBlocked: e.target.checked })} />
+                            blocked trades count (as live)
+                        </label>
+                    )}
                 </>
             )}
         </div>
@@ -221,7 +229,7 @@ export default function DirectionGateBacktestPanel({ data, onApply }) {
                     {rem != null && rem < 48 ? (
                         <div className="space-y-1 max-h-64 overflow-auto">
                             {(data.blocked || []).map((b, i) => (
-                                <p key={i} className="text-2xs text-fg-4">{istDateTime(b.at)} · {b.side} · CE {pct0(b.ce)} / PE {pct0(b.pe)}</p>
+                                <p key={i} className="text-2xs text-fg-4">{istDateTime(b.at)} · {b.side} · CE {pct0(b.ce)} / PE {pct0(b.pe)}{b.ghost ? ` · ${blockedOutcome(b)}` : ''}</p>
                             ))}
                         </div>
                     ) : (
@@ -232,6 +240,9 @@ export default function DirectionGateBacktestPanel({ data, onApply }) {
                                 { key: 'ce', header: 'CE conf', align: 'right', render: r => pct0(r.ce) },
                                 { key: 'pe', header: 'PE conf', align: 'right', render: r => pct0(r.pe) },
                                 { key: 'reason', header: 'Why', render: r => <span className="whitespace-normal">{r.reason}</span> },
+                                ...(data.learnsFromBlocked && data.learnsFromBlocked.on ? [{ key: 'ghost', header: 'Would have', align: 'right', render: r => (r.ghost === 'followed'
+                                    ? <span className={pnlTone(r.ghostNet)}>{inr(r.ghostNet, { sign: true })}</span>
+                                    : <span className="text-fg-5">{blockedOutcome(r)}</span>) }] : []),
                             ]} />
                     )}
                 </div>
@@ -239,6 +250,13 @@ export default function DirectionGateBacktestPanel({ data, onApply }) {
 
             <GateSuggestion s={data.suggestion} narrow={rem != null && rem < 48} onApply={onApply} />
 
+            {data.learnsFromBlocked && (
+                <p className="text-2xs text-fg-4" data-testid="dir-gate-learns-blocked">
+                    Blocked trades: {data.learnsFromBlocked.note}
+                    {data.learnsFromBlocked.on && data.learnsFromBlocked.followed > 0 && <> Together they would have made{' '}
+                        <span className={pnlTone(data.learnsFromBlocked.followedNet)}>{inr(data.learnsFromBlocked.followedNet, { sign: true })}</span>.</>}
+                </p>
+            )}
             <p className="text-3xs text-fg-5">
                 Learns from {data.learnsFrom}. Every trade in the table below carries its verdict (dir_gate). Pure maths, no AI — the same functions the live engine runs.
             </p>

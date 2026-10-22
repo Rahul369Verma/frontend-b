@@ -3,7 +3,7 @@
  * slow API answers are queued per PAGE and sent to the server, never its own call.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { installSlownessReporter, routeKey, apiKey } from './slownessReporter.js';
+import { installSlownessReporter, routeKey, apiKey, describeFrame, chunkName } from './slownessReporter.js';
 
 function fakeAxios() {
     const req = [], res = [];
@@ -45,5 +45,23 @@ describe('slownessReporter', () => {
         expect(r.queue).toHaveLength(0);
         await ax._call('http://api/api/telemetry/slow', 9000, clock);           // its own report is never reported
         expect(r.queue).toHaveLength(0);
+    });
+
+    it('says WHAT froze the page where the browser can tell (long animation frames)', () => {
+        let observe = null, observedType = null;
+        class PO { constructor(cb) { observe = cb; } observe(o) { observedType = o.type; } }
+        PO.supportedEntryTypes = ['longtask', 'long-animation-frame'];
+        const r = installSlownessReporter({ axios: fakeAxios(), apiUrl: 'x', getPath: () => '/multi-leg', PerfObserver: PO, every: 0 });
+        expect(observedType).toBe('long-animation-frame');
+        observe({ getEntries: () => [{ duration: 506, startTime: 1000, styleAndLayoutStart: 1446,
+            scripts: [
+                { duration: 380, sourceURL: 'https://app/assets/MultiLeg-Ab12Cd34.js', sourceFunctionName: 'Xe', invoker: 'BUTTON.onclick', forcedStyleAndLayoutDuration: 0 },
+                { duration: 40, sourceURL: 'https://app/assets/index-9f8e7d6c.js', sourceFunctionName: '', invoker: 'TimerHandler:setTimeout', forcedStyleAndLayoutDuration: 25 },
+            ] }] });
+        expect(r.queue[0]).toMatchObject({ type: 'longtask', route: '/multi-leg', ms: 506 });
+        expect(r.queue[0].what).toBe('script 420 ms (MultiLeg.Xe via BUTTON.onclick 380 ms) · layout 60 ms (forced 25 ms)');
+        expect(describeFrame({ duration: 600, scripts: [] })).toBe('no script attributed (rendering/browser work)');
+        expect(chunkName('https://h/assets/DayEquityCurves-abcdef12.js?v=3')).toBe('DayEquityCurves');
+        expect(chunkName('')).toBe(null);
     });
 });

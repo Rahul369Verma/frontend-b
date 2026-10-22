@@ -17,7 +17,7 @@ import axios from 'axios';
 import { API_URL } from '../../config/api.js';
 import TradePathChart from '../viz/TradePathChart';
 import { istDateTime as tokIstDateTime } from '../viz/tokens';
-import { rup, signed, tone, hhmm, reasonText, stopsText, recoveryText } from './stopReplayFormat.js';
+import { rup, signed, tone, hhmm, reasonText, stopsText, recoveryText, tradeStopsText, firedLines } from './stopReplayFormat.js';
 import { Spinner } from '../viz/primitives';
 
 const BTN = 'inline-flex items-center gap-1 px-2 py-1 rounded border border-line-2 bg-card-2 text-2xs text-fg-3 hover:text-fg disabled:opacity-50';
@@ -38,22 +38,41 @@ export function TradeStopReplay({ trade, istTime, istDateTime, istSpan }) {
         d.noStops?.path?.length ? { key: 'noStops', name: 'replay · no stops', points: d.noStops.path, slot: 1, dashed: true } : null,
         d.configured?.path?.length ? { key: 'withStops', name: 'replay · its stops', points: d.configured.path, slot: 2, faint: true } : null,
     ].filter(Boolean) : undefined), [d]);
+    // what the trade itself ran with and what fired (from the server: exitRules.stopLevels)
+    const stops = trade?.stops || null;
+    const stopLines = useMemo(() => (stops?.maxLossNetRupees != null
+        ? [{ y: stops.maxLossNetRupees, label: `rupee stop ${signed(stops.maxLossNetRupees)}` }] : undefined), [stops]);
+    const fired = useMemo(() => firedLines(trade), [trade]);
     const markers = useMemo(() => {
-        if (!d) return undefined;
-        const m = (d.configured?.legStops || []).map((s) => ({ t: s.at, text: `${s.leg} stopped` }));
-        if (d.recovery && d.recovery.stopKind !== 'LEG_SL') m.push({ t: d.recovery.firstStopAt, text: reasonText(d.recovery.stopKind) });
-        return m;
-    }, [d]);
+        const m = [];
+        // what the engine recorded firing (trades from 22-Oct-2026)
+        for (const l of trade?.closedLegs || []) if (l.closeReason === 'LEG_SL' && l.closedAt) m.push({ t: l.closedAt, text: `${l.type} leg stop` });
+        if (trade?.exitTrigger?.at) m.push({ t: trade.exitTrigger.at, text: `${reasonText(trade.exitTrigger.reason)} fired` });
+        if (d) {
+            for (const s of d.configured?.legStops || []) m.push({ t: s.at, text: `replay: ${s.leg} stopped` });
+            if (d.recovery && d.recovery.stopKind !== 'LEG_SL') m.push({ t: d.recovery.firstStopAt, text: `replay: ${reasonText(d.recovery.stopKind)}` });
+        }
+        return m.length ? m : undefined;
+    }, [trade, d]);
 
     return (
         <div>
-            <TradePathChart trade={trade} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} overlays={overlays} markers={markers} />
+            {(stops || fired.length > 0) && (
+                <div className="mb-1 text-3xs text-fg-4 space-y-0.5" data-testid="trade-stops">
+                    {stops ? <div>{tradeStopsText(stops)}.</div> : <div className="text-fg-5">This trade did not record its stop settings.</div>}
+                    {fired.map((f, i) => <div key={i} className="text-fg-3">{f}</div>)}
+                </div>
+            )}
+            <TradePathChart trade={trade} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} overlays={overlays} markers={markers} stopLines={stopLines} />
             <div className="mt-1.5 text-3xs text-fg-4 space-y-1" data-testid="stop-replay">
                 {st.status === 'idle' && id && (
-                    <button type="button" className={BTN} onClick={run}
-                        title="Replay this exact trade (its strikes, fills and size) on the recorded option chain, once with its stops and once with none">
-                        Replay without stops
-                    </button>
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <button type="button" className={BTN} onClick={run}
+                            title="Replay this exact trade (its strikes, fills and size) on the recorded option chain, once with its stops and once with none">
+                            Replay without stops
+                        </button>
+                        <span className="text-fg-5">What would it have done with no stop? Follows this trade on the recorded option prices past its exit, to the time it would have closed.</span>
+                    </div>
                 )}
                 {st.status === 'loading' && <Spinner size="xs" label="Replaying on the recorded option chain…" />}
                 {st.status === 'error' && (

@@ -56,7 +56,7 @@ vi.mock('axios', () => {
 
 import axios from 'axios';
 import { TradeStopReplay, StopGridPanel } from './StopReplay.jsx';
-import { reasonText, stopsText, recoveryText } from './stopReplayFormat.js';
+import { reasonText, stopsText, recoveryText, firedLines, tradeStopsText } from './stopReplayFormat.js';
 
 const trade = {
     _id: 't1', symbol: 'NSE:NIFTY50-INDEX', entryAt: at(9, 20), exitAt: at(15, 10), netPnl: -1500, maeRupees: -2900, mfeRupees: 300,
@@ -79,6 +79,48 @@ describe('stop replay wording', () => {
         expect(recoveryText(REPORT)).toMatch(/First stop: leg stop at 09:36 IST — held with no stops, it DID come back into profit — best \+₹4,380/);
         expect(recoveryText({ ...REPORT, stopped: false, recovery: null })).toMatch(/No stop fired/);
         expect(recoveryText({ ...REPORT, recovery: { ...REPORT.recovery, bestAfterStop: -377, wentPositiveAfterStop: false } })).toMatch(/never got back above ₹0/);
+    });
+});
+
+// the 22-Oct LIVE straddle: CE leg stop first, then the ₹3,000 rupee stop closed the PE
+const CE = 'NSE:NIFTY26O2722600CE', PE = 'NSE:NIFTY26O2722600PE';
+const stoppedTrade = {
+    _id: 't2', symbol: 'NSE:NIFTY50-INDEX', entryAt: at(9, 20), exitAt: at(11, 47), netPnl: -3290, exitReason: 'MAX_LOSS', maeRupees: -3020,
+    path: [{ t: at(9, 21), net: -40 }, { t: at(11, 46), net: -2545 }, { t: at(11, 47), net: -3020, trigger: 'MAX_LOSS' }],
+    closedLegs: [
+        { symbol: CE, action: 'SELL', type: 'CE', strike: 22600, entryPrice: 173.1, exitPrice: 247.2, closeReason: 'LEG_SL', closedAt: at(11, 45), triggerQuote: 245.1 },
+        { symbol: PE, action: 'SELL', type: 'PE', strike: 22600, entryPrice: 170.45, exitPrice: 144.85, closeReason: 'MAX_LOSS' },
+    ],
+    exitTrigger: { reason: 'MAX_LOSS', at: at(11, 47), net: -3020, gross: -2890, spot: 22615, stops: { leg_sl_x: 1.4, sl_x_credit: 2, sl_pct_debit: 0, max_loss_rupees: 3000 } },
+    stops: { source: 'at exit', settings: { leg_sl_x: 1.4, sl_x_credit: 2, sl_pct_debit: 0, max_loss_rupees: 3000 }, legStops: { [CE]: 242.34, [PE]: 238.63 }, structurePnlUnit: -343.55, maxLossNetRupees: -3000 },
+};
+
+describe('a trade shows its own stops and what fired them (22-Oct-2026)', () => {
+    it('lists the stops it ran with and where they came from', () => {
+        expect(tradeStopsText(stoppedTrade.stops)).toBe('Its stops (at exit): leg stop 1.4× entry · structure stop 2× credit · rupee stop ₹3,000');
+        expect(tradeStopsText(null)).toBe(null);
+    });
+    it('says what fired, in order: the leg stop (level, tripping quote, fill), then the rupee stop and the fills', () => {
+        const lines = firedLines(stoppedTrade);
+        expect(lines[0]).toBe('SELL CE 22600: leg stop at ₹242.34 fired 11:45 on a quote of ₹245.10 — bought back at ₹247.20.');
+        expect(lines[1]).toBe('Rupee stop fired 11:47 on a net mark of -₹3,020 (stop -₹3,000); booked -₹3,290 — the exit fills came in ₹270 worse than that mark.');
+        expect(lines).toHaveLength(2);
+    });
+    it('a trade closed before the trigger was recorded says so instead of guessing', () => {
+        const old = { ...stoppedTrade, exitTrigger: undefined, closedLegs: [] };
+        const [line] = firedLines(old);
+        expect(line).toMatch(/^Closed by the rupee stop\. This trade did not record the mark that fired it/);
+        expect(firedLines({ ...old, exitReason: 'SQUARE_OFF' })).toEqual([]);
+    });
+    it('draws the rupee stop on the chart and states it above, without being asked', () => {
+        const { container } = render(<TradeStopReplay trade={stoppedTrade} />);
+        expect(screen.getByTestId('trade-stops').textContent).toMatch(/Its stops \(at exit\).*Rupee stop fired 11:47/s);
+        expect(container.textContent).toMatch(/Follows this trade on the recorded option prices past its exit/);
+        expect(axios.get).not.toHaveBeenCalledWith(expect.stringMatching(/stop-whatif/), expect.anything());
+    });
+    it('a trade that recorded no settings says so', () => {
+        render(<TradeStopReplay trade={{ ...stoppedTrade, stops: null }} />);
+        expect(screen.getByTestId('trade-stops').textContent).toMatch(/did not record its stop settings/);
     });
 });
 

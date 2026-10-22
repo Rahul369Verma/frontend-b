@@ -3062,16 +3062,24 @@ export default function MultiLeg() {
                                                     <div className="mb-2"><TradeStopReplay trade={full} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} /></div>
                                                     {allLegs.length > 0 ? (
                                                         <table className="w-full text-3xs font-mono text-fg-3">
-                                                            <thead><tr className="text-fg-5 text-left"><th>Leg</th><th>Strike</th><th className="text-right">Entry ₹</th><th className="text-right">Exit ₹</th><th>Close</th></tr></thead>
-                                                            <tbody>{allLegs.map((l, j) => (
+                                                            <thead><tr className="text-fg-5 text-left"><th>Leg</th><th>Strike</th><th className="text-right">Entry ₹</th><th className="text-right" title="the leg stop: a short leg is bought back at leg_sl_x × its entry premium">Stop ₹</th><th className="text-right">Exit ₹</th><th>Close</th></tr></thead>
+                                                            <tbody>{allLegs.map((l, j) => {
+                                                                const legStop = full.stops?.legStops?.[l.symbol];
+                                                                const legStopHit = l.closeReason === 'LEG_SL';
+                                                                return (
                                                                 <tr key={j} className="border-t border-line-0/60">
                                                                     <td className={l.action === 'BUY' ? 'text-success' : 'text-danger'}>{l.action} {l.type}</td>
                                                                     <td>{l.strike}{l.ratio > 1 ? ` ×${l.ratio}` : ''}</td>
                                                                     <td className="text-right">{fmt(l.entryPrice, 2)}</td>
+                                                                    <td className={`text-right ${legStopHit ? 'text-danger font-semibold' : 'text-fg-5'}`}
+                                                                        title={legStopHit && l.triggerQuote != null ? `tripped by a quote of ${fmt(l.triggerQuote, 2)}` : undefined}>
+                                                                        {legStop != null ? fmt(legStop, 2) : '—'}
+                                                                    </td>
                                                                     <td className="text-right">{l.exitPrice != null ? fmt(l.exitPrice, 2) : '—'}</td>
                                                                     <td className="text-fg-5">{l.closeReason || l.reason || l.status || '—'}</td>
                                                                 </tr>
-                                                            ))}</tbody>
+                                                                );
+                                                            })}</tbody>
                                                         </table>
                                                     ) : <div className="text-3xs text-fg-5">No leg detail stored for this trade.</div>}
                                                 </td></tr>
@@ -3547,7 +3555,7 @@ function Tile({ label, value, good, bad, small, help, title }) {
 // Book cost — the REAL bid/ask spread you pay on this symbol, measured from
 // 106k+ archived quotes rather than assumed. This exists because the backtester
 // used to price every symbol at a flat 0.50% half-spread: that flattered BANKEX
-// so badly (real ATM 2.78%, real 1-2% wing 17.54%) that a -₹739/trade strangle
+// so badly (real ATM 2.78%, real 1-2% wing 17.54% in Aug; ~17% / ~27% re-measured Oct) that a -₹739/trade strangle
 // backtested at +₹4,473. Loads automatically — an invisible cost is the whole
 // problem, so it must not be behind a button.
 const GRADE_STYLE = {

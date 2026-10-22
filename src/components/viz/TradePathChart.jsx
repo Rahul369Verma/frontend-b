@@ -57,6 +57,8 @@
  * OVERLAYS (optional) — other paths of the SAME trade, e.g. a replay with no stops:
  *   overlays = [{ key, name, points: [{ t, net }], slot?: 1|2, dashed?, faint? }]
  *   markers  = [{ t, text }]   vertical lines (e.g. where a stop fired)
+ *   stopLines = [{ y, label }]  horizontal lines on the ₹ axis where a stop sits (e.g. the
+ *              rupee stop at −₹3,000 net) — drawn even when no recorded mark reached them
  * They are drawn on the ₹ axis beside the recorded marks and listed in the tooltip;
  * the stat strip stays about what the trade actually did. *
  * INDIA VIX (optional) — vix = [{ ms, v }] 1-minute bars (the close, stamped when the bar
@@ -169,8 +171,9 @@ function PathTooltip({ active, payload, ct, fmtAt, markName, bookedName = 'booke
 
 const NO_OVERLAYS = [];
 const NO_MARKERS = [];
+const NO_STOP_LINES = [];
 
-export default function TradePathChart({ trade, istTime, istDateTime, istSpan, overlays = NO_OVERLAYS, markers = NO_MARKERS, vix = null }) {
+export default function TradePathChart({ trade, istTime, istDateTime, istSpan, overlays = NO_OVERLAYS, markers = NO_MARKERS, stopLines = NO_STOP_LINES, vix = null }) {
     const ct = useChartTheme();
     const [showGross, setShowGross] = useState(true);
     const fmtTime = istTime || defaultTime;
@@ -379,6 +382,10 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan, o
                         <ReferenceLine yAxisId="pnl" y={mfe} stroke={ct.status.good} strokeDasharray="4 3" ifOverflow="extendDomain"
                             label={{ value: `MFE ${rup(mfe)}`, fontSize: ct.type['5xs'], fill: ct.status.good, position: 'insideTopLeft' }} />
                     )}
+                    {stopLines.map((s, i) => (
+                        <ReferenceLine key={`stop${i}`} yAxisId="pnl" y={s.y} stroke={ct.status.critical} strokeWidth={1.5} ifOverflow="extendDomain"
+                            label={{ value: s.label, fontSize: ct.type['5xs'], fill: ct.status.critical, position: 'insideBottomRight' }} />
+                    ))}
                     {hasSpot && (
                         <Line yAxisId="spot" type="monotone" name="spot" dataKey="spot" stroke={ct.mark.live}
                             dot={false} strokeWidth={1} strokeDasharray="5 3" connectNulls isAnimationActive={false} />

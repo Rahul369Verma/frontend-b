@@ -1,7 +1,7 @@
 /**
  * Words and numbers for StopReplay.jsx (kept apart so the component file exports components only).
  */
-import { inr, istTime as tokIstTime } from '../viz/tokens';
+import { inr, premium, istTime as tokIstTime } from '../viz/tokens';
 
 export const rup = (v) => (v == null ? '—' : inr(v, { dp: 0 }));
 export const signed = (v) => (v == null ? '—' : inr(v, { dp: 0, sign: true }));
@@ -27,6 +27,45 @@ export function stopsText(s) {
         s.max_loss_rupees > 0 ? `rupee stop ${rup(s.max_loss_rupees)}` : 'rupee stop off',
     ];
     return parts.join(' · ');
+}
+
+const STOP_REASONS = new Set(['LEG_SL', 'LEG_SL_FLATTEN', 'SL_STRUCT', 'MAX_LOSS']);
+/** Did a stop (not a target, square-off or signal) close it? */
+export const isStopReason = (r) => STOP_REASONS.has(r);
+const legName = (l) => `${l.action} ${l.type}${l.strike != null ? ` ${l.strike}` : ''}`;
+const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
+/** "Its stops (as opened): leg stop 1.4× entry · structure stop 2× credit · rupee stop ₹3,000" */
+export function tradeStopsText(stops) {
+    if (!stops || !stops.settings) return null;
+    return `Its stops (${stops.source}): ${stopsText(stops.settings)}`;
+}
+
+/**
+ * What fired, in order: each leg stop (its level, the quote that tripped it, the fill), then
+ * the structure's own exit (the rule, when, the net mark it saw, what the fills then booked).
+ * Trades closed before 22-Oct-2026 did not record the firing mark — said so, not guessed.
+ */
+export function firedLines(trade) {
+    const out = [];
+    const stops = trade && trade.stops;
+    for (const l of (trade && trade.closedLegs) || []) {
+        if (l.closeReason !== 'LEG_SL') continue;
+        const level = stops && stops.legStops ? stops.legStops[l.symbol] : null;
+        out.push(`${legName(l)}: leg stop${level != null ? ` at ${premium(level)}` : ''}${l.closedAt ? ` fired ${hhmm(l.closedAt)}` : ''}`
+            + `${l.triggerQuote != null ? ` on a quote of ${premium(l.triggerQuote)}` : ''} — bought back at ${premium(l.exitPrice)}.`);
+    }
+    const t = trade && trade.exitTrigger;
+    if (t && t.reason) {
+        const level = t.reason === 'MAX_LOSS' && stops && stops.maxLossNetRupees != null ? ` (stop ${signed(stops.maxLossNetRupees)})` : '';
+        const gap = t.net != null && trade.netPnl != null ? Math.round(trade.netPnl - t.net) : null;
+        const fills = gap == null || gap === 0 ? '' : gap < 0 ? ` — the exit fills came in ${rup(-gap)} worse than that mark` : ` — the exit fills came in ${rup(gap)} better than that mark`;
+        out.push(`${cap(reasonText(t.reason))} fired ${hhmm(t.at)} on a net mark of ${signed(t.net)}${level}; booked ${signed(trade.netPnl)}${fills}.`);
+    } else if (trade && isStopReason(trade.exitReason)) {
+        out.push(`Closed by the ${reasonText(trade.exitReason)}. This trade did not record the mark that fired it (recorded from 22-Oct-2026): `
+            + 'marks are kept once a minute while the stop is checked every loop, so the chart\'s last point can sit short of the stop.');
+    }
+    return out;
 }
 
 /** The sentence that answers "would it have gone positive again?" */

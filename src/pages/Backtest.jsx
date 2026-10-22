@@ -96,6 +96,11 @@ const FALLBACK_GEMINI_MODELS = [
     { id: 'claude-opus-4-8',               label: 'Claude Opus 4.8 🎯',          quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
     { id: 'claude-opus-5',                 label: 'Claude Opus 5 🏛️',            quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
     { id: 'claude-fable-5',                label: 'Claude Fable 5 🏛️ (deprecated)', quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
+    // the 5.5 family + Fable 5.1 (ids checked against the Anthropic models list, 21-Oct-2026)
+    { id: 'claude-opus-5-5',               label: 'Claude Opus 5.5 🏛️ (newest)',  quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
+    { id: 'claude-sonnet-5-5',             label: 'Claude Sonnet 5.5 ⭐',         quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
+    { id: 'claude-haiku-5-5',              label: 'Claude Haiku 5.5 ⚡',          quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
+    { id: 'claude-fable-5-1',              label: 'Claude Fable 5.1 🏛️',          quota: 'unlimited', group: '🤖 Claude (Anthropic)' },
 ];
 
 // Group resolver — maps model ID prefix → user-friendly group label.
@@ -4159,6 +4164,10 @@ export default function Backtest() {
                                           <option value="claude-opus-4-7">Claude Opus 4.7 (API)</option>
                                           <option value="claude-opus-4-8">Claude Opus 4.8 (API)</option>
                                           <option value="claude-opus-5">Claude Opus 5 (API)</option>
+                                          <option value="claude-opus-5-5">Claude Opus 5.5 (API) — newest</option>
+                                          <option value="claude-sonnet-5-5">Claude Sonnet 5.5 (API) — balanced</option>
+                                          <option value="claude-haiku-5-5">Claude Haiku 5.5 (API) — fastest</option>
+                                          <option value="claude-fable-5-1">Claude Fable 5.1 (API)</option>
                                       </optgroup>
                                   </select>
                                   <p className="text-3xs text-fg-5 mt-1">
@@ -4175,6 +4184,8 @@ export default function Backtest() {
                                       🍪 Web-session models read cookies from{' '}
                                       <a href="/settings" className="text-warning underline hover:text-warning">Settings → AI Web Cookies</a>.
                                       If cookies aren't saved there, the call will fail at runtime with the actual reason.
+                                      {' '}claude.ai currently refuses server requests with a Cloudflare browser check; a claude-web model then
+                                      answers through its matching official-API model (needs CLAUDE_API_KEY with credits), and each answer says so.
                                   </div>
                               )}
 

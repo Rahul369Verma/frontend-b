@@ -73,6 +73,34 @@ describe('DirectionConfidenceView', () => {
         fireEvent.click(screen.getByLabelText('Follow blocked trades as ghosts'));
         expect(onTrackBlocked).toHaveBeenCalledWith(false);
     });
+    it('enforce: blocked trades count toward confidence — switch, per-side count, evidence line, restored probe count', () => {
+        const onLearnBlocked = vi.fn();
+        const d = { ...base, mode: 'enforce', opts: { ...base.opts, trackBlocked: true, learnFromBlocked: true },
+            sides: { ...base.sides, CE: { ...base.sides.CE, ghosts: { n: 3, net: -5456 } } },
+            ghostEvidence: { closed: 3, learned: 3 },
+            live: { ...base.live, creditRestore: { status: 'restored', sides: { PE: { credit: 2 / 3 } } } } };
+        render(<DirectionConfidenceView data={d} onMode={() => {}} onTrackBlocked={() => {}} onLearnBlocked={onLearnBlocked} />);
+        const box = screen.getByLabelText('Blocked trades count toward confidence');
+        expect(box.checked).toBe(true);
+        fireEvent.click(box);
+        expect(onLearnBlocked).toHaveBeenCalledWith(false);
+        const ce = screen.getByTestId('side-CE');
+        fireEvent.click(within(ce).getByRole('button', { name: /Numbers/ }));
+        expect(ce.textContent).toMatch(/of which blocked trades3 · -₹5,456/);
+        fireEvent.click(screen.getByRole('button', { name: /Show details/ }));
+        expect(screen.getByTestId('ghost-evidence').textContent).toMatch(/3 closed blocked trades .* count toward confidence/);
+        expect(screen.getByTestId('probe-restore').textContent).toBe('Probe count restored from the decision journal after the last restart (PE 2 of 3).');
+    });
+    it('enforce: without ghost tracking there is nothing to learn from, so the switch is off and disabled', () => {
+        const d = { ...base, mode: 'enforce', opts: { ...base.opts, trackBlocked: false, learnFromBlocked: true },
+            ghostEvidence: { closed: 2, learned: 0 }, live: { ...base.live, creditRestore: { status: 'failed', reason: 'db down' } } };
+        render(<DirectionConfidenceView data={d} onMode={() => {}} onTrackBlocked={() => {}} onLearnBlocked={() => {}} />);
+        const box = screen.getByLabelText('Blocked trades count toward confidence');
+        expect(box.checked).toBe(false); expect(box.disabled).toBe(true);
+        fireEvent.click(screen.getByRole('button', { name: /Show details/ }));
+        expect(screen.getByTestId('ghost-evidence').textContent).toMatch(/are NOT counted/);
+        expect(screen.getByTestId('probe-restore').textContent).toMatch(/NOT restored .*db down.*started from zero/);
+    });
     it('says in words what the gate does to each side', () => {
         const weak = { label: 'WEAK' };
         expect(sideMeaning(weak, { mode: 'enforce', probeEvery: 3, left: 2, floor: 0.4 })).toBe('Below the 40% floor — these signals are blocked; 1 in 3 goes through as a probe (next probe in 2 signals).');

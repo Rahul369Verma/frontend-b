@@ -1,6 +1,6 @@
 /** Pure helpers for the backtest direction-gate controls and panel (Fast Refresh: no components here). */
 
-export const GATE_DEFAULTS = { mode: 'off', floor: 0.4, halfLife: 3, probeEvery: 3, minNeff: 3 };
+export const GATE_DEFAULTS = { mode: 'off', floor: 0.4, halfLife: 3, probeEvery: 3, minNeff: 3, learnBlocked: true };
 
 /**
  * Backtest request fields for the gate. OFF sends nothing, so the request — and the
@@ -14,7 +14,17 @@ export function gateParams(g) {
         direction_gate_half_life: Number(g.halfLife),
         direction_gate_probe_every: Number(g.probeEvery),
         direction_gate_min_neff: Number(g.minNeff),
+        // enforce: a blocked signal's result counts toward its side, as live (default on)
+        ...(g.mode === 'enforce' ? { direction_gate_learn_blocked: g.learnBlocked !== false } : {}),
     };
+}
+
+/** What became of a blocked backtest signal that was not (or could not be) followed. */
+export function blockedOutcome(b) {
+    if (!b || !b.ghost) return '—';
+    if (b.ghost === 'followed') return 'followed';
+    if (b.ghost === 'unmatched') return 'no gate-off trade at this candle';
+    return 'not followed (no gate-off run)';
 }
 
 export const DECISION_TONE = { ALLOW: 'good', PROBE: 'info', BLOCK: 'critical', THIN: 'muted', NONE: 'muted', UNMEASURED: 'warning' };

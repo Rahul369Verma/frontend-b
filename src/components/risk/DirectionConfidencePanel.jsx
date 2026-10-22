@@ -75,6 +75,10 @@ function SideTile({ meta, side, opts, credit, mode }) {
                         <span>Win rate (decayed)</span><span className="text-fg-3 tabular-nums text-right">{pct0(side?.winRate)}</span>
                         <span>Avg R (decayed)</span><span className="text-fg-3 tabular-nums text-right">{n(side?.meanR) == null ? '—' : n(side.meanR).toFixed(2)}</span>
                         <span>Net in window</span><span className={`tabular-nums text-right ${pnlTone(side?.netRs)}`}>{inr(side?.netRs, { sign: true })}</span>
+                        {side?.ghosts?.n > 0 && <>
+                            <span title="Signals the gate blocked, followed at real prices (no order); their results count like taken trades">…of which blocked trades</span>
+                            <span className="text-fg-3 tabular-nums text-right">{side.ghosts.n} · <span className={pnlTone(side.ghosts.net)}>{inr(side.ghosts.net, { sign: true })}</span></span>
+                        </>}
                     </div>
                 </div>
             )}
@@ -83,8 +87,20 @@ function SideTile({ meta, side, opts, credit, mode }) {
 }
 
 
+/** The probe count after a restart — restored from the decision journal, or why not. */
+function probeRestoreLine(r, probeEvery = 3) {
+    if (!r) return null;
+    if (r.status === 'restored') {
+        const parts = Object.entries(r.sides || {}).map(([k, v]) => `${k} ${Math.round(v.credit * probeEvery)} of ${probeEvery}`);
+        return `Probe count restored from the decision journal after the last restart${parts.length ? ` (${parts.join(', ')})` : ' (no earlier decisions)'}.`;
+    }
+    if (r.status === 'failed') return `Probe count NOT restored after the last restart (${r.reason}) — it started from zero; the engine retries every minute.`;
+    if (r.status === 'skipped') return `Probe count not restored: ${r.reason}.`;
+    return null;
+}
+
 function Details({ data }) {
-    const { opts, history, scorecard, live, excluded, mode } = data;
+    const { opts, history, scorecard, live, excluded, mode, ghostEvidence } = data;
     const sc = scorecard || {};
     const wb = sc.wouldBlock || { n: 0 };
     const en = sc.enforce || null;
@@ -130,20 +146,29 @@ function Details({ data }) {
                     ]} />
             </div>
             {live?.stale && <StatusBadge level="warning">Engine snapshot is stale or not running — decisions fail open</StatusBadge>}
+            {probeRestoreLine(live?.creditRestore, opts?.probeEvery) && <p className="text-2xs text-fg-4" data-testid="probe-restore">{probeRestoreLine(live?.creditRestore, opts?.probeEvery)}</p>}
+            {ghostEvidence?.closed > 0 && (
+                <p className="text-2xs text-fg-4" data-testid="ghost-evidence">
+                    {ghostEvidence.learned > 0
+                        ? `${ghostEvidence.learned} closed blocked trade${ghostEvidence.learned === 1 ? '' : 's'} (followed at real prices, no order) count toward confidence alongside the real trades.`
+                        : `${ghostEvidence.closed} closed blocked trade${ghostEvidence.closed === 1 ? '' : 's'} are NOT counted — confidence learns from taken trades only.`}
+                </p>
+            )}
             <p className="text-3xs text-fg-5">
                 Pure maths, no AI: R = net P&L ÷ rupees risked, half-life {opts?.halfLifeSessions} sessions, sceptical prior worth {opts?.priorTrades} trades
-                at 0, confidence = P(mean R &gt; 0). Old results fade, so a blocked side drifts back to 50% on its own; winning probes bring it back faster.
+                at 0, confidence = P(mean R &gt; 0). Old results fade, so a blocked side drifts back to 50% on its own; winning probes{opts?.learnFromBlocked !== false ? ' and winning blocked trades' : ''} bring it back faster.
                 {excluded?.count ? ` ${excluded.count} trade${excluded.count === 1 ? '' : 's'} excluded (${Object.entries(excluded.reasons || {}).map(([k, v]) => `${v} ${k}`).join(', ')}).` : ''}
             </p>
         </div>
     );
 }
 
-export function DirectionConfidenceView({ data, onMode, onTrackBlocked, busy, blocked = null, decisions = null, history = null }) {
+export function DirectionConfidenceView({ data, onMode, onTrackBlocked, onLearnBlocked, busy, blocked = null, decisions = null, history = null }) {
     const [details, setDetails] = useState(false);
     if (!data) return null;
     const { sides, opts, mode, live } = data;
     const trackBlocked = opts?.trackBlocked !== false;
+    const learnBlocked = opts?.learnFromBlocked !== false;
     const v = gateVerdict(data);
     return (
         <div className="space-y-3">
@@ -160,6 +185,13 @@ export function DirectionConfidenceView({ data, onMode, onTrackBlocked, busy, bl
                 <label className="inline-flex items-center gap-2 text-2xs text-fg-4" title="Carry each blocked signal down the real entry path and follow it at real prices (never an order), so you can see what it would have made">
                     <input type="checkbox" checked={trackBlocked} disabled={busy} onChange={(e) => onTrackBlocked(e.target.checked)} aria-label="Follow blocked trades as ghosts" />
                     Follow blocked trades at real prices (to see what they would have made)
+                </label>
+            )}
+            {onLearnBlocked && mode === 'enforce' && (
+                <label className="inline-flex items-center gap-2 text-2xs text-fg-4"
+                    title={trackBlocked ? 'A blocked trade, once closed, counts toward its side\'s confidence exactly like a taken trade — so a blocked side can earn its way back (or stay shut) on what its signals really did, not only on 1 probe in N' : 'Needs "Follow blocked trades" — without it there is no result to learn from'}>
+                    <input type="checkbox" checked={learnBlocked && trackBlocked} disabled={busy || !trackBlocked} onChange={(e) => onLearnBlocked(e.target.checked)} aria-label="Blocked trades count toward confidence" />
+                    Blocked trades count toward confidence (their results at real prices)
                 </label>
             )}
             {busy && <Spinner label="Saving…" />}
@@ -230,6 +262,17 @@ export default function DirectionConfidencePanel() {
         } finally { setBusy(false); }
     };
 
+    const onLearnBlocked = async (learnFromBlocked) => {
+        setBusy(true);
+        try {
+            await axios.post(`${API_URL}/analytics/direction-confidence/settings`, { learnFromBlocked });
+            toast.success(learnFromBlocked ? 'Blocked trades now count toward confidence' : 'Confidence learns from taken trades only');
+            await load();
+        } catch (e) {
+            toast.error(e?.response?.data?.error || e.message);
+        } finally { setBusy(false); }
+    };
+
     const onTrackBlocked = async (trackBlocked) => {
         setBusy(true);
         try {
@@ -247,7 +290,7 @@ export default function DirectionConfidencePanel() {
                 subtitle="How much recent trades trust each side, and which trades the gate blocked">
                 {err && <Placeholder>Could not load direction confidence: {err}</Placeholder>}
                 {!data && !err && <Spinner label="Loading direction confidence…" />}
-                <DirectionConfidenceView data={data} onMode={onMode} onTrackBlocked={onTrackBlocked} busy={busy}
+                <DirectionConfidenceView data={data} onMode={onMode} onTrackBlocked={onTrackBlocked} onLearnBlocked={onLearnBlocked} busy={busy}
                     blocked={<BlockedTrades />} decisions={<GateDecisions />} history={<DirectionGateHistory />} />
             </Card>
         </div>
