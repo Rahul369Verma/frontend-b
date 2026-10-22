@@ -99,6 +99,24 @@ export function vixMoveOver(vixPoints, fromMs, toMs) {
 }
 
 /**
+ * India VIX over a whole holding period: as known at entry and at exit, the move, and
+ * the low and high of the bars that ENDED while it was held. Null when entry or exit
+ * VIX is unknown. Bars are 1-minute closes stamped when the bar ended (never back-filled).
+ * → { from, to, change, low, high } | null
+ */
+export function vixRangeOver(vixPoints, fromMs, toMs) {
+    const move = vixMoveOver(vixPoints, fromMs, toMs);
+    if (!move) return null;
+    let low = Math.min(move.from, move.to), high = Math.max(move.from, move.to);
+    for (const p of cleanVix(vixPoints)) {
+        if (p.ms <= fromMs || p.ms > toMs) continue;
+        if (p.v < low) low = p.v;
+        if (p.v > high) high = p.v;
+    }
+    return { ...move, low: round2(low), high: round2(high) };
+}
+
+/**
  * What VIX did while a trade was held ON THIS DAY: from the later of its entry
  * and the day's first VIX bar, to the earlier of its exit and the day's end.
  * A carried position therefore gets only this day's slice — the same rule its

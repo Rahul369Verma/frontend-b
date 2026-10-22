@@ -63,6 +63,66 @@ describe('StrategyScorecard', () => {
     });
 });
 
+describe('StrategyScorecard — ready for live, filters, columns (23-Oct-2026)', () => {
+    beforeEach(() => localStorage.clear());
+    const CHECKS = [
+        { id: 'evidence.backtest', group: 'evidence', title: 'Backtest with real costs, out of sample', level: 'soft', status: 'fail', have: 'none on record', need: '≥ 10 out-of-sample trades with positive net P&L after costs', fix: 'Auto-optimize the saved strategy.' },
+        { id: 'evidence.paperSample', group: 'evidence', title: 'Paper record: enough trades', level: 'soft', status: 'pass', have: '20 closed trades over 15 days', need: '≥ 20 trades over ≥ 5 days', fix: null },
+        { id: 'quality.consistency', group: 'quality', title: 'Makes money through the range, not in one stretch', level: 'info', status: 'pass', have: '62 — 4 of 5 weeks profitable', need: 'consistency ≥ 50', fix: null },
+    ];
+    const CONS = (score) => ({ score, bucket: 'week', periods: 5, profitable: 4, losing: 1, idle: 0, smoothedRate: 0.71, r2: 0.87, top20Share: 0.4, longestUnderwaterDays: 3, worstPeriod: { key: '2026-10-05', net: -800 }, bestPeriod: { key: '2026-10-12', net: 6000 }, buckets: [] });
+    const rr = (i, over = {}) => row(i, {
+        trades: 20, verdict: 'on-track', consistency: CONS(30 + i * 10), romPct: 0.1 * i, margin: { perLot: 206000, basis: 'span', n: 20 }, worstTrade: -2000, tStat: 1.5,
+        readiness: { status: 'not-ready', failing: ['Backtest with real costs, out of sample'], passed: 2, total: 3, checks: CHECKS }, ...over,
+    });
+    const SC2 = (rows) => ({ data: { minTrades: 20, rows, verdictCounts: { 'on-track': rows.length - 1, drifting: 1 }, readinessCounts: { 'not-ready': rows.length }, quality: { minConsistency: 50 }, windowed: false, open: { n: 0, mtmNet: 0, unmarked: 0 } }, err: null });
+
+    it('the Live check opens the go-live evidence, the quality checks and the consistency behind a row', () => {
+        wrap(<StrategyScorecard sc={SC2([rr(1)])} />);
+        const tr = screen.getByRole('link', { name: 'strat-1 (PAPER)' }).closest('tr');
+        expect(within(tr).getByText('40')).toBeInTheDocument();
+        fireEvent.click(within(tr).getByRole('button', { name: /Live check for strat-1 \(PAPER\): Not yet · 2\/3/ }));
+        const d = screen.getByTestId('detail-d1');
+        expect(within(d).getByText(/Not ready for go-live: 1 required check fails — Backtest with real costs, out of sample/)).toBeInTheDocument();
+        expect(within(d).getByText('Backtest with real costs, out of sample')).toBeInTheDocument();
+        expect(within(d).getByText('Auto-optimize the saved strategy.')).toBeInTheDocument();
+        expect(within(d).getByText('Makes money through the range, not in one stretch')).toBeInTheDocument();
+        expect(within(d).getByText(/2,06,000 per lot · broker SPAN/)).toBeInTheDocument();
+        expect(within(d).getByText('Profitable weeks')).toBeInTheDocument();
+        expect(within(d).getByRole('link', { name: 'Go-Live page' })).toHaveAttribute('href', '/go-live');
+        fireEvent.click(screen.getByRole('button', { name: 'Details for strat-1 (PAPER)' }));
+        expect(screen.queryByTestId('detail-d1')).not.toBeInTheDocument();
+    });
+
+    it('filters: a preset narrows the list, says how many it hid, and clears; verdict chips filter too', () => {
+        const rows = [rr(1), rr(2), rr(3, { verdict: 'drifting' }), rr(4, { costPct: 70 })];
+        wrap(<StrategyScorecard sc={SC2(rows)} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+        fireEvent.click(within(screen.getByTestId('scorecard-filters')).getByRole('button', { name: 'Live candidates' }));
+        // consistency 40/50/60/70 → ≥ 50 leaves 2, 3 and 4; costs ≤ 50 drops 4
+        expect(screen.queryByRole('link', { name: 'strat-1 (PAPER)' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: 'strat-4 (PAPER)' })).not.toBeInTheDocument();
+        expect(screen.getByText(/2 of 4 match the filters — 2 hidden/)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /^Filters \(\d\)$/ })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+        expect(screen.getAllByRole('link', { name: /strat-\d/ })).toHaveLength(4);
+        fireEvent.click(screen.getByRole('button', { name: /Drifting · 1/ }));
+        expect(screen.getAllByRole('link', { name: /strat-\d/ }).map(a => a.textContent)).toEqual(['strat-3 (PAPER)']);
+        expect(JSON.parse(localStorage.getItem('multileg:scorecard:filters')).verdicts).toEqual(['drifting']);
+    });
+
+    it('sorts by consistency, and the column picker hides a column and remembers it', () => {
+        wrap(<StrategyScorecard sc={SC2([rr(1), rr(3), rr(2)])} />);
+        fireEvent.change(screen.getByRole('combobox', { name: /Sort/ }), { target: { value: 'consistency' } });
+        expect(screen.getAllByRole('link', { name: /strat-\d/ }).map(a => a.textContent)).toEqual(['strat-3 (PAPER)', 'strat-2 (PAPER)', 'strat-1 (PAPER)']);
+        expect(screen.getByRole('columnheader', { name: /Consistency/ })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Columns' }));
+        fireEvent.click(within(screen.getByTestId('scorecard-columns')).getByRole('checkbox', { name: 'Consistency' }));
+        expect(screen.queryByRole('columnheader', { name: /Consistency/ })).not.toBeInTheDocument();
+        expect(JSON.parse(localStorage.getItem('multileg:scorecard:columns'))).not.toContain('consistency');
+    });
+});
+
 describe('ExcursionsPanel', () => {
     const X = {
         n: 3, missing: 1, giveBackMedianPct: 67, inProfitN: 3,

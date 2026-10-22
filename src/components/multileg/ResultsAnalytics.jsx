@@ -21,8 +21,10 @@
  *
  * The days window (30 / 90 / all) comes from the page when it passes `days`
  * (Multi-Leg Results: one window for the whole page); otherwise the panel
- * keeps its own toggle (Live Portfolio). Book, deployment and symbol come from
- * the Results tab's filter row.
+ * keeps its own toggle (Live Portfolio). A DATE RANGE (or one day) arrives as
+ * `since`/`until` (epoch ms, until exclusive) and wins over `days`; `onPickDay`
+ * lets a click on a daily bar or a calendar day pick that day for the whole page.
+ * Book, deployment and symbol come from the Results tab's filter row.
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -129,6 +131,9 @@ export default function ResultsAnalytics({
     // Controlled by the page when given (Multi-Leg Results scopes its whole page
     // with one window); otherwise the panel keeps its own (Live Portfolio).
     days: daysProp,
+    since = null, until = null,      // a date range by exit (ms, until exclusive) — wins over `days`
+    windowText = null,               // how the page names its window ("21 Oct 2026")
+    onPickDay = null,                // (YYYY-MM-DD) → scope the page to that exit day
 }) {
     const ct = useChartTheme();
     const [ownDays, setDays] = useState('all');
@@ -143,21 +148,25 @@ export default function ResultsAnalytics({
     // a setState inside the effect (a cascading render, and one that would paint
     // last filter's P&L under this filter's heading for a frame).
     const reqKey = useMemo(
-        () => JSON.stringify([deploymentId, tradeMode, symbol, days, templateFilter, nonce]),
-        [deploymentId, tradeMode, symbol, days, templateFilter, nonce],
+        () => JSON.stringify([deploymentId, tradeMode, symbol, days, since, until, templateFilter, nonce]),
+        [deploymentId, tradeMode, symbol, days, since, until, templateFilter, nonce],
     );
+    const ranged = since != null || until != null;
 
     const params = useMemo(() => {
         const p = {};
         if (deploymentId && deploymentId !== 'all') p.deploymentId = deploymentId;
         if (tradeMode && tradeMode !== 'all') p.trade_mode = tradeMode;
         if (symbol && symbol !== 'all') p.symbol = symbol;
-        if (days !== 'all') p.days = days;
+        if (since != null || until != null) {
+            if (since != null) p.since = since;
+            if (until != null) p.until = until;
+        } else if (days !== 'all') p.days = days;
         // the endpoint honours `template` now, so the Structure filter reaches
         // these figures instead of only the table below
         if (templateFilter && templateFilter !== 'all') p.template = templateFilter;
         return p;
-    }, [deploymentId, tradeMode, symbol, days, templateFilter]);
+    }, [deploymentId, tradeMode, symbol, days, since, until, templateFilter]);
 
     useEffect(() => {
         let dead = false;
@@ -230,7 +239,7 @@ export default function ResultsAnalytics({
     const activeTab = tabs[tabIdx] || null;
     const active = activeTab?.breakdown || null;
     // 'all' means "span the whole data set", which <PnlCalendar> spells `null`.
-    const calendarDays = days === 'all' ? null : (Number(days) || null);
+    const calendarDays = ranged || days === 'all' ? null : (Number(days) || null);
     const rows = useMemo(() => {
         const list = Array.isArray(active?.rows) ? active.rows.map((r) => ({ ...r, costPct: costPctOf(r) })) : [];
         const dir = sort.dir === 'desc' ? -1 : 1;
@@ -289,7 +298,7 @@ export default function ResultsAnalytics({
                     : !summary ? <div className="text-xs text-fg-5">{loading ? 'Loading…' : 'No analytics available.'}</div>
                     : summary.trades === 0 ? (
                         <div className="text-xs text-fg-5">
-                            No booked round-trips in this window{days !== 'all' ? ` (last ${days} days)` : ''}.
+                            No booked round-trips in this window{windowText ? ` (${windowText})` : days !== 'all' ? ` (last ${days} days)` : ''}.
                             {num(summary.excludedQuarantined) > 0 ? ` ${summary.excludedQuarantined} quarantined trade(s) were excluded.` : ''}
                         </div>
                     ) : (
@@ -364,7 +373,10 @@ export default function ResultsAnalytics({
                     <Panel bodyClassName="space-y-4" title="P&L over time" subtitle="Daily net P&L and the equity curve, by exit day (IST)" storageKey="fold:results|pnl-over-time">
 {/* 2 ── Daily P&L */}
                 <div>
-                    <div className="text-2xs font-semibold text-fg-3 mb-1">Daily net P&L (₹, by exit day IST)</div>
+                    <div className="text-2xs font-semibold text-fg-3 mb-1">
+                        Daily net P&L (₹, by exit day IST)
+                        {onPickDay && <span className="ml-1 font-normal text-fg-5">— click a bar to see that day&apos;s trades</span>}
+                    </div>
                     <ZoomableChart data={dailyRows} height={200}>
                         <ComposedChart margin={{ top: 6, right: 10, bottom: 2, left: 4 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
@@ -380,8 +392,10 @@ export default function ResultsAnalytics({
                                     return d ? `${d.date} · ${fmt(d.trades)} trade(s) · ${fmt(d.winRate)}% win` : String(l);
                                 }} />
                             <ReferenceLine y={0} stroke={ct.axis} ifOverflow="extendDomain" />
-                            <Bar name="up" dataKey="up" stackId="net" fill={ct.diverging.positive} isAnimationActive={false} />
-                            <Bar name="down" dataKey="down" stackId="net" fill={ct.diverging.negative} isAnimationActive={false} />
+                            <Bar name="up" dataKey="up" stackId="net" fill={ct.diverging.positive} isAnimationActive={false}
+                                cursor={onPickDay ? 'pointer' : undefined} onClick={onPickDay ? (b) => b?.payload?.date && onPickDay(b.payload.date) : undefined} />
+                            <Bar name="down" dataKey="down" stackId="net" fill={ct.diverging.negative} isAnimationActive={false}
+                                cursor={onPickDay ? 'pointer' : undefined} onClick={onPickDay ? (b) => b?.payload?.date && onPickDay(b.payload.date) : undefined} />
                         </ComposedChart>
                     </ZoomableChart>
                 </div>
@@ -427,10 +441,10 @@ export default function ResultsAnalytics({
                         </div>
                         {activeTab?.calendar ? (
                             <div className="pt-2">
-                                <PnlCalendar daily={daily} rangeDays={calendarDays} title={null} />
+                                <PnlCalendar daily={daily} rangeDays={calendarDays} title={null} onPickDay={onPickDay} />
                                 <div className="text-3xs text-fg-5 mt-1">
                                     One cell per calendar day, by exit day IST. Grey = no exits that day;
-                                    the darkest shade is a day past ±₹5,000.
+                                    the darkest shade is a day past ±₹5,000.{onPickDay ? ' Click a day to see its trades.' : ''}
                                 </div>
                             </div>
                         ) : rows.length === 0 ? (

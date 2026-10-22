@@ -69,6 +69,19 @@ describe('ResultsAnalytics drill-down', () => {
             { params: expect.objectContaining({ days: 30, drill: DTE }) });
     });
 
+    it('a date range (or one day) reaches every request as since/until and wins over days; a calendar day picks itself', async () => {
+        const since = Date.parse('2026-10-07T00:00:00+05:30'), until = since + 864e5;
+        const onPickDay = vi.fn();
+        renderIt({ days: 'all', since, until, windowText: '7 Oct 2026', onPickDay });
+        await screen.findByRole('button', { name: DTE });
+        const call = axios.get.mock.calls.find(([u]) => u.includes('/multileg/analytics'));
+        expect(call[1].params).toEqual(expect.objectContaining({ since, until }));
+        expect(call[1].params.days).toBeUndefined();
+        fireEvent.click(screen.getByRole('button', { name: 'Calendar' }));
+        fireEvent.click(screen.getByRole('button', { name: /2026-10-07 .*show that day's trades/ }));
+        expect(onPickDay).toHaveBeenCalledWith('2026-10-07');
+    });
+
     it('leads with five headline figures and the cost of trading; the rest on request', async () => {
         renderIt();
         const line = await screen.findByText((_, el) => el?.tagName === 'P' && /^Charges took 55% of gross profit/.test(el.textContent));

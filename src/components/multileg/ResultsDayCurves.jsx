@@ -24,7 +24,7 @@ function errorText(e) {
     return d?.error || e?.message;
 }
 
-export default function ResultsDayCurves({ filter, since }) {
+export default function ResultsDayCurves({ filter, since, until = null }) {
     const boxRef = useRef(null);
     const [seen, setSeen] = useState(() => typeof IntersectionObserver === 'undefined');
     const [curves, setCurves] = useState(null);
@@ -38,7 +38,7 @@ export default function ResultsDayCurves({ filter, since }) {
         return () => io.disconnect();
     }, [seen]);
 
-    const params = useMemo(() => filterParams(filter, since), [filter, since]);
+    const params = useMemo(() => filterParams(filter, since, until), [filter, since, until]);
     useEffect(() => {
         if (!seen) return undefined;
         let dead = false;

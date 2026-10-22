@@ -258,7 +258,14 @@ Name, mode (PAPER / LIVE), status (ACTIVE / STOPPED) and position state (IDLE, E
 - **MTM today** — a small line of the open structure's value through the day.
 - **Greeks line** — Δ ₹/pt, V ₹/IV-pt (of legs still open), Θ ₹/day and the volatility percentile at entry.
 
-For time-entry deployments the card says when the next entry arms; a **stood down** note explains why no structure was entered today.`,
+For time-entry deployments the card says when the next entry arms; a **stood down** note explains why no structure was entered today.
+
+### Editing a deployment
+**✏️ Edit** loads the deployment's own settings into the builder. Change what you need (and backtest it if you like), then press **Save to deployment**. Before anything is saved you see every change, its old and new value, and when it takes effect:
+- **Exit settings** — stops (leg stop, structure stop, rupee stop), profit target, square-off, hold days, days-to-expiry exit — act on an **open structure at its next check** (about 10 seconds).
+- **Everything else** — entry time and days, strikes, size, filters — acts from the **next entry**.
+
+Not editable here: the structure, the symbol, the entry trigger (time or signal) and the trading mode — those make it a different strategy (save and deploy it) or belong to the go-live gate. A **LIVE** deployment can be sized **down** but not up (demote it, edit, promote it again). A structure with unlimited loss must keep **both** a leg stop and a structure stop. Every edit is written to the deployment's journal; the saved strategy it came from is not changed.`,
         },
         {
             id: 'risk-graph',
@@ -306,7 +313,9 @@ Below it, **Structure trades** lists every completed round-trip of the deploymen
             md: `What the deployments have booked. Everything here counts **closed** round-trips; open structures appear separately under *Open now*.
 
 ### Filters
-**Book** (all / LIVE / PAPER), **Deployment** (a deployment opened from a card's 🧾 results link is preselected and highlighted; **✕ all** clears it), **Structure**, **Symbol**, and the **window** (last 30 / 90 days / all, by exit date).
+**Book** (all / LIVE / PAPER), **Deployment** (a deployment opened from a card's 🧾 results link is preselected and highlighted; **✕ all** clears it), **Structure**, **Symbol**, and the **window** (last 30 / 90 days / all, by exit date) — or **Dates**: a From → To range of whole IST days by exit, and for **one day** set From and To to the same date (**Today**, and ◀ ▶ step a trading day). The window scopes the whole page: the figures, the breakdowns, the round-trips table and the day curves. It is kept in the address (\`?from=…&to=…\`), so a day can be bookmarked.
+
+**One day's results:** click a bar in *Daily net P&L* or a day in the *Calendar* tab — the page switches to that day. Then **Breakdowns → Deployment** ranks the strategies by that day's net, and sorting the round-trips by **Net ₹** puts the best and worst trades first. **One strategy's trades:** pick it in **Deployment** (or click its name in the Deployment breakdown).
 
 ### Scorecard
 One row per deployment with a **verdict** that compares its live per-trade result with its own saved backtest:
@@ -322,10 +331,25 @@ One row per deployment with a **verdict** that compares its live per-trade resul
 
 **Fading** marks a profitable deployment whose most recent trades lost. **Open now** lists structures currently open with their net MTM. **Compare** overlays the equity curves of the deployments you tick.
 
+### Which strategies are ready for real money?
+Each row has a **Live check** — click it (or the ▸ before the name) for the full list:
+- **Go-live evidence** — the *same* checks the [Go-Live page](go-live) makes before a promotion: an out-of-sample backtest (an Auto-optimize save linked to this deployment), at least 20 paper trades over 5 days, positive after charges, and whether the edge is more than noise (t ≥ 2). **Ready** means every *required* one passes; **Not yet · 6/8** counts every check that passes. The broker checks (login, IP whitelist, funds, a drill) stay on the Go-Live page.
+- **Quality** — four checks the gates do not make: **consistency ≥ 50**, **charges ≤ 50% of gross**, the **last 10 trades** still positive, and **net at least 2× the worst drawdown**.
+
+The details also show the worst and best trade, average win / loss, **t**, days traded, the **margin per lot** and the **return ÷ margin** per trade, and the **consistency** chart: profit week by week (month by month over a longer range).
+
+**Consistency** (0–100) is the single-leg backtest's score: how many periods made money × how straight the equity line is. A strategy that made all its money in one good week scores low even with a fine total.
+
+**Return ÷ margin** is net per trade ÷ the margin it blocks, per lot — it is what makes a ₹400 trade on a ₹25k condor better than a ₹900 trade on a ₹2L straddle. It uses the broker's SPAN margin when the trades have it (since 19-Oct-2026); older trades carry the engine's estimate, marked *.
+
+**Filters** (the button above the table): minimum trades, consistency, win %, profit factor, per trade, return ÷ margin and t; a maximum drawdown and charges ÷ gross; Live check; profitable only, hide fading, active only. Presets: **Live candidates** (20+ trades, consistency ≥ 50, profit factor ≥ 1.5, charges ≤ 50%, profitable, not fading), **Ready for go-live** and **Needs attention** (drifting or bleeding). The verdict chips filter too — click one or more. The card always says how many rows the filters hide. **Sort** offers every figure; **Columns** picks which show (a narrow panel folds the low-priority ones into the details). Filters and columns are remembered in this browser.
+
+With a date window set, the Live check is judged on that window's trades; the Go-Live page always judges the whole paper record.
+
 ### Summary tiles
 Net P&L, per trade (total ÷ trades — the true average), win rate, profit factor, max drawdown, **per trade ÷ margin** and **avg margin**, gross (pre-cost) and charges paid, average hold, best / worst trade and day, average win / loss, trading days.
 
-> **Note:** Margin is currently the engine's **estimate** (marked "~"), not the broker's figure. It is too high for naked strangles and straddles and too low for hedged condors and butterflies, so per-trade ÷ margin is only a rough guide.
+> **Note:** Since 19-Oct-2026 the margin is the broker's **SPAN** figure. Trades before that carry the engine's **estimate**, which ran about twice the broker's for naked strangles and straddles, so per-trade ÷ margin over an older window is only a rough guide.
 
 ### P&L over time
 Daily net P&L bars (by exit day) and the equity curve with the drawdown shaded beneath it.
@@ -338,13 +362,14 @@ Each trade's worst and best point while open ([MAE / MFE](glossary#mae-mfe)), an
 
 **Stop-loss from these trades** prices a rupee stop on the trades in view:
 - **Suggested stop** — the level that would have added most on the **older 70%** of trades, then checked on the **newest 30%** it never saw. It is only suggested when it helped on both; otherwise the panel says why not.
+- **Lowest loss on all trades** — the level whose total result is best on every trade in view (or *no stop*, when every level would have cut it), with how many trades it stops and its worst trade against the worst without a stop. It is hindsight, so it is shown apart from the suggestion. **every level** lists round levels with their result, change and worst trade (★ lowest loss, ✓ the suggestion).
 - **Stop at −₹** — type any level: how many trades it would have closed, how many of those had gone on to finish in profit, and the net change (all trades, older, newest). The dashed line on the chart marks it.
 - **Set this stop on deployments…** — sets it as each chosen deployment's **Max loss ₹**: the whole structure closes once its mark, **net of the estimated charges to close it**, reaches minus that amount (exit reason **MAX_LOSS**). It applies from the next check, including to a structure that is open now (one already past the level closes at once — the window says which). The live engine and every backtest apply the same rule. **Turn off** removes it.
 
 The figures are upper bounds: every trade that touched the level is booked at exactly that loss, while a real stop fills a little worse and marks are about a minute apart. Filter Results to one deployment to price a stop for that deployment alone.
 
 ### Round-trips table
-Every booked structure: entry → exit, deployment, structure, index, mode, exit reason, credit per unit, IV percentile at entry, **margin** (~ = estimated), gross, charges, net and net ÷ margin. Click a row (or **Expand page**) to see its legs, its MTM path and details. Search and page through long lists.
+Every booked structure: entry → exit, deployment, structure, index, mode, exit reason, credit per unit, IV percentile at entry, **margin** (~ = estimated), gross, charges, net and net ÷ margin. Click a row (or **Expand page**) to see its legs, its MTM path and details — including **India VIX**: its value at entry and at exit, the move, and its low and high while the structure was held, also drawn on the path chart (switch it with the chart's *India VIX* box). Short premium loses when VIX rises even if the index stands still. Search and page through long lists.
 
 Results load **on demand**, so the tab opens fast however long the history: the table fetches only the 50 rows on screen (already filtered, searched and sorted by the server), a row's legs and path are fetched when you open it, and **Day by day** fetches the recorded paths when you scroll to it. A row **struck through** is [quarantined](glossary#quarantined): booked on a price that was not real, shown but excluded from every total.`,
         },

@@ -35,6 +35,46 @@ export function stopEffect(rows, level) {
     };
 }
 
+/** The worst single result once a stop at −level is in place (a hit trade books exactly −level). */
+export function worstAfter(rows, level) {
+    const T = Number(level);
+    let w = null;
+    for (const r of rows) {
+        const v = T > 0 && r.mae <= -T ? -T : r.net;
+        if (w == null || v < w) w = v;
+    }
+    return w == null ? null : Math.round(w);
+}
+
+/**
+ * The stop with the LOWEST LOSS on these trades (user, 23-Oct-2026: "it does not tell the
+ * minimum-loss stop-loss"): of every level just past a trade's worst point, the one whose
+ * total result is best. HINDSIGHT — chosen on the same trades it is scored on; suggestStop
+ * is the version checked on trades it never saw. `level: null` = no stop does best.
+ * Ties go to the LOOSER level (fewer trades stopped for the same result).
+ */
+export function lowestLossStop(rows) {
+    const total = Math.round(rows.reduce((a, r) => a + r.net, 0));
+    let best = { level: null, netChange: 0, hit: 0, recovered: 0, n: rows.length };
+    for (const T of candidates(rows)) {
+        const e = stopEffect(rows, T);
+        if (e.netChange > best.netChange || (e.netChange === best.netChange && best.level != null && T > best.level)) best = e;
+    }
+    return { ...best, total, netAfter: total + best.netChange, worstAfter: worstAfter(rows, best.level), worstWithout: worstAfter(rows, null) };
+}
+
+/** A readable sweep: round levels, plus any `extra` ones (the lowest-loss, the suggestion), each with its result. */
+export function stopTable(rows, extra = []) {
+    const total = Math.round(rows.reduce((a, r) => a + r.net, 0));
+    const deepest = rows.reduce((m, r) => Math.min(m, r.mae), 0);
+    const grid = [500, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 7500, 10000].filter((x) => x <= -deepest + 50);
+    const levels = [...new Set([...grid, ...extra.filter((x) => Number(x) > 0).map(Number)])].sort((a, b) => a - b);
+    return levels.map((T) => {
+        const e = stopEffect(rows, T);
+        return { level: T, hit: e.hit, recovered: e.recovered, netChange: e.netChange, netAfter: total + e.netChange, worst: worstAfter(rows, T) };
+    });
+}
+
 /** Older → newer (by exit day; undated trades keep their order, which is newest-last from the server). */
 export function splitByTime(rows, testShare = 0.3) {
     const dated = rows.map((r, i) => ({ r, i })).sort((a, b) => (a.r.day && b.r.day ? a.r.day.localeCompare(b.r.day) : 0) || a.i - b.i).map((x) => x.r);

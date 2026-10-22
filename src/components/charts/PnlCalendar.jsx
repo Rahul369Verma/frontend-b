@@ -135,7 +135,8 @@ function buildCalendar(dayMap, rangeDays) {
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-export default function PnlCalendar({ daily, rangeDays = null, title = 'Daily P&L Calendar' }) {
+/** onPickDay (optional): a day WITH trades becomes a button that picks it (YYYY-MM-DD). */
+export default function PnlCalendar({ daily, rangeDays = null, title = 'Daily P&L Calendar', onPickDay = null }) {
     const weeks = useMemo(() => buildCalendar(toDayMap(daily), rangeDays), [daily, rangeDays]);
     return (
         <div>
@@ -155,11 +156,19 @@ export default function PnlCalendar({ daily, rangeDays = null, title = 'Daily P&
                                 if (!cell) return <div key={di} className="w-5 h-5" />;
                                 const isFuture = new Date(cell.date) > new Date();
                                 if (isFuture) return <div key={di} className="w-5 h-5 bg-slate-900/40 border border-line-0/60 rounded" />;
+                                const label = `${cell.date} · ${cell.pnl == null ? 'no trades' : fmtINR(cell.pnl)}`;
+                                if (onPickDay && cell.pnl != null) {
+                                    return (
+                                        <button type="button" key={di} onClick={() => onPickDay(cell.date)}
+                                            className={`w-5 h-5 rounded border ${calendarColor(cell.pnl)} hover:ring-2 hover:ring-primary focus-visible:ring-2 focus-visible:ring-primary`}
+                                            title={`${label} — click to see that day's trades`} aria-label={`${label}, show that day's trades`} />
+                                    );
+                                }
                                 return (
                                     <div
                                         key={di}
                                         className={`w-5 h-5 rounded border ${calendarColor(cell.pnl)}`}
-                                        title={`${cell.date} · ${cell.pnl == null ? 'no trades' : fmtINR(cell.pnl)}`}
+                                        title={label}
                                     />
                                 );
                             })}

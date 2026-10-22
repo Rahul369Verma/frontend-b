@@ -13,6 +13,7 @@ import { FlaskConical as BacktestIcon } from 'lucide-react';
 import AttributionPanel from '../components/viz/AttributionPanel';
 import VixBreakdownPanel from '../components/viz/VixBreakdownPanel';
 import DirectionGateBacktestPanel, { DirectionGateControls } from '../components/viz/DirectionGateBacktestPanel';
+import StopLossSweepPanel from '../components/viz/StopLossSweepPanel';
 import { GATE_DEFAULTS, gateParams, DECISION_TONE, pct0 as gatePct } from '../components/viz/directionGateFormat.js';
 import { useChartTheme } from '../theme/chartTheme.js';
 
@@ -1144,6 +1145,8 @@ export default function Backtest() {
   // strategy params on purpose: a strategy change must not reset it, and it must never be
   // saved into a config or a live deployment (the live gate is a global setting).
   const [dirGate, setDirGate] = useState(GATE_DEFAULTS);
+  // the exact request of the backtest on screen — the stop-loss sweep re-runs THAT one
+  const [lastRunParams, setLastRunParams] = useState(null);
 
   const runBacktest = async (overrideParams = null) => {
     setLoading(true);
@@ -1165,7 +1168,9 @@ export default function Backtest() {
 
     try {
       const cleanParams = { ...(overrideParams ? runSettings(overrideParams, { strategyDefaults }) : sendable), ...gateParams(dirGate) };   // gate OFF adds nothing
+      setLastRunParams(null);
       const res = await axios.post(`${API_URL}/engine/backtest/run`, cleanParams, { signal: aborter.signal });
+      if (!res.data.cancelled && !res.data.error) setLastRunParams(cleanParams);
       if (res.data.cancelled) {
         // Server confirmed clean cancel — no error, just bail.
         setResult(null);
@@ -3395,6 +3400,25 @@ export default function Backtest() {
                   </span>}
                 >
                   <DirectionGateBacktestPanel data={result.directionGate} onApply={(g) => setDirGate(prev => ({ ...prev, ...g }))} />
+                </CollapsibleCard>
+              )}
+
+              {/* Which per-lot stop-loss (max_single_trade_loss — the live rule) loses least:
+                  exact re-runs of THIS backtest, one per level. Not for multi-deployment runs. */}
+              {!result.multi && (
+                <CollapsibleCard docs="backtest#stop-sweep"
+                  title="Stop-loss that loses least"
+                  icon={Activity}
+                  storageKey="backtest:stopsweep"
+                  defaultOpen
+                  bodyClassName="px-4 pb-4 pt-0"
+                  summary={<span className="text-xs text-fg-5">re-run this backtest at each per-lot stop and compare net</span>}
+                >
+                  <StopLossSweepPanel runParams={lastRunParams}
+                    onApply={(perLot) => {
+                      setParams((p) => ({ ...p, max_single_trade_loss: perLot }));
+                      toast.success(`Max Single Loss set to ₹${Number(perLot).toLocaleString('en-IN')} per lot — run the backtest again to see it`);
+                    }} />
                 </CollapsibleCard>
               )}
 

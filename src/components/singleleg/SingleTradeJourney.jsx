@@ -17,9 +17,9 @@ import { API_URL } from '../../config/api.js';
 import TradePathChart from '../viz/TradePathChart';
 import { Chip, Spinner } from '../viz/primitives';
 import { inr, istDateTime, istTime, premium } from '../viz/tokens.js';
-import { fetchVixDays } from '../../hooks/useVixDays.js';
+import useTradeVix from '../../hooks/useTradeVix.js';
 import { vixMoveOver } from '../../utils/vixOverlay.js';
-import { toPathTrade, istDaysBetween, gateChip, flagTone, shortContract } from './singleLegFormat.js';
+import { toPathTrade, gateChip, flagTone, shortContract } from './singleLegFormat.js';
 
 const BTN = 'inline-flex items-center gap-1 px-2 py-1 rounded border border-line-2 bg-card-2 text-2xs text-fg-3 hover:text-fg disabled:opacity-50';
 const fin = (v) => (v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
@@ -27,33 +27,6 @@ const signed = (v) => inr(v, { sign: true, dp: 0 });
 const tone = (v) => (v > 0 ? 'text-success' : v < 0 ? 'text-danger' : 'text-fg-3');
 // premium(null) would print ₹0.00 (Number(null) is 0): absent stays a dash
 const prem = (v, sym) => (fin(v) == null ? '—' : premium(v, sym));
-
-/** India VIX for the IST days this trade covers (1-minute bars), with the reason when there is none. */
-function useTradeVix(entryMs, exitMs) {
-    const days = useMemo(() => istDaysBetween(entryMs, exitMs ?? entryMs, 5), [entryMs, exitMs]);
-    const key = days.join(',');
-    const [st, setSt] = useState({ key: null, points: null, reason: null });
-    useEffect(() => {
-        if (!key) return undefined;
-        let dead = false;
-        fetchVixDays({ days: key.split(','), intraday: key.split(',') })
-            .then((body) => {
-                if (dead) return;
-                const pts = [];
-                const reasons = [];
-                for (const d of key.split(',')) {
-                    const day = body?.days?.[d];
-                    if (Array.isArray(day?.intraday)) pts.push(...day.intraday);
-                    else if (day?.reason) reasons.push(day.reason);
-                }
-                const warn = Array.isArray(body?.warnings) && body.warnings.length ? body.warnings[0] : null;
-                setSt({ key, points: pts.length ? pts : null, reason: pts.length ? null : (reasons[0] || warn || 'no 1-minute India VIX for these days') });
-            })
-            .catch((e) => { if (!dead) setSt({ key, points: null, reason: `India VIX request failed: ${e?.response?.data?.error || e.message}` }); });
-        return () => { dead = true; };
-    }, [key]);
-    return st.key === key ? st : { key, points: null, reason: null, loading: !!key };
-}
 
 function ReplaySummary({ d }) {
     if (!d.ok) return <div className="text-warning">Cannot replay this trade: {d.reason}.</div>;

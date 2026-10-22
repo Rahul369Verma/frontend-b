@@ -8,9 +8,14 @@
  *               open position, and live vs the backtest it was deployed from —
  *               with a VERDICT that refuses to judge on too few trades.
  *   COMPARE     tick 2-4 rows to overlay their equity curves.
+ *   LIVE CHECK  (23-Oct-2026) per row: the Go-Live page's own evidence checks plus four quality
+ *               checks, with consistency (the single-leg backtest's score), return on margin,
+ *               worst trade and t — and FILTERS / sorts over all of them (scorecardFilters.js).
+ *               Filters and chosen columns are remembered per browser; hidden rows are counted.
  *
- * Layout follows the panel's width in rem (useRemWidth): a table when there is
- * room, cards when there is not — so a larger Text Size moves the switch point.
+ * Layout follows the panel's width in rem (useRemWidth): every chosen column when there is
+ * room, the low-priority ones folded into Details when narrower, cards when narrower still —
+ * so a larger Text Size moves the switch points.
  */
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -23,8 +28,13 @@ import { useChartTheme } from '../../theme/chartTheme.js';
 import useRemWidth from '../../hooks/useRemWidth';
 import { fmt, num, rup, shortSym } from './builderFormat';
 import DocLink from '../DocLink.jsx';
+import useLocalStorage from '../../hooks/useLocalStorage';
+import ConsistencyPanel from '../viz/ConsistencyPanel.jsx';
+import { consistencyText, consistencyVerdict } from '../viz/consistencyFormat.js';
+import {
+    DEFAULT_FILTERS, LIVE_CANDIDATES, NUMBER_FILTERS, SORTS, activeFilterCount, normaliseFilters, passes, sortRows,
+} from './scorecardFilters.js';
 
-const TABLE_REM = 80;
 const COLLAPSED_ROWS = 15;
 const MAX_COMPARE = 4;
 const DASHES = ['0', '6 3', '2 3', '10 4 2 4'];
@@ -216,54 +226,268 @@ function ComparePanel({ rows, onClear }) {
     );
 }
 
-const SORTS = [
-    { k: 'net', label: 'Net', get: r => r.net },
-    { k: 'perTrade', label: 'Per trade', get: r => r.perTrade },
-    { k: 'gap', label: 'vs backtest', get: r => (r.trades ? num(r.gapPerTrade) : null) },
-    { k: 'trades', label: 'Trades', get: r => r.trades },
-    { k: 'winRate', label: 'Win%', get: r => r.winRate },
-    { k: 'maxDrawdown', label: 'Max drawdown', get: r => r.maxDrawdown },
-    { k: 'costPct', label: 'Costs ÷ gross', get: r => r.costPct },
-    { k: 'open', label: 'Open MTM', get: r => (r.open ? r.open.mtmNet : null) },
-];
+// ── Ready for live? ─────────────────────────────────────────────────────────
 
-/** The Strategies card: the scorecard table (cards when narrow) and Compare. */
+const STATUS_MARK = { pass: ['✓', 'text-success'], fail: ['✗', 'text-danger'], warn: ['!', 'text-warning'], unknown: ['?', 'text-fg-5'] };
+const READY_TEXT = { live: ['LIVE', 'live'], ready: ['Ready', 'good'], 'not-ready': ['Not yet', 'neutral'] };
+
+function readinessSentence(rd) {
+    if (!rd) return 'No checks for this row.';
+    if (rd.status === 'live') return 'LIVE — this deployment already trades real money.';
+    if (rd.status === 'ready') return 'Ready for go-live: every required evidence check the Go-Live page makes passes.';
+    const n = rd.failing.length;
+    return `Not ready for go-live: ${n} required check${n === 1 ? '' : 's'} fail${n === 1 ? 's' : ''} — ${rd.failing.join('; ')}. Promoting it now would need an override.`;
+}
+
+/** The Live check cell: Ready / Not yet · passed/total / LIVE — a button that opens the row's details. */
+function LiveCheck({ r, open, onToggle }) {
+    const rd = r.readiness;
+    if (!rd) return <span className="text-fg-5">—</span>;
+    const [word, tone] = READY_TEXT[rd.status] || READY_TEXT['not-ready'];
+    const label = rd.status === 'live' ? word : `${word} · ${rd.passed}/${rd.total}`;
+    return (
+        <button type="button" onClick={onToggle} aria-expanded={open} aria-label={`Live check for ${r.name}: ${label}. ${open ? 'Hide' : 'Show'} details`}
+            className="rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
+            <Chip tone={tone} title={readinessSentence(rd)}>{label}</Chip>
+        </button>
+    );
+}
+
+function Checklist({ checks }) {
+    return (
+        <ul className="space-y-1.5">
+            {checks.map(c => {
+                const [mark, tone] = STATUS_MARK[c.status] || STATUS_MARK.unknown;
+                return (
+                    <li key={c.id} className="flex gap-2 text-2xs">
+                        <span className={`w-3 shrink-0 font-bold ${tone}`} aria-hidden="true">{mark}</span>
+                        <div className="min-w-0">
+                            <div className="text-fg-2"><span className="sr-only">{c.status}: </span>{c.title}{c.level === 'soft' && <span className="text-fg-5"> · required</span>}</div>
+                            <div className="text-fg-4 break-words">{c.have} <span className="text-fg-5">— needs {c.need}</span></div>
+                            {c.fix && <div className="text-fg-5">{c.fix}</div>}
+                        </div>
+                    </li>
+                );
+            })}
+        </ul>
+    );
+}
+
+const signedRup = (v) => (v == null ? '—' : rup(v));
+function marginText(r) {
+    if (!r.margin) return 'not recorded';
+    return `${rup(r.margin.perLot)} per lot · ${r.margin.basis === 'span' ? 'broker SPAN' : 'estimate (ran ~2× the broker for naked shorts)'}`;
+}
+
+/** Everything behind the row: the checklist, the figures, and where the profit came from. */
+function RowDetail({ r, windowed, wide }) {
+    const rd = r.readiness;
+    const evidence = (rd?.checks || []).filter(c => c.group === 'evidence');
+    const quality = (rd?.checks || []).filter(c => c.group === 'quality');
+    const figures = [
+        ['Worst trade', signedRup(r.worstTrade), pnlTone(r.worstTrade)],
+        ['Best trade', signedRup(r.bestTrade), pnlTone(r.bestTrade)],
+        ['Average win / loss', `${signedRup(r.avgWin)} / ${signedRup(r.avgLoss)}`, ''],
+        ['Profit factor', r.profitFactor == null ? '—' : r.profitFactor.toFixed(2), ''],
+        ['t (edge ÷ noise)', r.tStat == null ? '—' : r.tStat.toFixed(2), ''],
+        ['Net ÷ worst drawdown', r.recovery == null ? '—' : `${r.recovery.toFixed(1)}×`, ''],
+        ['Days traded', String(r.daysTraded ?? '—'), ''],
+        ['Margin', marginText(r), ''],
+        ['Return ÷ margin', r.romPct == null ? '—' : `${r.romPct.toFixed(2)}% per trade`, pnlTone(r.romPct)],
+        ['Charges ÷ gross', r.costPct == null ? (r.trades ? 'losing before costs' : '—') : `${r.costPct}% (₹${fmt(r.charges)} of ₹${fmt(r.gross)})`, costTone(r.costPct)],
+    ];
+    return (
+        <div className={`grid gap-4 ${wide ? 'grid-cols-2' : 'grid-cols-1'}`} data-testid={`detail-${r.deploymentId || r.name}`}>
+            <section className="min-w-0 space-y-2">
+                <h4 className="text-xs font-semibold text-fg-2">{readinessSentence(rd)}</h4>
+                {windowed && <p className="text-3xs text-warning">Judged on the trades in this date window. The Go-Live page judges the whole paper record.</p>}
+                <h5 className="text-2xs font-semibold text-fg-4 uppercase tracking-wide">Go-live evidence — the Go-Live page's own checks</h5>
+                <Checklist checks={evidence} />
+                <h5 className="text-2xs font-semibold text-fg-4 uppercase tracking-wide pt-1">Quality</h5>
+                <Checklist checks={quality} />
+                <p className="text-3xs text-fg-5">
+                    Broker checks (login, IP whitelist, funds, a drill) are on the <Link to={ROUTES.goLive} className="text-primary-ink hover:underline">Go-Live page</Link>, where promotion happens.
+                </p>
+            </section>
+            <section className="min-w-0 space-y-3">
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-2xs">
+                    {figures.map(([k, v, tone]) => (
+                        <div key={k} className="min-w-0"><dt className="text-fg-5">{k}</dt><dd className={`text-fg-3 tabular-nums break-words ${tone}`}>{v}</dd></div>
+                    ))}
+                </dl>
+                <ConsistencyPanel data={r.consistency} />
+            </section>
+        </div>
+    );
+}
+
+// ── Columns ─────────────────────────────────────────────────────────────────
+// `p: 2` columns give way first when the panel is narrow (useRemWidth); each is still in Details.
+
+const COLUMNS = [
+    { k: 'verdict', label: 'Verdict', left: true, on: true, title: 'Live vs the backtest it was deployed from — no verdict on too few trades' },
+    { k: 'ready', label: 'Live check', sort: 'ready', left: true, on: true, title: 'The Go-Live page\'s evidence checks plus four quality checks. Click one for the list.' },
+    { k: 'trades', label: 'Trades', sort: 'trades', on: true },
+    { k: 'net', label: 'Net', sort: 'net', on: true },
+    { k: 'perTrade', label: 'Per trade', sort: 'perTrade', on: true },
+    { k: 'gap', label: 'vs backtest /trade', sort: 'gap', p: 2, on: true },
+    { k: 'consistency', label: 'Consistency', sort: 'consistency', on: true, title: '0–100: profitable periods × how straight the equity line is (the single-leg backtest\'s score)' },
+    { k: 'winRate', label: 'Win%', sort: 'winRate', on: true },
+    { k: 'profitFactor', label: 'PF', sort: 'profitFactor', on: true, title: 'Profit factor: gross wins ÷ gross losses' },
+    { k: 'maxDrawdown', label: 'Max DD', sort: 'maxDrawdown', on: true },
+    { k: 'romPct', label: 'Return ÷ margin', sort: 'romPct', on: true, title: 'Net per trade ÷ the margin it blocks, per lot' },
+    { k: 'costPct', label: 'Costs ÷ gross', sort: 'costPct', p: 2, on: false },
+    { k: 'worstTrade', label: 'Worst trade', sort: 'worstTrade', p: 2, on: false },
+    { k: 'tStat', label: 't', sort: 'tStat', p: 2, on: false, title: 'Per-trade mean ÷ its standard error: below ~2 the average could be luck' },
+    { k: 'recovery', label: 'Net ÷ DD', sort: 'recovery', p: 2, on: false, title: 'Net profit ÷ the worst drawdown' },
+    { k: 'equity', label: 'Equity', p: 2, left: true, on: true },
+    { k: 'open', label: 'Open MTM', sort: 'open', p: 2, on: false },
+];
+const DEFAULT_COLUMNS = COLUMNS.filter(c => c.on).map(c => c.k);
+const WIDE_REM = 100;     // every chosen column fits
+const TABLE_REM = 64;     // below this, cards
+
+function consTone(score, good) {
+    if (score == null) return 'text-fg-5';
+    return score >= good ? 'text-success' : score < 15 ? 'text-danger' : 'text-fg-3';
+}
+
+function Cell({ k, r, ctx }) {
+    const td = (cls, children, title) => <td className={`py-2 px-2 text-right tabular-nums ${cls}`} title={title}>{children}</td>;
+    switch (k) {
+        case 'verdict': return <td className="py-2 pr-3"><Verdict r={r} minTrades={ctx.minTrades} /></td>;
+        case 'ready': return <td className="py-2 pr-3 whitespace-nowrap"><LiveCheck r={r} open={ctx.open} onToggle={ctx.onToggle} /></td>;
+        case 'trades': return td('', r.trades);
+        case 'net': return td(`font-semibold ${pnlTone(r.net)}`, r.trades ? rup(r.net) : '—');
+        case 'perTrade': return td(pnlTone(r.perTrade), r.perTrade == null ? '—' : rup(r.perTrade));
+        case 'gap': return td('whitespace-nowrap', <VsBacktest r={r} />);
+        case 'consistency': {
+            const c = r.consistency;
+            return td(consTone(c?.score, ctx.goodConsistency), consistencyText(c?.score),
+                c ? `${consistencyVerdict(c.score)} — ${c.profitable} of ${c.profitable + c.losing} ${c.bucket}s profitable, straightness ${c.r2 == null ? '—' : c.r2.toFixed(2)}` : 'No trades');
+        }
+        case 'winRate': return td('', r.winRate == null ? '—' : `${r.winRate}%`);
+        case 'profitFactor': return td(r.profitFactor != null && r.profitFactor < 1 ? 'text-danger' : '', r.profitFactor == null ? '—' : r.profitFactor.toFixed(2));
+        case 'maxDrawdown': return td('text-danger', r.maxDrawdown ? rup(r.maxDrawdown) : '—');
+        case 'romPct': return td(pnlTone(r.romPct), r.romPct == null ? '—' : `${r.romPct.toFixed(2)}%${r.margin?.basis === 'estimate' ? '*' : ''}`,
+            r.margin ? `Per trade, on ${marginText(r)}` : 'No margin recorded');
+        case 'costPct': return td(costTone(r.costPct), r.costPct == null ? '—' : `${r.costPct}%`,
+            r.costPct == null ? (r.trades ? 'Losing before costs — gross P&L is not positive.' : '') : `₹${fmt(r.charges)} of charges against ₹${fmt(r.gross)} gross profit`);
+        case 'worstTrade': return td(pnlTone(r.worstTrade), signedRup(r.worstTrade));
+        case 'tStat': return td('', r.tStat == null ? '—' : r.tStat.toFixed(2));
+        case 'recovery': return td('', r.recovery == null ? '—' : `${r.recovery.toFixed(1)}×`);
+        case 'equity': return <td className="py-2 px-2"><Spark curve={r.curve} color={ctx.ct.mark.equity} zero={ctx.ct.axis} /></td>;
+        case 'open': return td(r.open ? pnlTone(r.open.mtmNet) : 'text-fg-5', r.open ? (r.open.mtmNet == null ? 'unmarked' : rup(r.open.mtmNet)) : '—');
+        default: return <td />;
+    }
+}
+
+// ── Filters ─────────────────────────────────────────────────────────────────
+
+const btn = 'h-8 px-2 rounded-md border text-xs whitespace-nowrap';
+const btnOff = `${btn} border-line bg-slate-800 text-fg-3 hover:text-fg`;
+const btnOn = `${btn} border-primary bg-primary/15 text-primary-ink`;
+
+function FilterPanel({ filters, setFilters }) {
+    const set = (k, v) => setFilters(f => ({ ...f, [k]: v }));
+    return (
+        <div className="rounded-lg border border-line bg-slate-900/30 p-3 mb-3 space-y-3" data-testid="scorecard-filters">
+            <div className="flex flex-wrap items-center gap-2">
+                <span className="text-2xs text-fg-5">Presets</span>
+                <button type="button" className={btnOff} onClick={() => setFilters({ ...LIVE_CANDIDATES })}
+                    title="20+ trades, consistency ≥ 50, profit factor ≥ 1.5, charges ≤ 50% of gross, profitable, not fading">Live candidates</button>
+                <button type="button" className={btnOff} onClick={() => setFilters({ ...DEFAULT_FILTERS, readiness: 'ready' })}>Ready for go-live</button>
+                <button type="button" className={btnOff} onClick={() => setFilters({ ...DEFAULT_FILTERS, verdicts: ['drifting', 'bleeding'] })}>Needs attention</button>
+                <button type="button" className={btnOff} onClick={() => setFilters({ ...DEFAULT_FILTERS })}>Clear all</button>
+            </div>
+            <div className="grid gap-x-3 gap-y-2 grid-cols-[repeat(auto-fill,minmax(11rem,1fr))]">
+                {NUMBER_FILTERS.map(nf => (
+                    <label key={nf.k} className="flex flex-col gap-0.5 text-2xs text-fg-4">
+                        {nf.label}
+                        <input type="number" inputMode="decimal" step={nf.step} value={filters[nf.k] ?? ''} onChange={e => set(nf.k, e.target.value)}
+                            className="h-8 bg-slate-800 border border-line rounded-md px-2 text-xs text-fg-2" />
+                    </label>
+                ))}
+                <label className="flex flex-col gap-0.5 text-2xs text-fg-4">
+                    Live check
+                    <select value={filters.readiness} onChange={e => set('readiness', e.target.value)} className="h-8 bg-slate-800 border border-line rounded-md px-1 text-xs text-fg-2">
+                        <option value="all">Any</option>
+                        <option value="ready">Ready for go-live</option>
+                        <option value="not-ready">Not ready yet</option>
+                        <option value="live">Already LIVE</option>
+                    </select>
+                </label>
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-2xs text-fg-3">
+                {[['profitable', 'Profitable only'], ['hideFading', 'Hide fading (last 10 trades losing)'], ['activeOnly', 'Active deployments only']].map(([k, l]) => (
+                    <label key={k} className="flex items-center gap-1.5"><input type="checkbox" checked={!!filters[k]} onChange={e => set(k, e.target.checked)} />{l}</label>
+                ))}
+            </div>
+            <p className="text-3xs text-fg-5">A row without the figure a minimum asks for (no margin recorded, no trades yet) is hidden by it. Verdict chips above filter too — click one or more.</p>
+        </div>
+    );
+}
+
+function ColumnPicker({ cols, setCols }) {
+    const toggle = (k) => setCols(c => (c.includes(k) ? c.filter(x => x !== k) : COLUMNS.filter(x => c.includes(x.k) || x.k === k).map(x => x.k)));
+    return (
+        <div className="rounded-lg border border-line bg-slate-900/30 p-3 mb-3" data-testid="scorecard-columns">
+            <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-2xs text-fg-3">
+                {COLUMNS.map(c => (
+                    <label key={c.k} className="flex items-center gap-1.5" title={c.title}>
+                        <input type="checkbox" checked={cols.includes(c.k)} onChange={() => toggle(c.k)} />{c.label}
+                    </label>
+                ))}
+                <button type="button" onClick={() => setCols(DEFAULT_COLUMNS)} className="text-primary-ink hover:underline">Default columns</button>
+            </div>
+        </div>
+    );
+}
+
+/** The Strategies card: the scorecard table (cards when narrow), filters, the live check, and Compare. */
 export default function StrategyScorecard({ sc, templates = [], single = false }) {
     const ct = useChartTheme();
     const ref = useRef(null);
     const rem = useRemWidth(ref);
     const asTable = rem == null || rem >= TABLE_REM;
+    const narrow = rem != null && rem < WIDE_REM;
     const [sort, setSort] = useState({ k: 'net', dir: 'desc' });
     const [q, setQ] = useState('');
     const [all, setAll] = useState(false);
     const [picked, setPicked] = useState([]);
+    const [openRows, setOpenRows] = useState([]);
+    const [panel, setPanel] = useState(null);          // 'filters' | 'columns' | null
+    const [storedFilters, setFilters] = useLocalStorage('multileg:scorecard:filters', DEFAULT_FILTERS);
+    const filters = useMemo(() => normaliseFilters(storedFilters), [storedFilters]);
+    const [cols, setCols] = useLocalStorage('multileg:scorecard:columns', DEFAULT_COLUMNS, { validate: Array.isArray });
     const data = sc?.data || null;
     const err = sc?.err || null;
     const allRows = useMemo(() => (Array.isArray(data?.rows) ? data.rows : []), [data]);
     const tplName = useCallback((k) => templates.find(t => t.key === k)?.name || k || '—', [templates]);
-    const rows = useMemo(() => {
+    const searched = useMemo(() => {
         const s = q.trim().toLowerCase();
-        const spec = SORTS.find(x => x.k === sort.k) || SORTS[0];
-        const sign = sort.dir === 'asc' ? 1 : -1;
-        return allRows
-            .filter(r => !s || [r.name, r.template, tplName(r.template), shortSym(r.symbol)].some(x => String(x || '').toLowerCase().includes(s)))
-            .sort((a, b) => {
-                const x = spec.get(a), y = spec.get(b);
-                if (x == null && y == null) return 0;
-                if (x == null) return 1;
-                if (y == null) return -1;
-                return (x - y) * sign;
-            });
-    }, [allRows, q, sort, tplName]);
+        return allRows.filter(r => !s || [r.name, r.template, tplName(r.template), shortSym(r.symbol)].some(x => String(x || '').toLowerCase().includes(s)));
+    }, [allRows, q, tplName]);
+    const rows = useMemo(() => sortRows(searched.filter(r => passes(r, filters)), sort), [searched, filters, sort]);
+    const hidden = searched.length - rows.length;
+    const nFilters = activeFilterCount(filters);
     const shown = all ? rows : rows.slice(0, COLLAPSED_ROWS);
     const pickedRows = picked.map(id => allRows.find(r => (r.deploymentId || r.name) === id)).filter(Boolean);
     const togglePick = (id) => setPicked(p => (p.includes(id) ? p.filter(x => x !== id) : p.length >= MAX_COMPARE ? p : [...p, id]));
+    const toggleRow = (id) => setOpenRows(o => (o.includes(id) ? o.filter(x => x !== id) : [...o, id]));
     const onSort = (k) => setSort(s => (s.k === k ? { k, dir: s.dir === 'desc' ? 'asc' : 'desc' } : { k, dir: 'desc' }));
+    const toggleVerdict = (v) => setFilters(f => { const n = normaliseFilters(f); return { ...n, verdicts: n.verdicts.includes(v) ? n.verdicts.filter(x => x !== v) : [...n.verdicts, v] }; });
     const counts = data?.verdictCounts || {};
+    const ready = data?.readinessCounts || {};
+    const chosen = COLUMNS.filter(c => cols.includes(c.k));
+    const visible = narrow ? chosen.filter(c => c.p !== 2) : chosen;
+    const droppedForWidth = chosen.filter(c => !visible.includes(c));
+    const goodConsistency = data?.quality?.minConsistency ?? 50;
+    const span = visible.length + 1 + (single ? 0 : 1);
 
     return (
             <Panel ref={ref} storageKey="fold:results|strategies" title={`Strategies ${data ? `(${allRows.length})` : ''}`}
-                subtitle="Booked results per deployment, and live vs the backtest it was deployed from" docs="multi-leg#results-tab"
+                subtitle="Booked results per deployment, live vs the backtest it was deployed from, and whether it is ready for real money" docs="multi-leg#results-tab"
                 right={!single && allRows.length > 0 && (
                         <div className="flex flex-wrap items-center gap-2">
                             <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Filter strategies…"
@@ -273,70 +497,97 @@ export default function StrategyScorecard({ sc, templates = [], single = false }
                                     {SORTS.map(s => <option key={s.k} value={s.k}>{s.label}</option>)}
                                 </select>
                             </label>
+                            <button type="button" onClick={() => setSort(s => ({ ...s, dir: s.dir === 'desc' ? 'asc' : 'desc' }))} className={btnOff}
+                                aria-label={`Sort ${sort.dir === 'desc' ? 'descending' : 'ascending'} — switch`}>{sort.dir === 'desc' ? '▾' : '▴'}</button>
+                            <button type="button" onClick={() => setPanel(p => (p === 'filters' ? null : 'filters'))} aria-expanded={panel === 'filters'}
+                                className={nFilters ? btnOn : btnOff}>Filters{nFilters ? ` (${nFilters})` : ''}</button>
+                            <button type="button" onClick={() => setPanel(p => (p === 'columns' ? null : 'columns'))} aria-expanded={panel === 'columns'} className={btnOff}>Columns</button>
                         </div>
                     )}>
+                {panel === 'filters' && <FilterPanel filters={filters} setFilters={setFilters} />}
+                {panel === 'columns' && <ColumnPicker cols={cols} setCols={setCols} />}
                 {Object.keys(counts).length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mb-2 text-2xs text-fg-5">
-                        {Object.entries(counts).map(([v, n]) => (
-                            <Chip key={v} tone={(VERDICT[v] || {}).tone || 'neutral'} title={(VERDICT[v] || {}).help}>{(VERDICT[v] || { label: v }).label} · {n}</Chip>
-                        ))}
+                    <div className="flex flex-wrap items-center gap-1.5 mb-1.5 text-2xs text-fg-5">
+                        {Object.entries(counts).map(([v, n]) => {
+                            const on = filters.verdicts.includes(v);
+                            return (
+                                <button key={v} type="button" onClick={() => toggleVerdict(v)} aria-pressed={on}
+                                    className={`rounded ${on ? 'ring-2 ring-primary' : ''} ${filters.verdicts.length && !on ? 'opacity-50' : ''}`}>
+                                    <Chip tone={(VERDICT[v] || {}).tone || 'neutral'} title={`${(VERDICT[v] || {}).help || ''} Click to show only these.`}>{(VERDICT[v] || { label: v }).label} · {n}</Chip>
+                                </button>
+                            );
+                        })}
                         {counts['too-few'] > 0 && <span className="self-center">A verdict needs {data.minTrades} trades; until then ▲/▼ shows only which way it is leaning.</span>}
+                    </div>
+                )}
+                {Object.keys(ready).length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 mb-2 text-2xs text-fg-5">
+                        <span>Live check:</span>
+                        {['ready', 'not-ready', 'live'].filter(s => ready[s]).map(s => {
+                            const on = filters.readiness === s;
+                            const [word, tone] = READY_TEXT[s];
+                            return (
+                                <button key={s} type="button" onClick={() => setFilters(f => ({ ...normaliseFilters(f), readiness: on ? 'all' : s }))} aria-pressed={on}
+                                    className={`rounded ${on ? 'ring-2 ring-primary' : ''}`}>
+                                    <Chip tone={tone}>{s === 'not-ready' ? 'Not ready yet' : s === 'ready' ? 'Ready for go-live' : word} · {ready[s]}</Chip>
+                                </button>
+                            );
+                        })}
+                        {!ready.ready && <span>Nothing passes every required go-live check yet — open a row's Live check to see what is missing.</span>}
                     </div>
                 )}
                 {err ? <div className="text-xs text-danger">Scorecard failed: {err}</div>
                     : !data ? <div className="text-xs text-fg-5">Loading…</div>
                     : !allRows.length ? <div className="text-xs text-fg-5">No deployments in this filter.</div>
+                    : !rows.length ? <div className="text-xs text-fg-5">No strategy matches the filters.</div>
                     : asTable ? (
                         <div className="overflow-x-auto">
                             <table className="w-full text-xs text-fg-3">
                                 <thead><tr className="text-2xs text-fg-5 text-left">
                                     {!single && <th className="pb-1.5 pr-2 font-semibold"><span className="sr-only">Compare</span></th>}
                                     <th className="pb-1.5 pr-3 font-semibold">Strategy</th>
-                                    <th className="pb-1.5 pr-3 font-semibold">Verdict</th>
-                                    {[['trades', 'Trades'], ['net', 'Net'], ['perTrade', 'Per trade'], ['gap', 'vs backtest /trade'], ['winRate', 'Win%'], ['maxDrawdown', 'Max DD'], ['costPct', 'Costs ÷ gross']].map(([k, l]) => (
-                                        <th key={k} className="pb-1.5 px-2 text-right font-semibold whitespace-nowrap" aria-sort={sort.k === k ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-                                            <button type="button" onClick={() => onSort(k)} className={`hover:text-fg-2 ${sort.k === k ? 'text-fg-2' : ''}`}>{l}{sort.k === k ? (sort.dir === 'desc' ? ' ▾' : ' ▴') : ''}</button>
+                                    {visible.map(c => (
+                                        <th key={c.k} title={c.title} className={`pb-1.5 ${c.left ? 'pr-3' : 'px-2 text-right'} font-semibold whitespace-nowrap`}
+                                            aria-sort={c.sort && sort.k === c.sort ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
+                                            {c.sort ? <button type="button" onClick={() => onSort(c.sort)} className={`hover:text-fg-2 ${sort.k === c.sort ? 'text-fg-2' : ''}`}>{c.label}{sort.k === c.sort ? (sort.dir === 'desc' ? ' ▾' : ' ▴') : ''}</button> : c.label}
                                         </th>
                                     ))}
-                                    <th className="pb-1.5 px-2 font-semibold">Equity</th>
-                                    <th className="pb-1.5 pl-2 text-right font-semibold">Open MTM</th>
                                 </tr></thead>
                                 <tbody>
                                     {shown.map(r => {
                                         const id = r.deploymentId || r.name;
                                         const on = picked.includes(id);
+                                        const open = openRows.includes(id);
+                                        const ctx = { minTrades: data.minTrades, ct, goodConsistency, open, onToggle: () => toggleRow(id) };
                                         return (
-                                            <tr key={id} className={`border-t border-line-0 ${on ? 'bg-primary/5' : ''}`}>
-                                                {!single && (
-                                                    <td className="py-2 pr-2">
-                                                        <input type="checkbox" checked={on} onChange={() => togglePick(id)} disabled={!on && picked.length >= MAX_COMPARE}
-                                                            aria-label={`Compare ${r.name}`} title={!on && picked.length >= MAX_COMPARE ? `Compare up to ${MAX_COMPARE}` : 'Add to the comparison'} />
+                                            <React.Fragment key={id}>
+                                                <tr className={`border-t border-line-0 ${on ? 'bg-primary/5' : ''}`}>
+                                                    {!single && (
+                                                        <td className="py-2 pr-2">
+                                                            <input type="checkbox" checked={on} onChange={() => togglePick(id)} disabled={!on && picked.length >= MAX_COMPARE}
+                                                                aria-label={`Compare ${r.name}`} title={!on && picked.length >= MAX_COMPARE ? `Compare up to ${MAX_COMPARE}` : 'Add to the comparison'} />
+                                                        </td>
+                                                    )}
+                                                    <td className="py-2 pr-3 min-w-[14rem]">
+                                                        <div className="flex items-start gap-1">
+                                                            <button type="button" onClick={() => toggleRow(id)} aria-expanded={open} aria-label={`Details for ${r.name}`}
+                                                                className="mt-px w-4 shrink-0 text-fg-5 hover:text-fg-2">{open ? '▾' : '▸'}</button>
+                                                            <div className="min-w-0">
+                                                                {r.deploymentId ? <Link to={deploymentHref(r.deploymentId)} className="font-semibold text-fg-2 hover:underline break-words">{r.name}</Link>
+                                                                    : <span className="font-semibold text-fg-2">{r.name}</span>}
+                                                                <div className="text-2xs text-fg-5">
+                                                                    {tplName(r.template)} · {shortSym(r.symbol)} · {r.tradeMode}{r.lots > 1 ? ` · ${r.lots} lots` : ''}
+                                                                    {r.status !== 'ACTIVE' && <span className="text-warning"> · {r.status.toLowerCase()}</span>}
+                                                                </div>
+                                                            </div>
+                                                        </div>
                                                     </td>
+                                                    {visible.map(c => <Cell key={c.k} k={c.k} r={r} ctx={ctx} />)}
+                                                </tr>
+                                                {open && (
+                                                    <tr className="bg-slate-900/30"><td colSpan={span} className="px-3 py-3"><RowDetail r={r} windowed={data.windowed} wide={rem == null || rem >= 70} /></td></tr>
                                                 )}
-                                                <td className="py-2 pr-3 min-w-[14rem]">
-                                                    {r.deploymentId ? <Link to={deploymentHref(r.deploymentId)} className="font-semibold text-fg-2 hover:underline break-words">{r.name}</Link>
-                                                        : <span className="font-semibold text-fg-2">{r.name}</span>}
-                                                    <div className="text-2xs text-fg-5">
-                                                        {tplName(r.template)} · {shortSym(r.symbol)} · {r.tradeMode}{r.lots > 1 ? ` · ${r.lots} lots` : ''}
-                                                        {r.status !== 'ACTIVE' && <span className="text-warning"> · {r.status.toLowerCase()}</span>}
-                                                    </div>
-                                                </td>
-                                                <td className="py-2 pr-3"><Verdict r={r} minTrades={data.minTrades} /></td>
-                                                <td className="py-2 px-2 text-right tabular-nums">{r.trades}</td>
-                                                <td className={`py-2 px-2 text-right tabular-nums font-semibold ${pnlTone(r.net)}`}>{r.trades ? rup(r.net) : '—'}</td>
-                                                <td className={`py-2 px-2 text-right tabular-nums ${pnlTone(r.perTrade)}`}>{r.perTrade == null ? '—' : rup(r.perTrade)}</td>
-                                                <td className="py-2 px-2 text-right tabular-nums whitespace-nowrap"><VsBacktest r={r} /></td>
-                                                <td className="py-2 px-2 text-right tabular-nums">{r.winRate == null ? '—' : `${r.winRate}%`}</td>
-                                                <td className="py-2 px-2 text-right tabular-nums text-danger">{r.maxDrawdown ? rup(r.maxDrawdown) : '—'}</td>
-                                                <td className={`py-2 px-2 text-right tabular-nums ${costTone(r.costPct)}`}
-                                                    title={r.costPct == null ? (r.trades ? 'Losing before costs — gross P&L is not positive.' : '') : `₹${fmt(r.charges)} of charges against ₹${fmt(r.gross)} gross profit`}>
-                                                    {r.costPct == null ? '—' : `${r.costPct}%`}
-                                                </td>
-                                                <td className="py-2 px-2"><Spark curve={r.curve} color={ct.mark.equity} zero={ct.axis} /></td>
-                                                <td className={`py-2 pl-2 text-right tabular-nums ${r.open ? pnlTone(r.open.mtmNet) : 'text-fg-5'}`}>
-                                                    {r.open ? (r.open.mtmNet == null ? 'unmarked' : rup(r.open.mtmNet)) : '—'}
-                                                </td>
-                                            </tr>
+                                            </React.Fragment>
                                         );
                                     })}
                                 </tbody>
@@ -347,8 +598,9 @@ export default function StrategyScorecard({ sc, templates = [], single = false }
                             {shown.map(r => {
                                 const id = r.deploymentId || r.name;
                                 const on = picked.includes(id);
+                                const open = openRows.includes(id);
                                 return (
-                                    <article key={id} className={`rounded-lg border p-3 ${on ? 'border-primary bg-primary/5' : 'border-line bg-slate-900/30'}`}>
+                                    <article key={id} className={`rounded-lg border p-3 ${open ? 'col-span-full' : ''} ${on ? 'border-primary bg-primary/5' : 'border-line bg-slate-900/30'}`}>
                                         <div className="flex items-start gap-2">
                                             {!single && <input type="checkbox" className="mt-1" checked={on} onChange={() => togglePick(id)} disabled={!on && picked.length >= MAX_COMPARE} aria-label={`Compare ${r.name}`} />}
                                             <div className="min-w-0 flex-1">
@@ -357,27 +609,45 @@ export default function StrategyScorecard({ sc, templates = [], single = false }
                                                 <div className="text-2xs text-fg-5">{tplName(r.template)} · {shortSym(r.symbol)} · {r.tradeMode}</div>
                                             </div>
                                         </div>
-                                        <div className="mt-2"><Verdict r={r} minTrades={data.minTrades} /></div>
+                                        <div className="mt-2 flex flex-wrap items-center gap-1.5"><Verdict r={r} minTrades={data.minTrades} /><LiveCheck r={r} open={open} onToggle={() => toggleRow(id)} /></div>
                                         <dl className="mt-2 grid grid-cols-3 gap-x-3 gap-y-1.5 text-2xs">
                                             <div><dt className="text-fg-5">Net · {r.trades} trades</dt><dd className={`text-sm font-semibold ${pnlTone(r.net)}`}>{r.trades ? rup(r.net) : '—'}</dd></div>
                                             <div><dt className="text-fg-5">Per trade</dt><dd className={`text-sm font-semibold ${pnlTone(r.perTrade)}`}>{r.perTrade == null ? '—' : rup(r.perTrade)}</dd></div>
                                             <div className="min-w-0"><dt className="text-fg-5">vs backtest</dt><dd className="text-xs"><VsBacktest r={r} /></dd></div>
-                                            <div><dt className="text-fg-5">Win%</dt><dd className="text-xs">{r.winRate == null ? '—' : `${r.winRate}%`}</dd></div>
+                                            <div><dt className="text-fg-5">Consistency</dt><dd className={`text-xs ${consTone(r.consistency?.score, goodConsistency)}`}>{consistencyText(r.consistency?.score)}</dd></div>
+                                            <div><dt className="text-fg-5">Win% · PF</dt><dd className="text-xs">{r.winRate == null ? '—' : `${r.winRate}%`} · {r.profitFactor == null ? '—' : r.profitFactor.toFixed(2)}</dd></div>
+                                            <div><dt className="text-fg-5">Return ÷ margin</dt><dd className={`text-xs ${pnlTone(r.romPct)}`}>{r.romPct == null ? '—' : `${r.romPct.toFixed(2)}%`}</dd></div>
                                             <div><dt className="text-fg-5">Max DD</dt><dd className="text-xs text-danger">{r.maxDrawdown ? rup(r.maxDrawdown) : '—'}</dd></div>
+                                            <div><dt className="text-fg-5">Worst trade</dt><dd className={`text-xs ${pnlTone(r.worstTrade)}`}>{signedRup(r.worstTrade)}</dd></div>
                                             <div><dt className="text-fg-5">Open MTM</dt><dd className={`text-xs ${r.open ? pnlTone(r.open.mtmNet) : 'text-fg-5'}`}>{r.open ? rup(r.open.mtmNet) : '—'}</dd></div>
                                         </dl>
                                         <div className="mt-2"><Spark curve={r.curve} width={180} height={28} color={ct.mark.equity} zero={ct.axis} /></div>
+                                        {open && <div className="mt-3 border-t border-line pt-3"><RowDetail r={r} windowed={data.windowed} wide={false} /></div>}
                                     </article>
                                 );
                             })}
                         </div>
                     )}
-                {rows.length > COLLAPSED_ROWS && (
-                    <div className="mt-2 text-2xs text-fg-5">
-                        Showing {shown.length} of {rows.length}{q ? ` matching “${q}”` : ''}.{' '}
-                        <button type="button" onClick={() => setAll(a => !a)} className="text-primary-ink hover:underline">{all ? 'Show fewer' : `Show all ${rows.length}`}</button>
-                    </div>
-                )}
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-2xs text-fg-5">
+                    {hidden > 0 && (
+                        <span>
+                            {rows.length} of {searched.length} match the filters — {hidden} hidden.{' '}
+                            <button type="button" onClick={() => setFilters({ ...DEFAULT_FILTERS })} className="text-primary-ink hover:underline">Clear filters</button>
+                        </span>
+                    )}
+                    {rows.length > COLLAPSED_ROWS && (
+                        <span>
+                            Showing {shown.length} of {rows.length}{q ? ` matching “${q}”` : ''}.{' '}
+                            <button type="button" onClick={() => setAll(a => !a)} className="text-primary-ink hover:underline">{all ? 'Show fewer' : `Show all ${rows.length}`}</button>
+                        </span>
+                    )}
+                    {asTable && droppedForWidth.length > 0 && (
+                        <span>Narrow panel: {droppedForWidth.map(c => c.label).join(', ')} hidden — each row's Details has them.</span>
+                    )}
+                    {allRows.some(r => r.margin?.basis === 'estimate') && chosen.some(c => c.k === 'romPct') && (
+                        <span>* return on an estimated margin (before 19-Oct the margin was estimated, about 2× the broker's for naked shorts).</span>
+                    )}
+                </div>
                 {!single && allRows.length > 1 && pickedRows.length < 2 && (
                     <div className="mt-2 text-2xs text-fg-5">Tick 2–{MAX_COMPARE} strategies to overlay their equity curves.{pickedRows.length === 1 ? ' One picked — pick one more.' : ''}</div>
                 )}

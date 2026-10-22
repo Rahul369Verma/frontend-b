@@ -7,7 +7,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import ThemeProvider from '../../theme/ThemeContext.jsx';
-import { rowsOf, stopEffect, suggestStop, splitByTime } from '../../utils/stopWhatIf.js';
+import { rowsOf, stopEffect, suggestStop, splitByTime, lowestLossStop, stopTable, worstAfter } from '../../utils/stopWhatIf.js';
 
 vi.mock('axios', () => ({ default: { get: vi.fn(), post: vi.fn() } }));
 import axios from 'axios';
@@ -57,6 +57,40 @@ describe('stop what-if', () => {
         expect(s.ok).toBe(false);
         expect(s.reason).toMatch(/did not help on the newest/);
         expect(suggestStop(rowsOf(POINTS.slice(0, 10))).reason).toMatch(/too few/);
+    });
+});
+
+describe('the lowest-loss stop (user, 23-Oct-2026: "it does not tell the minimum-loss stop")', () => {
+    const rows = rowsOf(POINTS);
+    it('is the level with the best total on ALL trades, with its worst trade, said apart from the suggestion', () => {
+        const low = lowestLossStop(rows);
+        expect(low.level).toBe(850);                    // just past the −₹800 dips that recover: every run-away cut, no recoverer
+        expect(low.hit).toBe(20);
+        expect(low.netChange).toBe(20 * (-850 + 3800));
+        expect(low.total).toBe(20 * -3800 + 20 * 600 + 20 * 1200);
+        expect(low.netAfter).toBe(low.total + low.netChange);
+        expect(low.worstAfter).toBe(-850);
+        expect(low.worstWithout).toBe(-3800);
+        expect(worstAfter(rows, 2000)).toBe(-2000);
+    });
+    it('says "no stop" when every level cuts the result, and lists round levels with the picks', () => {
+        const allRecover = rowsOf(POINTS.map((p) => [p[0], p[1], 500, p[3], p[4], p[5]]));
+        expect(lowestLossStop(allRecover).level).toBeNull();
+        const t = stopTable(rows, [850]);
+        expect(t.map((r) => r.level)).toEqual([500, 850, 1000, 1500, 2000, 2500, 3000, 4000]);   // nothing past the deepest worst point (−₹4,000)
+        expect(t.find((r) => r.level === 850).netAfter).toBe(lowestLossStop(rows).netAfter);
+    });
+    it('the picker shows it, the levels on request, and "use it" moves the level there', () => {
+        render(<ThemeProvider><ExcursionsPanel excursions={X} /></ThemeProvider>);
+        const line = screen.getByTestId('stop-lowest-loss');
+        expect(line.textContent).toMatch(/Lowest loss on all 60 trades: stop at −₹850 → net .*20 trades stopped, worst trade .*850 instead of .*3,800\. Hindsight/);
+        fireEvent.click(within(line).getByRole('button', { name: 'every level' }));
+        expect(screen.getByTestId('stop-table').textContent).toMatch(/−₹850 ★/);
+        // here the suggestion (checked on the newest trades) is the same level, so the picker already sits on it
+        expect(within(line).queryByRole('button', { name: 'use it' })).toBeNull();
+        fireEvent.change(screen.getByLabelText('Stop level in rupees'), { target: { value: '3000' } });
+        fireEvent.click(within(screen.getByTestId('stop-lowest-loss')).getByRole('button', { name: 'use it' }));
+        expect(screen.getByLabelText('Stop level in rupees').value).toBe('850');
     });
 });
 

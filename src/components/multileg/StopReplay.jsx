@@ -17,13 +17,30 @@ import axios from 'axios';
 import { API_URL } from '../../config/api.js';
 import TradePathChart from '../viz/TradePathChart';
 import { istDateTime as tokIstDateTime } from '../viz/tokens';
-import { rup, signed, tone, hhmm, reasonText, stopsText, recoveryText, tradeStopsText, firedLines, stopLossText, archiveNotes } from './stopReplayFormat.js';
+import useTradeVix from '../../hooks/useTradeVix.js';
+import { vixRangeOver } from '../../utils/vixOverlay.js';
+import { rup, signed, tone, hhmm, reasonText, stopsText, recoveryText, tradeStopsText, firedLines, stopLossText, archiveNotes, vixLine } from './stopReplayFormat.js';
 import { Spinner } from '../viz/primitives';
 
 const BTN = 'inline-flex items-center gap-1 px-2 py-1 rounded border border-line-2 bg-card-2 text-2xs text-fg-3 hover:text-fg disabled:opacity-50';
 
+/**
+ * India VIX for one round trip: loaded when the row is opened, drawn on the path chart
+ * (the chart's "India VIX" checkbox), and summed up in one line. Option premiums carry
+ * vega: a short structure loses when VIX rises even if spot stands still.
+ */
+function useRoundTripVix(trade) {
+    const entryMs = trade?.entryAt ? Date.parse(trade.entryAt) : NaN;
+    const exitMs = trade?.exitAt ? Date.parse(trade.exitAt) : NaN;
+    const vix = useTradeVix(Number.isFinite(entryMs) ? entryMs : null, Number.isFinite(exitMs) ? exitMs : null);
+    const range = useMemo(() => (vix.points && Number.isFinite(entryMs)
+        ? vixRangeOver(vix.points, entryMs, Number.isFinite(exitMs) ? exitMs : entryMs) : null), [vix.points, entryMs, exitMs]);
+    return { ...vix, range };
+}
+
 export function TradeStopReplay({ trade, istTime, istDateTime, istSpan }) {
     const id = trade?._id;
+    const vix = useRoundTripVix(trade);
     // keyed by trade: another trade opened in the same row starts idle
     const [state, setSt] = useState({ id: null, status: 'idle' });
     const st = state.id === id ? state : { status: 'idle' };
@@ -66,7 +83,13 @@ export function TradeStopReplay({ trade, istTime, istDateTime, istSpan }) {
                     {fired.map((f, i) => <div key={i} className="text-fg-3">{f}</div>)}
                 </div>
             )}
-            <TradePathChart trade={trade} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} overlays={overlays} markers={markers} stopLines={stopLines} gaps={d?.archive?.gaps} />
+            <div className="mb-1 text-3xs" data-testid="trade-vix">
+                {vix.range ? <span className="text-fg-3">{vixLine(vix.range)}{vix.truncated ? ` (first ${vix.truncated.shown} of ${vix.truncated.held} days held)` : ''}.</span>
+                    : vix.points ? <span className="text-fg-5">India VIX drawn below; its value at entry or exit is not known (before the day&apos;s first bar, or outside the days loaded).</span>
+                        : vix.loading ? <span className="text-fg-5">Loading India VIX…</span>
+                            : <span className="text-fg-5">India VIX not shown: {vix.reason || 'not available'}.</span>}
+            </div>
+            <TradePathChart trade={trade} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} overlays={overlays} markers={markers} stopLines={stopLines} gaps={d?.archive?.gaps} vix={vix.points} />
             <div className="mt-1.5 text-3xs text-fg-4 space-y-1" data-testid="stop-replay">
                 {st.status === 'idle' && id && (
                     <div className="flex items-center gap-2 flex-wrap">
@@ -168,7 +191,9 @@ function GridResult({ res, job, showAll, setShowAll }) {
     const legs = [...new Set(res.rows.map((r) => r.legSlX))].sort((a, b) => (a === 0) - (b === 0) || a - b);
     const losses = [...new Set(res.rows.map((r) => r.maxLoss))].sort((a, b) => (a === 0) - (b === 0) || a - b);
     const cell = (l, m) => res.rows.find((r) => r.legSlX === l && r.maxLoss === m);
-    const best = res.rows[0];
+    const best = res.rows[0];   // the server sorts best net first: the lowest loss on these trades
+    // the other "minimum loss": the setting whose WORST single trade lost least (ties → better net)
+    const safest = res.rows.slice().sort((a, b) => (b.worst - a.worst) || (b.net - a.net))[0];
     const cur = cell(res.current.legSlX, res.current.maxLoss);
     const stopped = res.perTrade.filter((t) => t.stopped);
     const cameBack = stopped.filter((t) => t.recovery?.wentPositiveAfterStop);
@@ -183,7 +208,8 @@ function GridResult({ res, job, showAll, setShowAll }) {
                 {res.skipped.length > 0 ? `; ${res.skipped.length} could not be replayed (${[...new Set(res.skipped.map((s) => s.why))].join('; ')})` : ''}.
             </div>
             <div>
-                Best on these trades: <b>leg {legLabel(best.legSlX)} + rupee {lossLabel(best.maxLoss)}</b> → <b className={tone(best.net)}>{signed(best.net)}</b> (worst trade {signed(best.worst)}).
+                Lowest loss on these trades (best net): <b>leg {legLabel(best.legSlX)} + rupee {lossLabel(best.maxLoss)}</b> → <b className={tone(best.net)}>{signed(best.net)}</b> (worst trade {signed(best.worst)}).
+                {safest && safest !== best && <>{' '}Smallest worst trade: <b>leg {legLabel(safest.legSlX)} + rupee {lossLabel(safest.maxLoss)}</b> → worst {signed(safest.worst)}, net <b className={tone(safest.net)}>{signed(safest.net)}</b>.</>}
                 {' '}Current <b>leg {legLabel(res.current.legSlX)} + rupee {lossLabel(res.current.maxLoss)}</b> → {cur ? <b className={tone(cur.net)}>{signed(cur.net)}</b> : 'not in the grid'}{cur ? ` (worst ${signed(cur.worst)})` : ''}.
                 {' '}No stops at all → <b className={tone(res.noStops.net)}>{signed(res.noStops.net)}</b> (worst {signed(res.noStops.worst)}).
             </div>

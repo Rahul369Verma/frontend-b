@@ -12,7 +12,7 @@ import { ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis, CartesianGrid
 import { useChartTheme } from '../../theme/chartTheme.js';
 import { pnlTone, rupeeTick } from '../viz/tokens';
 import { fmt, rup } from './builderFormat';
-import { rowsOf, stopEffect, suggestStop, splitByTime } from '../../utils/stopWhatIf.js';
+import { rowsOf, stopEffect, suggestStop, splitByTime, lowestLossStop, stopTable } from '../../utils/stopWhatIf.js';
 import ApplyStopDialog from './ApplyStopDialog.jsx';
 
 const signed = (v) => (v > 0 ? `+${rup(v)}` : rup(v));
@@ -45,6 +45,10 @@ export function DotTip({ active, payload, ct, basis }) {
  */
 function StopLossPicker({ rows, level, setLevel, canApply, basis, ApplyDialog = ApplyStopDialog, applyNote = null }) {
     const sug = useMemo(() => suggestStop(rows), [rows]);
+    const low = useMemo(() => lowestLossStop(rows), [rows]);
+    const table = useMemo(() => stopTable(rows, [low.level, sug.ok ? sug.level : null]), [rows, low.level, sug]);
+    const [showTable, setShowTable] = useState(false);
+    const word = basis === 'gross' ? 'gross' : 'net';
     const { older, newer } = useMemo(() => splitByTime(rows), [rows]);
     const eff = useMemo(() => ({ all: stopEffect(rows, level), older: stopEffect(older, level), newer: stopEffect(newer, level) }), [rows, older, newer, level]);
     const scopeIds = useMemo(() => [...new Set(rows.map((r) => r.id).filter(Boolean))], [rows]);
@@ -62,6 +66,44 @@ function StopLossPicker({ rows, level, setLevel, canApply, basis, ApplyDialog = 
                 </p>
             ) : (
                 <p className="text-xs text-fg-4" data-testid="stop-suggestion">No stop is suggested: {sug.reason}. You can still try a level below.</p>
+            )}
+            {/* the minimum-loss level on ALL these trades — hindsight, so it is said apart from the suggestion */}
+            <p className="text-xs text-fg-3" data-testid="stop-lowest-loss">
+                {low.level == null ? (
+                    <>Lowest loss on all {low.n} trades: <b className="text-fg">no stop</b> — every level would have cut {word} (now <b className={pnlTone(low.total)}>{signed(low.total)}</b>): the trades that went that far mostly came back.</>
+                ) : (
+                    <>Lowest loss on all {low.n} trades: stop at <b className="text-fg">−{rup(low.level)}</b> → {word} <b className={pnlTone(low.netAfter)}>{signed(low.netAfter)}</b>
+                        {' '}(no stop: {signed(low.total)}; <span className={pnlTone(low.netChange)}>{signed(low.netChange)}</span>), {low.hit} trade{low.hit === 1 ? '' : 's'} stopped,
+                        {' '}worst trade {signed(low.worstAfter)} instead of {signed(low.worstWithout)}. Hindsight — picked on the same trades it is scored on.
+                        {low.level !== T && <button type="button" className="ml-2 text-primary-ink hover:underline" onClick={() => setLevel(low.level)}>use it</button>}</>
+                )}
+                <button type="button" className="ml-2 text-2xs text-fg-4 hover:text-fg underline" aria-expanded={showTable} onClick={() => setShowTable((v) => !v)}>
+                    {showTable ? 'hide levels' : 'every level'}
+                </button>
+            </p>
+            {showTable && (
+                <div className="overflow-x-auto" data-testid="stop-table">
+                    <table className="text-2xs tabular-nums">
+                        <thead><tr className="text-fg-5 text-left">
+                            <th className="font-normal pr-3">Stop</th><th className="font-normal text-right pr-3">Stopped</th>
+                            <th className="font-normal text-right pr-3">…would have recovered</th><th className="font-normal text-right pr-3">{word === 'gross' ? 'Gross' : 'Net'} after</th>
+                            <th className="font-normal text-right pr-3">Change</th><th className="font-normal text-right">Worst trade</th>
+                        </tr></thead>
+                        <tbody>
+                            {table.map((r) => (
+                                <tr key={r.level} className={`border-t border-line-0/60 ${r.level === low.level ? 'font-semibold' : ''}`}>
+                                    <td className="pr-3">−{rup(r.level)}{r.level === low.level ? ' ★' : ''}{sug.ok && r.level === sug.level ? ' ✓' : ''}</td>
+                                    <td className="text-right pr-3">{r.hit}</td>
+                                    <td className="text-right pr-3 text-fg-5">{r.recovered}</td>
+                                    <td className={`text-right pr-3 ${pnlTone(r.netAfter)}`}>{signed(r.netAfter)}</td>
+                                    <td className={`text-right pr-3 ${pnlTone(r.netChange)}`}>{signed(r.netChange)}</td>
+                                    <td className="text-right">{signed(r.worst)}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    <p className="text-3xs text-fg-5 mt-1">★ lowest loss on all trades · ✓ the suggestion (checked on the newest trades). No stop: {signed(low.total)}, worst trade {signed(low.worstWithout)}.</p>
+                </div>
             )}
             <div className="flex items-center gap-2 flex-wrap">
                 <label className="text-2xs text-fg-4 inline-flex items-center gap-1.5">Stop at −₹

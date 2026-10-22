@@ -121,3 +121,10 @@ export function recoveryText(d) {
             : `held with no stops, it never got back above ₹0 (best after the stop ${signed(r.bestAfterStop)})`;
     return `First stop: ${reasonText(r.stopKind)} at ${hhmm(r.firstStopAt)} IST — ${after}, and would have finished at ${signed(d.noStops.net)} (${reasonText(d.noStops.reason)}).`;
 }
+
+/** "India VIX 12.84 at entry → 13.10 at exit (+0.26) · 12.70–13.35 while held" — the round-trip card's VIX line. */
+export function vixLine(r) {
+    if (!r) return null;
+    const ch = r.change > 0 ? `+${r.change.toFixed(2)}` : r.change.toFixed(2);
+    return `India VIX ${r.from.toFixed(2)} at entry → ${r.to.toFixed(2)} at exit (${ch}) · ${r.low.toFixed(2)}–${r.high.toFixed(2)} while held`;
+}

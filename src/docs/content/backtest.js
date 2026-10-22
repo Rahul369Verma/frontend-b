@@ -161,6 +161,16 @@ Applies the ticked changes and re-runs the backtest at once. The **before vs aft
 > **Note:** In testing on one year of data, the gate helped no strategy reliably — check the suggestion's out-of-sample result before trusting it.`,
         },
         {
+            id: 'stop-sweep',
+            title: 'Results · Stop-loss that loses least',
+            md: `**Find the stop-loss that loses least** re-runs this exact backtest once per stop level and compares the results. The stop it changes is **Max Single Loss (₹)** — per lot, the rule the live engine also applies: it tightens each trade's own stop so one lot risks at most that amount. Levels tried: ₹500 to ₹7,500 per lot, your current level, and **no cap** (each trade keeps its strategy's own stop). Only the stop changes; a tighter stop also changes which later signals can be taken, which these full re-runs include.
+
+- **Lowest loss (★)** — the level with the best net over the whole period: the smallest loss when every level loses. It is hindsight, picked on the same trades it is scored on. The panel shows its worst trade and drawdown next to yours, because a looser stop can win on net and still lose more on one bad day.
+- **Chosen on the first part (✓)** — the best level on the first ~70% of trades, then measured on the remaining ~30% against your current level. **Held up** means it also won on trades it never saw.
+- The table has every level: trades, how many exited on their stop, how many stops the cap tightened, net, the change against your current level, worst trade, max drawdown, and the two parts of the period.
+- **Use …** puts that level into *Max Single Loss* on the form; run the backtest again to see it. With AI confirmation on, the sweep is refused, because every re-run would repeat every AI call.`,
+        },
+        {
             id: 'trades-table',
             title: 'Results · Trades table and trade chart',
             md: `Every trade: entry time, volume, spot at entry, the spot stop and target, money invested, exit time, spot at exit, reason and P&L. With AI on, extra columns show the AI's stop and target levels, fair-value entry, its exit and estimated P&L, and which model decided. Status labels: **REJECTED** (AI turned it down — not taken), **FVE SKIPPED** (the fair-value price never came), **NO DATA**.

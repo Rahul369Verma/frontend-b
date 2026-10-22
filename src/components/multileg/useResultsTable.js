@@ -33,13 +33,14 @@ export function templateKeysMatching(q, templates = [], keysInTrades = []) {
     return [...keys].filter((k) => k && nameOf(k).toLowerCase().includes(text));
 }
 
-/** The filter bar as query params (the same names the server reads). */
-export const filterParams = (filter, since) => ({
+/** The filter bar as query params (the same names the server reads). `until` is exclusive. */
+export const filterParams = (filter, since, until = null) => ({
     mode: filter.mode, deploymentId: filter.deploymentId, template: filter.template, symbol: filter.symbol,
     ...(since != null ? { since } : {}),
+    ...(until != null ? { until } : {}),
 });
 
-export default function useResultsTable({ active, filter, since, table, templates, pageSize = 50, pollMs = 60_000 }) {
+export default function useResultsTable({ active, filter, since, until = null, table, templates, pageSize = 50, pollMs = 60_000 }) {
     const [page, setPage] = useState(EMPTY_PAGE);
     const [facets, setFacets] = useState(EMPTY_FACETS);
     // `loading` is DERIVED: the answer for the current request is not in yet (no setState in an effect)
@@ -59,7 +60,7 @@ export default function useResultsTable({ active, filter, since, table, template
     // The request is keyed on its VALUES: a re-render that rebuilds the same filter (the
     // structure list arriving, the dropdowns refreshing) must not ask for the page again.
     const paramsJson = JSON.stringify({
-        ...filterParams(filter, since),
+        ...filterParams(filter, since, until),
         q, qTemplates: qTemplates.join(','), reason: table.reason, sort: table.sort, dir: table.dir, page: table.page, pageSize,
     });
     const reqKey = `${paramsJson}#${nonce}`;

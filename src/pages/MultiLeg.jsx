@@ -4,11 +4,12 @@ import axios from 'axios';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceDot, ReferenceArea, Legend,
 } from 'recharts';
-import { Layers, Play, Pause, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp, Wallet, ChevronDown, ChevronRight } from 'lucide-react';
+import { Layers, Play, Pause, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp, Wallet, ChevronDown, ChevronRight, Pencil } from 'lucide-react';
 import StructureAttributionPanel from '../components/viz/StructureAttributionPanel';
 import StrategyBuilder from '../components/multileg/StrategyBuilder';
 import ResultsAnalytics from '../components/multileg/ResultsAnalytics';
 import { TradeStopReplay } from '../components/multileg/StopReplay.jsx';
+import { deploymentEditBody, editBlocker, changeLine } from '../components/multileg/deploymentEditFormat.js';
 import AutoRunProgress from '../components/multileg/AutoRunProgress';
 import { estimateStageSizes, sizesForRequest, runSummary, useRunTracker } from '../components/multileg/runProgress';
 import ZoomableChart from '../components/charts/ZoomableChart';
@@ -21,6 +22,7 @@ import { pollInterval } from '../hooks/usePolling.js';
 import useCollapse from '../hooks/useCollapse.js';
 import useResultsTable from '../components/multileg/useResultsTable.js';
 import ResultsDayCurves from '../components/multileg/ResultsDayCurves.jsx';
+import { presetWindow, rangeWindow, windowLabel, windowFromParams, stepTradingDay, istDate } from '../components/multileg/resultsWindow.js';
 import { API_URL } from '../config/api.js';
 import { pnlTone } from '../components/viz/tokens';
 import { spotMove, pfText, pfValue } from '../components/multileg/builderFormat';
@@ -240,6 +242,9 @@ export default function MultiLeg() {
     const [activityData, setActivityData] = useState(null); // { id, data } — cumulative realized P&L + live open MTM
     const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
     const [confirmState, setConfirmState] = useState(null); // { title, body, danger, confirmLabel, requireText, onConfirm }
+    // a RUNNING deployment loaded into the builder for editing (see editDeployment)
+    const [editingDep, setEditingDep] = useState(null);   // { id, name, template, symbol, entry_mode, signal_strategy, trade_mode, state }
+    const [editMsg, setEditMsg] = useState(null);
     const [livePreview, setLivePreview] = useState(null);          // pre-deploy risk preview modal { strategy, tradeMode, data, loading }
     const [promote, setPromote] = useState(null);                  // go-live promotion dialog { id, name } for a fresh PAPER deployment
     const [pending, setPending] = useState({});             // per-action pending flags (button spinners)
@@ -263,8 +268,26 @@ export default function MultiLeg() {
     // alone, so "30d" scoped the tiles while the table under them still listed
     // every trade. `since` is fixed when the window is picked (by exit time,
     // the same rule the analytics endpoint applies).
-    const [resWindow, setResWindow] = useState({ days: 'all', since: null });
-    const pickResWindow = (d) => setResWindow({ days: d, since: d === 'all' ? null : Date.now() - Number(d) * 864e5 });
+    //
+    // Or a DATE RANGE / one day (From = To), whole IST days by exit — kept in the URL
+    // (?from=&to=) so a day can be bookmarked (resultsWindow.js).
+    const [resWindow, setResWindow] = useState(() => windowFromParams(searchParams) || presetWindow('all'));
+    const writeResWindowUrl = useCallback((w) => setSearchParams((p) => {
+        const q = new URLSearchParams(p);
+        if (w.days === 'range') {
+            q.set('from', w.from);
+            if (w.to !== w.from) q.set('to', w.to); else q.delete('to');
+        } else { q.delete('from'); q.delete('to'); }
+        return q;
+    }, { replace: true }), [setSearchParams]);
+    const pickResWindow = (d) => { const w = presetWindow(d); setResWindow(w); writeResWindowUrl(w); };
+    const pickResRange = useCallback((from, to) => {
+        const w = rangeWindow(from, to);
+        if (!w) return;
+        setResWindow(w);
+        setResTable((t) => ({ ...t, page: 0 }));
+        writeResWindowUrl(w);
+    }, [writeResWindowUrl]);
     // Round-trips table: sort, search, exit-reason filter and paging. Page is
     // clamped on render, so a narrower filter can never leave it past the end.
     const [resTable, setResTable] = useState({ sort: 'exit', dir: 'desc', q: '', reason: 'all', page: 0 });
@@ -696,7 +719,7 @@ export default function MultiLeg() {
     // a row's legs and path load when it is opened, the day curves when they are reached.
     // It used to pull ?limit=2000 WITH every path (21 s on prod) and do all of it here.
     const [resDepList, setResDepList] = useState([]);   // dropdown names only — never written into mlDeps (the Deploy cards' state)
-    const resQuery = useResultsTable({ active: mode === 'results', filter: resFilter, since: resWindow.since, table: resTable, templates });
+    const resQuery = useResultsTable({ active: mode === 'results', filter: resFilter, since: resWindow.since, until: resWindow.until, table: resTable, templates });
     const resLoading = resQuery.loading;
     const loadResDepList = useCallback(() => axios.get(`${API_URL}/multileg/deployments`, { params: { lite: 1 }, timeout: 20000 })
         .then(r => setResDepList(Array.isArray(r.data?.deployments) ? r.data.deployments : []))
@@ -816,6 +839,48 @@ export default function MultiLeg() {
         setSaveName(s.name);
         setMode('backtest');
         scrollPageToTop();
+    };
+
+    // EDIT A DEPLOYMENT: its own settings into the builder (where it can be backtested first),
+    // then "Save to deployment" — the server says what changed and when each change acts.
+    const editDeployment = (d) => {
+        loadSaved({ ...d, params: { ...(d.params || {}), lots: d.lots }, backtest: null });
+        setEditingDep({ id: d._id, name: d.name, template: d.template, symbol: d.symbol, entry_mode: d.entry_mode || 'time',
+            signal_strategy: d.signal_strategy || null, trade_mode: d.trade_mode, state: d.position?.state || 'IDLE' });
+        setEditMsg(null);
+    };
+    const editBlock = editBlocker(editingDep, { tplKey, symbol, entryMode, signalStrategy });
+    const saveToDeployment = async () => {
+        if (!editingDep || editBlock) return;
+        const dep = editingDep;
+        const body = deploymentEditBody({ params, entryMode, useSignalExit, signalParams, name: saveName });
+        setEditMsg(null);
+        try {
+            const plan = (await axios.patch(`${API_URL}/multileg/deployments/${dep.id}`, { ...body, dryRun: true })).data;
+            if (!plan.changes?.length) { setEditMsg('Nothing changed — the deployment already runs these settings.'); return; }
+            const isLive = dep.trade_mode === 'LIVE';
+            setConfirmState({
+                title: `Save ${plan.changes.length} change(s) to “${dep.name}”?`, danger: isLive,
+                confirmLabel: 'Save to deployment', requireText: isLive ? dep.name : null,
+                body: (
+                    <div className="space-y-1 text-xs">
+                        {isLive && <div className="text-danger font-semibold">This is a LIVE deployment: the changes govern real orders.</div>}
+                        <ul className="list-disc pl-4 space-y-0.5 font-mono text-2xs">{plan.changes.map((c) => <li key={c.key}>{changeLine(c)}</li>)}</ul>
+                        <div className="text-fg-5">{plan.open ? 'It has an OPEN structure: exit settings act on it at its next check (~10 s).' : 'It is flat: every change acts from its next entry.'} The saved strategy it came from is not changed.</div>
+                    </div>
+                ),
+                onConfirm: () => withPending(`edit:${dep.id}`, async () => {
+                    const r = await axios.patch(`${API_URL}/multileg/deployments/${dep.id}`, body);
+                    if (!r.data?.ok) throw new Error((r.data?.errors || [r.data?.error || 'not saved']).join('; '));
+                    setEditingDep(null);
+                    setMode('deploy');
+                    refreshDeployments();
+                }, `Saved ${plan.changes.length} change(s) to “${dep.name}”`),
+            });
+        } catch (e) {
+            const d = e.response?.data;
+            setEditMsg(d?.errors?.length ? `Not saved: ${d.errors.join(' · ')}` : `Not saved: ${d?.error || e.message}`);
+        }
     };
 
     const withPending = async (key, fn, okMsg) => {
@@ -1521,6 +1586,22 @@ export default function MultiLeg() {
                                 {running ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                                 {running ? 'Running…' : 'Run Backtest'}
                             </button>
+                            {editingDep && (
+                                <div className="mt-3 rounded border border-amber-700/50 bg-amber-950/20 p-2 text-2xs text-fg-3 space-y-1.5" data-testid="editing-deployment">
+                                    <div className="font-semibold text-warning flex items-center gap-1"><Pencil className="w-3.5 h-3.5" /> Editing deployment “{editingDep.name}” ({editingDep.trade_mode} · {editingDep.state === 'IDLE' ? 'flat' : 'structure OPEN'})</div>
+                                    <div className="text-fg-4">Change any setting, backtest it if you like, then save it to the deployment. Exit settings (stops, target, square-off, hold) act on an open structure at its next check; the rest from its next entry. The structure, symbol, entry trigger and trading mode cannot change here.</div>
+                                    {editBlock && <div className="text-danger">{editBlock}</div>}
+                                    {editMsg && <div className={editMsg.startsWith('Not saved') ? 'text-danger' : 'text-fg-4'}>{editMsg}</div>}
+                                    <div className="flex gap-2">
+                                        <button onClick={saveToDeployment} disabled={!!editBlock || !!pending[`edit:${editingDep.id}`]}
+                                            className="px-3 py-1.5 bg-amber-900/30 hover:bg-amber-900/50 border border-amber-700/50 text-warning rounded text-xs font-semibold disabled:opacity-40">
+                                            Save to deployment
+                                        </button>
+                                        <button onClick={() => { setEditingDep(null); setEditMsg(null); }}
+                                            className="px-3 py-1.5 border border-line rounded text-xs text-fg-4 hover:text-fg">Stop editing</button>
+                                    </div>
+                                </div>
+                            )}
                             <div className="mt-3 pt-3 border-t border-line-0">
                                 <div className="text-xs text-fg-4 font-semibold mb-1 flex items-center gap-1"><Save className="w-3.5 h-3.5" /> Save this configuration</div>
                                 <div className="flex gap-2">
@@ -2789,6 +2870,7 @@ export default function MultiLeg() {
                                                 {d.status === 'ACTIVE'
                                                     ? <button onClick={() => depAction(d, open ? 'stop-close' : 'stop')} disabled={busy} aria-label={open ? `Stop and close ${d.name}` : `Stop ${d.name}`} className="px-2 py-0.5 rounded border border-amber-700/50 bg-amber-900/20 text-warning text-2xs hover:bg-amber-900/40 disabled:opacity-40"><StopCircle className="w-3 h-3 inline mr-0.5" />{open ? 'Stop + close' : 'Stop'}</button>
                                                     : <button onClick={() => depAction(d, 'start')} disabled={busy} aria-label={`Resume ${d.name}`} className="px-2 py-0.5 rounded border border-emerald-700/50 bg-emerald-900/20 text-success text-2xs hover:bg-emerald-900/40 disabled:opacity-40"><Play className="w-3 h-3 inline mr-0.5" />Resume</button>}
+                                                <button onClick={() => editDeployment(d)} disabled={busy} aria-label={`Edit ${d.name}`} title="Load its settings into the builder, change them, and save them back to this deployment" className="px-2 py-0.5 rounded border border-line bg-slate-800 text-fg-3 text-2xs hover:text-fg disabled:opacity-40"><Pencil className="w-3 h-3 inline mr-0.5" />Edit</button>
                                                 {st === 'OPEN' && <button onClick={() => depAction(d, 'close')} disabled={busy} aria-label={`Close ${d.name} now`} className="px-2 py-0.5 rounded border border-red-700/50 bg-red-900/20 text-danger text-2xs hover:bg-red-900/40 disabled:opacity-40"><Square className="w-3 h-3 inline mr-0.5" />Close now</button>}
                                                 {!open && <button onClick={() => depAction(d, 'delete')} disabled={busy} aria-label={`Delete ${d.name}`} className="px-2 py-0.5 rounded border border-line bg-slate-800 text-fg-4 text-2xs hover:text-danger disabled:opacity-40"><Trash2 className="w-3 h-3 inline mr-0.5" />Delete</button>}
                                             </div>
@@ -2900,7 +2982,7 @@ export default function MultiLeg() {
                         </div>
                         <div>
                             <div className="text-3xs text-fg-5 mb-0.5" id="res-window-label">Window (by exit)</div>
-                            <div className="flex items-center gap-1" role="group" aria-labelledby="res-window-label">
+                            <div className="flex flex-wrap items-center gap-1" role="group" aria-labelledby="res-window-label">
                                 {[[30, '30d'], [90, '90d'], ['all', 'All']].map(([v, label]) => (
                                     <button key={String(v)} type="button" onClick={() => pickResWindow(v)} aria-pressed={resWindow.days === v}
                                         title={v === 'all' ? 'Every booked round-trip' : `Round-trips that exited in the last ${v} days — applies to the whole page`}
@@ -2910,6 +2992,33 @@ export default function MultiLeg() {
                                 ))}
                             </div>
                         </div>
+                        {/* a date range or ONE day (From = To) — scopes the whole page like the presets */}
+                        {(() => {
+                            const today = istDate();
+                            const day = resWindow.days === 'range' && resWindow.from === resWindow.to ? resWindow.from : null;
+                            const dateIn = `h-7 bg-slate-800 border rounded px-1 text-xs text-fg-2 ${resWindow.days === 'range' ? 'border-primary' : 'border-line'}`;
+                            const step = 'px-1.5 py-1 rounded border border-line bg-slate-800 text-xs text-fg-4 hover:text-fg disabled:opacity-40';
+                            return (
+                                <div>
+                                    <div className="text-3xs text-fg-5 mb-0.5" id="res-dates-label">Dates (by exit, IST) — one day: same From and To</div>
+                                    <div className="flex flex-wrap items-center gap-1" role="group" aria-labelledby="res-dates-label">
+                                        <input type="date" aria-label="From date (exit, IST)" className={dateIn} max={today}
+                                            value={resWindow.from || ''}
+                                            onChange={(e) => e.target.value && pickResRange(e.target.value, resWindow.to && resWindow.to >= e.target.value ? resWindow.to : e.target.value)} />
+                                        <span className="text-3xs text-fg-5">→</span>
+                                        <input type="date" aria-label="To date (exit, IST)" className={dateIn} max={today} min={resWindow.from || undefined}
+                                            value={resWindow.to || ''}
+                                            onChange={(e) => e.target.value && pickResRange(resWindow.from || e.target.value, e.target.value)} />
+                                        <button type="button" className={step} disabled={!day} onClick={() => pickResRange(stepTradingDay(day, -1), stepTradingDay(day, -1))}
+                                            title="Previous trading day" aria-label="Previous trading day">◀</button>
+                                        <button type="button" className={step} disabled={!day || day >= today} onClick={() => pickResRange(stepTradingDay(day, 1), stepTradingDay(day, 1))}
+                                            title="Next trading day" aria-label="Next trading day">▶</button>
+                                        <button type="button" className={step} aria-pressed={day === today} onClick={() => pickResRange(today, today)}
+                                            title="Today's round-trips (IST)">Today</button>
+                                    </div>
+                                </div>
+                            );
+                        })()}
                         <button onClick={refreshResults} className="ml-auto px-2 py-1 rounded border border-line bg-slate-800 text-xs text-fg-3 hover:text-fg flex items-center gap-1">
                             <RefreshCw className={`w-3 h-3 ${resLoading ? 'animate-spin' : ''}`} /> Refresh
                         </button>
@@ -2921,10 +3030,14 @@ export default function MultiLeg() {
                                 <>
                                     No booked round-trips yet for <span className="text-fg-3">{resDeploymentName}</span>
                                     {(resFilter.mode !== 'all' || resFilter.template !== 'all' || resFilter.symbol !== 'all') ? ' with the current Book / Structure / Symbol filters' : ''}
+                                    {resWindow.days !== 'all' ? ` in ${windowLabel(resWindow)}` : ''}
                                     {' '}— its trades appear here after the first exit.{' '}
                                     <button onClick={() => selectResDeployment('all')} className="underline text-fg-4 hover:text-fg">Show all deployments</button>
                                 </>
-                            ) : 'No completed structure round-trips yet for this filter. Deploy a strategy (PAPER first) — booked structures show here.'}
+                            ) : resWindow.days === 'range'
+                                ? <>No structure exited in {windowLabel(resWindow)} under this filter.{' '}
+                                    <button onClick={() => pickResWindow('all')} className="underline text-fg-4 hover:text-fg">Show all dates</button></>
+                                : 'No completed structure round-trips yet for this filter. Deploy a strategy (PAPER first) — booked structures show here.'}
                         </div>
                     ) : (
                         <>
@@ -2934,14 +3047,18 @@ export default function MultiLeg() {
                                 server and not here. */}
                             <ResultsAnalytics
                                 tradeMode={resFilter.mode}
-                                days={resWindow.days}
+                                days={resWindow.days === 'range' ? 'all' : resWindow.days}
+                                since={resWindow.days === 'range' ? resWindow.since : null}
+                                until={resWindow.days === 'range' ? resWindow.until : null}
+                                windowText={resWindow.days === 'all' ? null : windowLabel(resWindow)}
+                                onPickDay={(d) => pickResRange(d, d)}
                                 deploymentId={resFilter.deploymentId}
                                 symbol={resFilter.symbol}
                                 templateFilter={resFilter.template}
                                 templates={templates} />
 
                             {/* Trades table */}
-                            <Panel bodyClassName="overflow-x-auto" title={`Structure round-trips (${resTotal})`} docs="multi-leg#results-tab"
+                            <Panel bodyClassName="overflow-x-auto" title={`Structure round-trips (${resTotal})${resWindow.days === 'all' ? '' : ` · ${windowLabel(resWindow)}`}`} docs="multi-leg#results-tab"
                                 right={(() => {
                                         const allOpen = resPageRows.length > 0 && resPageRows.every(t => resTradeOpen.has(resTradeId(t)));
                                         const anyOpen = resPageRows.some(t => resTradeOpen.has(resTradeId(t)));
@@ -3109,7 +3226,7 @@ export default function MultiLeg() {
                             {/* How each day went, minute by minute — LAST, after the round-trips (it is the
                                 longest section and split the breakdowns from the trades). Built from the
                                 round-trips' own recorded paths, same filter as the table. */}
-                            <ResultsDayCurves filter={resFilter} since={resWindow.since} />
+                            <ResultsDayCurves filter={resFilter} since={resWindow.since} until={resWindow.until} />
                         </>
                     )}
                 </div>

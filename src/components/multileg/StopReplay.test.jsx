@@ -38,6 +38,13 @@ const GRID = {
 };
 
 let gridCalls = 0;
+// India VIX for 12-Oct-2026 (the fixture trade's day): 1-minute closes, stamped when each bar ENDED
+let VIX_BODY = { days: { '2026-10-12': { intraday: [
+    { ms: Date.parse('2026-10-12T09:20:00+05:30'), v: 12.84 },
+    { ms: Date.parse('2026-10-12T11:00:00+05:30'), v: 13.6 },
+    { ms: Date.parse('2026-10-12T13:00:00+05:30'), v: 12.5 },
+    { ms: Date.parse('2026-10-12T15:10:00+05:30'), v: 13.1 },
+] } } };
 vi.mock('axios', () => {
     const get = vi.fn((url) => {
         if (/stop-whatif$/.test(url)) return Promise.resolve({ data: REPORT });
@@ -47,6 +54,7 @@ vi.mock('axios', () => {
                 ? { status: 'running', done: 40, total: 93, limit: 30, closedTrades: 4, beyondLimit: 0, quarantinedExcluded: 1 }
                 : { status: 'done', done: 93, total: 93, result: GRID, limit: 30, closedTrades: 34, beyondLimit: 4, quarantinedExcluded: 1 } });
         }
+        if (/market\/vix-days$/.test(url)) return Promise.resolve({ data: VIX_BODY });
         return Promise.resolve({ data: {} });
     });
     const api = { get, post: vi.fn(), defaults: { headers: { common: {} } }, interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } } };
@@ -56,7 +64,17 @@ vi.mock('axios', () => {
 
 import axios from 'axios';
 import { TradeStopReplay, StopGridPanel } from './StopReplay.jsx';
-import { reasonText, stopsText, recoveryText, firedLines, tradeStopsText, stopLossText, archiveNotes } from './stopReplayFormat.js';
+
+/** The NEXT replay request answers `data` (the card also asks for India VIX as it opens). */
+function replayAnswersOnce(data) {
+    const orig = axios.get.getMockImplementation();
+    axios.get.mockImplementation((url, cfg) => {
+        if (/stop-whatif$/.test(url)) { axios.get.mockImplementation(orig); return Promise.resolve({ data }); }
+        return orig(url, cfg);
+    });
+}
+const replayCalls = () => axios.get.mock.calls.filter((c) => /stop-whatif$/.test(c[0]));
+import { reasonText, stopsText, recoveryText, firedLines, tradeStopsText, stopLossText, archiveNotes, vixLine } from './stopReplayFormat.js';
 
 const trade = {
     _id: 't1', symbol: 'NSE:NIFTY50-INDEX', entryAt: at(9, 20), exitAt: at(15, 10), netPnl: -1500, maeRupees: -2900, mfeRupees: 300,
@@ -128,17 +146,17 @@ describe('TradeStopReplay', () => {
     beforeEach(() => { axios.get.mockClear(); });
     it('asks only when clicked, then states saved/cost and the recovery', async () => {
         render(<TradeStopReplay trade={trade} />);
-        expect(axios.get).not.toHaveBeenCalled();
+        expect(replayCalls()).toHaveLength(0);                 // only India VIX is fetched on opening
         fireEvent.click(screen.getByText('Replay without stops'));
         await waitFor(() => expect(screen.getByText(/All stops together \(leg \+ stop-loss\) COST ₹6,100 on this trade/)).toBeTruthy());
-        expect(axios.get.mock.calls[0][0]).toMatch(/\/multileg\/trades\/t1\/stop-whatif$/);
+        expect(replayCalls()[0][0]).toMatch(/\/multileg\/trades\/t1\/stop-whatif$/);
         expect(screen.getByText(/With no stops at all/)).toBeTruthy();
         expect(screen.getByText(/it DID come back into profit/)).toBeTruthy();
         expect(screen.getByText(/Stops replayed: leg stop 1.4× entry/)).toBeTruthy();
         expect(screen.queryByText('Replay without stops')).toBeNull();
     });
     it('says plainly when the archive cannot replay the trade', async () => {
-        axios.get.mockImplementationOnce(() => Promise.resolve({ data: { ...REPORT, configured: { net: null }, noStops: { net: null }, archive: { note: 'no archived quotes for the trade\'s days' } } }));
+        replayAnswersOnce({ ...REPORT, configured: { net: null }, noStops: { net: null }, archive: { note: 'no archived quotes for the trade\'s days' } });
         render(<TradeStopReplay trade={trade} />);
         fireEvent.click(screen.getByText('Replay without stops'));
         await waitFor(() => expect(screen.getByText(/Not enough recorded quotes to replay this trade \(no archived quotes/)).toBeTruthy());
@@ -164,7 +182,7 @@ describe('the stop-loss apart from the leg stops (22-Oct-2026)', () => {
         expect(stopLossText({ ...WITH_SL, noStopLoss: undefined })).toBe(null);   // an older server
     });
     it('draws both what-ifs, each can be hidden, and states both effects', async () => {
-        axios.get.mockImplementationOnce(() => Promise.resolve({ data: WITH_SL }));
+        replayAnswersOnce(WITH_SL);
         render(<TradeStopReplay trade={stoppedTrade} />);
         fireEvent.click(screen.getByText('Replay without stops'));
         await waitFor(() => expect(screen.getByText(/The stop-loss COST ₹1,573 on this trade/)).toBeTruthy());
@@ -192,6 +210,20 @@ describe('what the replay stood on: real fills, holes, repaired minutes (22-Oct-
     });
 });
 
+describe('India VIX on an opened round trip (user, 23-Oct-2026)', () => {
+    it('says VIX at entry, at exit, the move and the range while held — and why when it cannot', async () => {
+        expect(vixLine({ from: 12.84, to: 13.1, change: 0.26, low: 12.5, high: 13.6 })).toBe('India VIX 12.84 at entry → 13.10 at exit (+0.26) · 12.50–13.60 while held');
+        expect(vixLine(null)).toBeNull();
+        const { unmount } = render(<TradeStopReplay trade={trade} />);
+        await waitFor(() => expect(screen.getByTestId('trade-vix').textContent).toMatch(/India VIX 12\.84 at entry → 13\.10 at exit \(\+0\.26\) · 12\.50–13\.60 while held/));
+        expect(axios.get).toHaveBeenCalledWith(expect.stringContaining('/market/vix-days'), { params: { days: '2026-10-12', intraday: '2026-10-12' } });
+        unmount();
+        VIX_BODY = { days: { '2026-10-12': { reason: 'no Fyers login' } } };
+        render(<TradeStopReplay trade={{ ...trade, _id: 't2' }} />);
+        await waitFor(() => expect(screen.getByTestId('trade-vix').textContent).toBe('India VIX not shown: no Fyers login.'));
+    });
+});
+
 describe('StopGridPanel', () => {
     beforeEach(() => { gridCalls = 0; });
     it('needs one deployment', () => {
@@ -204,9 +236,11 @@ describe('StopGridPanel', () => {
         await waitFor(() => expect(screen.getByText(/Replaying… 40\/93/)).toBeTruthy());
         await waitFor(() => expect(screen.getByLabelText('Net P&L by leg stop and rupee stop')).toBeTruthy(), { timeout: 4000 });
         // best and current, in words
-        expect(screen.getByText(/Best on these trades:/).textContent).toMatch(/leg 1.3× \+ rupee ₹2,000/);
-        expect(screen.getByText(/Best on these trades:/).textContent).toMatch(/Current leg 1.4× \+ rupee ₹3,000/);
-        expect(screen.getByText(/Best on these trades:/).textContent).toMatch(/No stops at all → -₹5,000/);
+        expect(screen.getByText(/Lowest loss on these trades \(best net\):/).textContent).toMatch(/leg 1.3× \+ rupee ₹2,000/);
+        expect(screen.getByText(/Lowest loss on these trades \(best net\):/).textContent).toMatch(/Current leg 1.4× \+ rupee ₹3,000/);
+        expect(screen.getByText(/Lowest loss on these trades \(best net\):/).textContent).toMatch(/No stops at all → -₹5,000/);
+        // the other minimum: the setting whose worst single trade lost least
+        expect(screen.getByText(/Lowest loss on these trades \(best net\):/).textContent).toMatch(/Smallest worst trade: leg 1.4× \+ rupee ₹2,000 → worst -₹2,100, net \+₹6,000/);
         // the current cell carries the ring and says so on hover
         const cur = screen.getByTitle(/CURRENT setting/);
         expect(cur.className).toMatch(/ring-1/);
