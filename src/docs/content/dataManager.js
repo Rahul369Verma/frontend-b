@@ -17,7 +17,9 @@ export default {
 | **Growth** | Space added per day and the projected size after a year. |
 | **Retention** | How many days are kept; older snapshots are deleted automatically, which caps the total size. |
 
-The table shows, per index: snapshots, days covered, strikes, last spot price, first and last snapshot. The capture button takes one snapshot of every index **now** (it works outside market hours, for checking the recorder).`,
+The table shows, per index: snapshots, days covered, strikes, last spot price, first and last snapshot. The capture button takes one snapshot of every index **now** (it works outside market hours, for checking the recorder).
+
+**Repairing holes.** If the recorder misses minutes (for example while the broker is rate-limiting requests), those minutes are refilled from the broker's **1-minute candles**: every weekday at 15:45 IST automatically, or now with **🩹 Repair holes** (today and the two days before). A repaired minute holds the minute's last traded price and the implied volatility worked out from it, but **no bid/ask or open interest** — a candle does not have them — and it is labelled as repaired. It only works while the contract has **not expired**: after expiry the broker keeps no history, so a hole must be repaired before then. Trade replays say how many of their minutes were repaired and shade any hole that is left.`,
         },
         {
             id: 'futures',

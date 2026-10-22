@@ -17,7 +17,7 @@ import axios from 'axios';
 import { API_URL } from '../../config/api.js';
 import TradePathChart from '../viz/TradePathChart';
 import { istDateTime as tokIstDateTime } from '../viz/tokens';
-import { rup, signed, tone, hhmm, reasonText, stopsText, recoveryText, tradeStopsText, firedLines, stopLossText } from './stopReplayFormat.js';
+import { rup, signed, tone, hhmm, reasonText, stopsText, recoveryText, tradeStopsText, firedLines, stopLossText, archiveNotes } from './stopReplayFormat.js';
 import { Spinner } from '../viz/primitives';
 
 const BTN = 'inline-flex items-center gap-1 px-2 py-1 rounded border border-line-2 bg-card-2 text-2xs text-fg-3 hover:text-fg disabled:opacity-50';
@@ -66,7 +66,7 @@ export function TradeStopReplay({ trade, istTime, istDateTime, istSpan }) {
                     {fired.map((f, i) => <div key={i} className="text-fg-3">{f}</div>)}
                 </div>
             )}
-            <TradePathChart trade={trade} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} overlays={overlays} markers={markers} stopLines={stopLines} />
+            <TradePathChart trade={trade} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} overlays={overlays} markers={markers} stopLines={stopLines} gaps={d?.archive?.gaps} />
             <div className="mt-1.5 text-3xs text-fg-4 space-y-1" data-testid="stop-replay">
                 {st.status === 'idle' && id && (
                     <div className="flex items-center gap-2 flex-wrap">
@@ -109,6 +109,7 @@ function ReplaySummary({ d }) {
                 {eff > 0 ? `All stops together (leg + stop-loss) SAVED ${rup(eff)} on this trade.` : eff < 0 ? `All stops together (leg + stop-loss) COST ${rup(-eff)} on this trade.` : d.stopped ? 'The stops made no difference.' : 'No stop fired.'}
             </div>
             <div>{recoveryText(d)}</div>
+            {archiveNotes(d).map((n, i) => <div key={`an${i}`} className="text-warning">{n}</div>)}
             <div className="text-fg-5">
                 Stops replayed: {stopsText(d.stops)} — {d.paramsSource}. {d.archive?.snapshots || 0} recorded minutes ({(d.archive?.days || []).join(', ')}).
                 {d.archive?.fullChainMinutes > 0 && ` ${d.archive.fullChainMinutes} minute(s) had a strike outside the recorded window and were priced from the smile.`}
@@ -178,6 +179,7 @@ function GridResult({ res, job, showAll, setShowAll }) {
             <div>
                 {res.trades} trade(s) replayed{job.beyondLimit > 0 ? `; ${job.beyondLimit} older trade(s) not included (limit ${job.limit})` : ''}
                 {job.quarantinedExcluded > 0 ? `; ${job.quarantinedExcluded} void fill(s) excluded` : ''}
+                {res.perTrade.some((t) => t.gaps?.length) ? `; ${res.perTrade.filter((t) => t.gaps?.length).length} ran through a hole in the recorded prices (⚠ below)` : ''}
                 {res.skipped.length > 0 ? `; ${res.skipped.length} could not be replayed (${[...new Set(res.skipped.map((s) => s.why))].join('; ')})` : ''}.
             </div>
             <div>
@@ -236,7 +238,12 @@ function GridResult({ res, job, showAll, setShowAll }) {
                         <tbody>
                             {list.map((t) => (
                                 <tr key={t.id} className="border-t border-line-0/60">
-                                    <td>{tokIstDateTime(t.entryAt)}</td>
+                                    <td>
+                                        {tokIstDateTime(t.entryAt)}
+                                        {t.gaps?.length > 0 && (
+                                            <span className="ml-1 text-warning" title={`No recorded prices ${t.gaps.map((g) => `${hhmm(g.from)}–${hhmm(g.to)} (${g.minutes} min)`).join(', ')}: its replays act at the first price after the hole`}>⚠ hole</span>
+                                        )}
+                                    </td>
                                     <td className={`text-right ${tone(t.booked)}`}>{signed(t.booked)}</td>
                                     <td className={`text-right ${tone(t.withStops)}`} title={reasonText(t.withStopsReason)}>{signed(t.withStops)}</td>
                                     <td className={`text-right ${tone(t.noStops)}`} title={reasonText(t.noStopsReason)}>{signed(t.noStops)}</td>

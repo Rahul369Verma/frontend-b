@@ -60,6 +60,7 @@
  *   markers  = [{ t, text }]   vertical lines (e.g. where a stop fired)
  *   stopLines = [{ y, label }]  horizontal lines on the ₹ axis where a stop sits (e.g. the
  *              rupee stop at −₹3,000 net) — drawn even when no recorded mark reached them
+ *   gaps     = [{ from, to }]    stretches with no recorded prices (shaded, labelled)
  * They are drawn on the ₹ axis beside the recorded marks and listed in the tooltip;
  * the stat strip stays about what the trade actually did. *
  * INDIA VIX (optional) — vix = [{ ms, v }] 1-minute bars (the close, stamped when the bar
@@ -70,7 +71,7 @@
  */
 import React, { useMemo, useState } from 'react';
 import {
-    ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
+    ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ReferenceArea,
 } from 'recharts';
 import ZoomableChart from '../charts/ZoomableChart';
 import { useChartTheme } from '../../theme/chartTheme.js';
@@ -194,9 +195,10 @@ function SeriesToggles({ items, hidden, onToggle }) {
 const NO_OVERLAYS = [];
 const NO_MARKERS = [];
 const NO_STOP_LINES = [];
+const NO_GAPS = [];
 const NO_HIDDEN = new Set();
 
-export default function TradePathChart({ trade, istTime, istDateTime, istSpan, overlays = NO_OVERLAYS, markers = NO_MARKERS, stopLines = NO_STOP_LINES, vix = null }) {
+export default function TradePathChart({ trade, istTime, istDateTime, istSpan, overlays = NO_OVERLAYS, markers = NO_MARKERS, stopLines = NO_STOP_LINES, gaps = NO_GAPS, vix = null }) {
     const ct = useChartTheme();
     // which lines are switched off in the legend (all on by default)
     const [hidden, setHidden] = useState(NO_HIDDEN);
@@ -319,6 +321,14 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan, o
         hasSpot && { key: 'spot', label: 'spot', color: ct.mark.live, style: 'dashed' },
         hasVix && { key: 'vix', label: 'India VIX', color: ct.categorical[3] || ct.text.muted, style: 'dotted' },
     ].filter(Boolean);
+    // a hole spans the last row before it to the first row after it (the x axis is categorical)
+    const gapAreas = gaps.map((g) => {
+        const a = toMs(g?.from), b = toMs(g?.to);
+        if (a == null || b == null || !rows.length) return null;
+        const before = [...rows].reverse().find((r) => r.ms <= a) || rows[0];
+        const after = rows.find((r) => r.ms >= b) || rows[rows.length - 1];
+        return before.label !== after.label ? { x1: before.label, x2: after.label } : null;
+    }).filter(Boolean);
     // a marker sits on the first drawn row at or after its instant (the x axis is categorical)
     const markerRows = markers.map((m) => {
         const ms = toMs(m?.t);
@@ -412,6 +422,10 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan, o
                         <ReferenceLine yAxisId="pnl" y={mfe} stroke={ct.status.good} strokeDasharray="4 3" ifOverflow="extendDomain"
                             label={{ value: `MFE ${rup(mfe)}`, fontSize: ct.type['5xs'], fill: ct.status.good, position: 'insideTopLeft' }} />
                     )}
+                    {gapAreas.map((g, i) => (
+                        <ReferenceArea key={`gap${i}`} yAxisId="pnl" x1={g.x1} x2={g.x2} fill={ct.status.warning} fillOpacity={0.08} ifOverflow="extendDomain"
+                            label={{ value: 'no recorded prices', fontSize: ct.type['5xs'], fill: ct.status.warning, position: 'insideTop' }} />
+                    ))}
                     {stopLines.map((s, i) => (
                         <ReferenceLine key={`stop${i}`} yAxisId="pnl" y={s.y} stroke={ct.status.critical} strokeWidth={1.5} ifOverflow="extendDomain"
                             label={{ value: s.label, fontSize: ct.type['5xs'], fill: ct.status.critical, position: 'insideBottomRight' }} />

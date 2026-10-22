@@ -56,7 +56,7 @@ vi.mock('axios', () => {
 
 import axios from 'axios';
 import { TradeStopReplay, StopGridPanel } from './StopReplay.jsx';
-import { reasonText, stopsText, recoveryText, firedLines, tradeStopsText, stopLossText } from './stopReplayFormat.js';
+import { reasonText, stopsText, recoveryText, firedLines, tradeStopsText, stopLossText, archiveNotes } from './stopReplayFormat.js';
 
 const trade = {
     _id: 't1', symbol: 'NSE:NIFTY50-INDEX', entryAt: at(9, 20), exitAt: at(15, 10), netPnl: -1500, maeRupees: -2900, mfeRupees: 300,
@@ -177,6 +177,18 @@ describe('the stop-loss apart from the leg stops (22-Oct-2026)', () => {
         expect(screen.getByLabelText('replay · its stops').checked).toBe(true);
         fireEvent.click(box);
         expect(screen.getByLabelText('replay · no stop-loss (leg stops kept)').checked).toBe(false);
+    });
+});
+
+describe('what the replay stood on: real fills, holes, repaired minutes (22-Oct-2026)', () => {
+    it('names the bot\'s own leg-stop fills it used, every hole in the recorded prices, and the repaired minutes', () => {
+        const d = { ...WITH_SL, realLegStops: [{ leg: '23050PE', at: at(11, 24), price: 252.9 }],
+            archive: { ...REPORT.archive, gaps: [{ from: at(11, 10), to: at(11, 40), minutes: 30 }], candleMinutes: 0 } };
+        const [real, hole] = archiveNotes(d);
+        expect(real).toBe('The replays that keep the leg stop took the bot\'s own leg stop at the real time and fill: 23050PE at ₹252.90 (11:24).');
+        expect(hole).toMatch(/^The recorded prices have a hole while this trade ran: 11:10–11:40 \(30 min\)\. A replay can only act at the first price after a hole\./);
+        expect(archiveNotes({ ...d, realLegStops: [], archive: { gaps: [], candleMinutes: 30 } })).toEqual(['30 minute(s) of this replay were repaired from 1-minute candles: the last traded price, no bid/ask.']);
+        expect(archiveNotes(REPORT)).toEqual([]);
     });
 });
 

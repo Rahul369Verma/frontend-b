@@ -86,6 +86,28 @@ export function stopLossText(d) {
     return `The stop-loss ${what} on this trade (leg stops kept either way).${after}`;
 }
 
+/**
+ * What the replay stood on: the bot's own leg-stop fills it used, holes in the recorded prices
+ * while the trade ran, and minutes repaired from 1-minute candles. Said, never hidden.
+ */
+export function archiveNotes(d) {
+    const out = [];
+    const real = (d && d.realLegStops) || [];
+    if (real.length) {
+        out.push(`The replays that keep the leg stop took the bot's own leg stop${real.length > 1 ? 's' : ''} at the real time and fill: `
+            + `${real.map((s) => `${s.leg} at ${premium(s.price)} (${hhmm(s.at)})`).join(', ')}.`);
+    }
+    const gaps = (d && d.archive && d.archive.gaps) || [];
+    if (gaps.length) {
+        out.push(`The recorded prices have ${gaps.length === 1 ? 'a hole' : `${gaps.length} holes`} while this trade ran: `
+            + `${gaps.map((g) => `${hhmm(g.from)}–${hhmm(g.to)} (${g.minutes} min)`).join(', ')}. A replay can only act at the first price after a hole. `
+            + 'The daily repair (15:45 IST) fills holes from 1-minute candles while the contract has not expired — or press "Repair holes" on the Data page.');
+    }
+    const cm = d && d.archive && d.archive.candleMinutes;
+    if (cm > 0) out.push(`${cm} minute(s) of this replay were repaired from 1-minute candles: the last traded price, no bid/ask.`);
+    return out;
+}
+
 /** The sentence that answers "would it have gone positive again?" */
 export function recoveryText(d) {
     if (!d || d.noStops?.net == null) return null;

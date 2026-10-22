@@ -1,10 +1,59 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FaDatabase, FaCloudDownloadAlt, FaSpinner, FaFolderOpen, FaCheck, FaChevronDown, FaTimes, FaSearch } from 'react-icons/fa';
 import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 import { INSTRUMENT_CONFIG } from '../constants';
 import { pollInterval } from '../hooks/usePolling.js';
 import { API_URL } from '../config/api.js';
 import DocLink from './DocLink.jsx';
+
+/**
+ * Archive repair: fill the recorder's missing minutes from the broker's 1-minute candles
+ * (backend logic/services/archiveGapFill.js). Runs by itself after the close every weekday;
+ * this runs it now (today and the two days before) and shows what the last run did.
+ */
+function repairText(job) {
+    if (!job || job.status === 'idle') return 'No repair has run since the server started (it runs by itself at 15:45 IST on weekdays).';
+    if (job.status === 'running') return `Repairing… ${(job.done || []).length} index-day(s) checked.`;
+    if (job.status === 'failed') return `Last repair failed: ${job.error}`;
+    const r = job.result || {};
+    const when = job.finishedAt ? new Date(job.finishedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }) : '';
+    const skipped = (r.results || []).filter((x) => x.skipped && !/nothing was recorded/.test(x.skipped));
+    return `Last repair (${job.trigger || 'manual'}, ${when} IST): ${r.filled ? `filled ${r.filled} missing minute(s) in ${r.holes} hole(s) from 1-minute candles` : 'no holes to fill'} · ${r.fetched || 0} broker reads`
+        + (skipped.length ? ` · ${skipped.length} skipped (${[...new Set(skipped.map((x) => x.skipped))].join('; ')})` : '');
+}
+
+function ArchiveRepair() {
+    const [job, setJob] = useState(null);
+    const [msg, setMsg] = useState(null);
+    const timer = useRef(null);
+    const poll = useCallback(async function pollOnce() {
+        try {
+            const j = await (await fetch(`${API_URL}/data/option-archive/fill-gaps`)).json();
+            setJob(j);
+            if (j.status === 'running') timer.current = setTimeout(pollOnce, 3000);
+        } catch { /* the line below says nothing new */ }
+    }, []);
+    useEffect(() => { poll(); return () => clearTimeout(timer.current); }, [poll]);
+    const start = async () => {
+        setMsg(null);
+        try {
+            const r = await (await fetch(`${API_URL}/data/option-archive/fill-gaps`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+            if (r.error) setMsg(`❌ ${r.error}`);
+            clearTimeout(timer.current); poll();
+        } catch (e) { setMsg(`❌ ${e.message}`); }
+    };
+    const running = job?.status === 'running';
+    return (
+        <div className="text-2xs text-fg-4 mb-3 flex items-start gap-2 flex-wrap" data-testid="archive-repair">
+            <button onClick={start} disabled={running || job?.allowed === false}
+                className="text-xs px-3 py-1.5 rounded border border-line-2 bg-gray-900 text-fg-3 hover:text-fg disabled:opacity-40"
+                title={job?.allowed === false ? job.why : 'Fill missing minutes of the last 3 days from the broker\'s 1-minute candles (contracts not yet expired)'}>
+                {running ? <FaSpinner className="animate-spin inline" /> : '🩹'} Repair holes
+            </button>
+            <span className="pt-1.5">{msg || repairText(job)}{job?.allowed === false ? ` (${job.why})` : ''}</span>
+        </div>
+    );
+}
 
 // --- MultiSelect Component ---
 const MultiSelect = ({ options, selectedValues, onChange, placeholder = "Select...", label = "Items" }) => {
@@ -426,6 +475,7 @@ const DataManager = () => {
                     </button>
                 </div>
             </div>
+            <ArchiveRepair />
             <p className="text-xs text-fg-5 mb-4">
                 Records every index's real chain — premiums, OI, bid/ask and <strong className="text-fg-4">implied vol per strike</strong> — continuously in production.
                 This is the dataset that makes backtesting on <em>actual</em> option prices (with skew) possible; spot-based Black-Scholes can't model it.
