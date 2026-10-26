@@ -3,17 +3,17 @@
  * slow API answers are queued per PAGE and sent to the server, never its own call.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { installSlownessReporter, routeKey, apiKey, describeFrame, chunkName } from './slownessReporter.js';
+import { installSlownessReporter, routeKey, apiKey, describeFrame, chunkName, serverMsFrom } from './slownessReporter.js';
 
 function fakeAxios() {
     const req = [], res = [];
     return {
         interceptors: { request: { use: (f) => req.push(f) }, response: { use: (ok, bad) => res.push([ok, bad]) } },
         post: vi.fn().mockResolvedValue({ data: { ok: true } }),
-        _call: async (url, ms, clock, fail = false) => {
+        _call: async (url, ms, clock, fail = false, headers = {}) => {
             const cfg = req.reduce((c, f) => f(c), { url });
             clock.t += ms;
-            if (fail) { try { await res[0][1]({ config: cfg }); } catch { /* rejected */ } } else res[0][0]({ config: cfg });
+            if (fail) { try { await res[0][1]({ config: cfg, response: { headers } }); } catch { /* rejected */ } } else res[0][0]({ config: cfg, headers });
         },
     };
 }
@@ -45,6 +45,25 @@ describe('slownessReporter', () => {
         expect(r.queue).toHaveLength(0);
         await ax._call('http://api/api/telemetry/slow', 9000, clock);           // its own report is never reported
         expect(r.queue).toHaveLength(0);
+    });
+
+    it('reads the server\'s own time (Server-Timing) so a slow network is told apart from a slow server', async () => {
+        expect(serverMsFrom('app;dur=123.6')).toBe(124);
+        expect(serverMsFrom('db;dur=9, app;desc="x";dur=40')).toBe(40);
+        expect(serverMsFrom('db;dur=9')).toBeNull();
+        expect(serverMsFrom(undefined)).toBeNull();
+        const clock = { t: 0 };
+        const ax = fakeAxios();
+        const fetchImpl = vi.fn(async () => { clock.t += 8000; return { status: 200, headers: new Headers({ 'Server-Timing': 'app;dur=31' }) }; });
+        const r = installSlownessReporter({ axios: ax, apiUrl: 'http://api/api', fetchImpl, getPath: () => '/multi-leg', now: () => clock.t, PerfObserver: null, every: 0 });
+        await ax._call('http://api/api/multileg/status', 24000, clock, false, { 'server-timing': 'app;dur=12' });   // fast server, slow arrival
+        await ax._call('http://api/api/multileg/trades', 9000, clock, true, { 'server-timing': 'app;dur=8800' });  // slow server, failed
+        await ax._call('http://api/api/health', 7000, clock);                                                    // no header (an old server)
+        await r.fetch('http://api/api/multileg/events');
+        expect(r.queue.map((s) => [s.api, s.ms, s.serverMs])).toEqual([
+            ['/api/multileg/status', 24000, 12], ['/api/multileg/trades', 9000, 8800], ['/api/health', 7000, undefined], ['/api/multileg/events', 8000, 31],
+        ]);
+        expect('serverMs' in r.queue[2]).toBe(false);
     });
 
     it('says WHAT froze the page where the browser can tell (long animation frames)', () => {

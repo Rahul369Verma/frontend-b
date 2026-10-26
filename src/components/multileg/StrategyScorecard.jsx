@@ -18,6 +18,7 @@
  * so a larger Text Size moves the switch points.
  */
 import React, { useCallback, useMemo, useRef, useState } from 'react';
+import NewTabLink from '../NewTabLink.jsx';
 import { Link } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Legend } from 'recharts';
 import ZoomableChart from '../charts/ZoomableChart';
@@ -139,7 +140,7 @@ export function OpenNow({ sc, templates = [] }) {
                         <tbody>
                             {open.sort((a, b) => (a.open.mtmNet ?? 0) - (b.open.mtmNet ?? 0)).map(r => (
                                 <tr key={r.deploymentId} className="border-t border-line-0">
-                                    <td className="py-1 pr-3"><Link to={deploymentHref(r.deploymentId)} className="text-primary-ink hover:underline">{r.name}</Link></td>
+                                    <td className="py-1 pr-3"><Link to={deploymentHref(r.deploymentId)} className="text-primary-ink hover:underline">{r.name}</Link><NewTabLink href={deploymentHref(r.deploymentId)} label={r.name} className="ml-0.5 align-middle" /></td>
                                     <td className="pr-3 text-fg-4">{templates.find(t => t.key === r.template)?.name || r.template || '—'} · {shortSym(r.symbol)}</td>
                                     <td className="pr-3 text-warning">{r.open.state}</td>
                                     <td className="pr-3 text-fg-4 whitespace-nowrap">{r.open.since ? new Date(r.open.since).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '—'}</td>
@@ -573,7 +574,7 @@ export default function StrategyScorecard({ sc, templates = [], single = false }
                                                             <button type="button" onClick={() => toggleRow(id)} aria-expanded={open} aria-label={`Details for ${r.name}`}
                                                                 className="mt-px w-4 shrink-0 text-fg-5 hover:text-fg-2">{open ? '▾' : '▸'}</button>
                                                             <div className="min-w-0">
-                                                                {r.deploymentId ? <Link to={deploymentHref(r.deploymentId)} className="font-semibold text-fg-2 hover:underline break-words">{r.name}</Link>
+                                                                {r.deploymentId ? <><Link to={deploymentHref(r.deploymentId)} className="font-semibold text-fg-2 hover:underline break-words">{r.name}</Link><NewTabLink href={deploymentHref(r.deploymentId)} label={r.name} className="ml-0.5 align-middle" /></>
                                                                     : <span className="font-semibold text-fg-2">{r.name}</span>}
                                                                 <div className="text-2xs text-fg-5">
                                                                     {tplName(r.template)} · {shortSym(r.symbol)} · {r.tradeMode}{r.lots > 1 ? ` · ${r.lots} lots` : ''}
@@ -604,7 +605,7 @@ export default function StrategyScorecard({ sc, templates = [], single = false }
                                         <div className="flex items-start gap-2">
                                             {!single && <input type="checkbox" className="mt-1" checked={on} onChange={() => togglePick(id)} disabled={!on && picked.length >= MAX_COMPARE} aria-label={`Compare ${r.name}`} />}
                                             <div className="min-w-0 flex-1">
-                                                {r.deploymentId ? <Link to={deploymentHref(r.deploymentId)} className="text-sm font-semibold text-fg-2 hover:underline break-words">{r.name}</Link>
+                                                {r.deploymentId ? <><Link to={deploymentHref(r.deploymentId)} className="text-sm font-semibold text-fg-2 hover:underline break-words">{r.name}</Link><NewTabLink href={deploymentHref(r.deploymentId)} label={r.name} className="ml-0.5 align-middle" /></>
                                                     : <span className="text-sm font-semibold text-fg-2">{r.name}</span>}
                                                 <div className="text-2xs text-fg-5">{tplName(r.template)} · {shortSym(r.symbol)} · {r.tradeMode}</div>
                                             </div>

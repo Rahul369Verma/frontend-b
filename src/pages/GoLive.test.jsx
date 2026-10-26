@@ -123,3 +123,29 @@ describe('PromoteDialog', () => {
         expect(body.canary.trades).toBe('5');
     });
 });
+
+describe('the canary asks — you decide (23-Oct-2026)', () => {
+    it('loss cap reached: still LIVE, nothing switched; Keep LIVE posts your answer only after you confirm', async () => {
+        const live = { ...REPORT, id: 'm1', kind: 'multileg', name: 'nifty-atm-straddle (LIVE)', mode: 'LIVE',
+            canary: { state: 'CAP_HIT', trades: 10, liveTrades: 3, livePnl: -5155.08, lossCapInr: 5000, lots: 1, originalLots: 1, reason: 'lost ₹5,155 in 3 live trade(s)' } };
+        axios.get.mockImplementation((url) => {
+            if (url.endsWith('/golive/status')) return Promise.resolve({ data: STATUS });
+            if (url.endsWith('/golive/deployments')) return Promise.resolve({ data: { reports: [live], failed: [], total: 1 } });
+            if (url.endsWith('/golive/drills')) return Promise.resolve({ data: { drills: [] } });
+            return Promise.resolve({ data: {} });
+        });
+        axios.post.mockResolvedValue({ data: { ok: true } });
+        const spy = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+        render(<GoLive />);
+        const line = await screen.findByTestId('canary-line');
+        expect(within(line).getByText('loss cap reached — your decision')).toBeTruthy();
+        expect(within(line).getByText(/It is still LIVE — nothing was switched/)).toBeTruthy();
+        fireEvent.click(within(line).getByRole('button', { name: 'Keep LIVE' }));
+        await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+        expect(axios.post).not.toHaveBeenCalled();
+        fireEvent.click(within(line).getByRole('button', { name: 'Keep LIVE' }));
+        await waitFor(() => expect(axios.post).toHaveBeenCalledWith(expect.stringMatching(/\/golive\/deployments\/multileg\/m1\/canary$/), { decision: 'keep' }));
+        expect(within(line).getByRole('button', { name: 'Demote to PAPER' })).toBeTruthy();
+        spy.mockRestore();
+    });
+});

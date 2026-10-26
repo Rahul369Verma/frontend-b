@@ -27,6 +27,7 @@
 //   globalConfig                → global settings (for max_daily_loss override)
 
 import React, { useEffect, useMemo, useState } from 'react';
+import NewTabLink from './NewTabLink.jsx';
 import { Link, useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Wallet } from 'lucide-react';
 import { ROUTES, strategyDetailHref } from '../config/routes.js';
@@ -501,6 +502,7 @@ function DeploymentsPanel({ onTest, onSim, onManualTrade, sessionHealth, globalC
                                         onSim={onSim}
                                         onManualTrade={onManualTrade}
                                         onResults={() => openResults(d)}
+                                        resultsHref={strategyDetailHref({ symbol: d.symbol, deploymentId: d._id, strategyName: d.strategyName, label: d.name })}
                                         pnlWindows={pnlSummary[String(d._id)] || null}
                                     />
                                 ))}
@@ -638,7 +640,7 @@ function DeploymentCard({
     d, strategies, sessionHealth, globalConfig,
     isBusy, isExpanded, isEditing,
     onToggleActive, onToggleMode, onToggleAi, onToggleInflight, onSetLots, onDelete, onToggleExpand, onToggleEdit, onEdited,
-    onTest, onSim, onManualTrade, onResults, pnlWindows,
+    onTest, onSim, onManualTrade, onResults, resultsHref = null, pnlWindows,
 }) {
     const params = d.params || {};
     const isActive = d.isActive !== false;
@@ -770,6 +772,7 @@ function DeploymentCard({
                     >
                         {d.name}
                     </button>
+                    <NewTabLink href={resultsHref} label={d.name} />
                     {/* A faint raised chip. `white/5` + `white/10` is a dark-mode-only idiom:
                         on a light theme a 5% white wash over a white card is a literal no-op
                         (1.00:1). fg/5 is the same thing expressed as INK-over-surface, so it
@@ -820,6 +823,7 @@ function DeploymentCard({
                             📊 Results
                         </button>
                     )}
+                    {onResults && <NewTabLink href={resultsHref} label={d.name} />}
                     {onManualTrade && (
                         <>
                             <button

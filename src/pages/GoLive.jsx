@@ -5,8 +5,10 @@
  *   2. Broker drill        — a real order that cannot fill, placed → modified → cancelled,
  *                            per segment (NSE options, BSE options, MCX futures, Delta)
  *   3. Evidence            — the deployment's own backtest (held-out 30%) and paper record
- *   4. Promote             — with a canary: the first live trades at a capped size,
- *                            demoted to PAPER automatically past a loss cap
+ *   4. Promote             — with a canary: the first live trades at a capped size. Past a
+ *                            loss cap it ASKS you (urgent alert + the buttons here) to demote
+ *                            or keep it LIVE; it never switches anything itself (user rule,
+ *                            23-Oct-2026). After N trades it asks you to lift the size cap.
  *
  * Every rule is evaluated by the backend (/api/golive); this page shows the gates,
  * runs drills only when asked, and collects the promotion decision.
@@ -120,19 +122,40 @@ function evidenceText(r) {
     return bt ? bt.have : '—';
 }
 
-function CanaryLine({ c }) {
+const CANARY_WORD = {
+    ACTIVE: 'canary watching', CAP_HIT: 'loss cap reached — your decision', DEMOTE_PENDING: 'loss cap reached — your decision',
+    PASS_PENDING: 'canary passed — lift the size cap?', PASSED: 'canary passed', DEMOTED: 'demoted',
+};
+function CanaryLine({ c, live, onDemote, onDecide }) {
     if (!c) return null;
-    const level = c.state === 'PASSED' ? 'good' : c.state === 'DEMOTED' ? 'critical' : c.state === 'DEMOTE_PENDING' ? 'warning' : 'info';
+    const asking = live && (c.state === 'CAP_HIT' || c.state === 'DEMOTE_PENDING');
+    const lifting = live && c.state === 'PASS_PENDING';
+    const level = c.state === 'PASSED' ? 'good' : asking || c.state === 'DEMOTED' ? 'critical' : lifting ? 'warning' : 'info';
     return (
-        <span className="inline-flex flex-wrap items-center gap-1.5 text-2xs text-fg-4">
-            <StatusBadge level={level}>canary {String(c.state).toLowerCase().replace('_', ' ')}</StatusBadge>
-            <span>{c.liveTrades || 0}/{c.trades} live trades · net {inr(c.livePnl || 0, { sign: true })} (cap {inr(-Math.abs(c.lossCapInr))}) · {c.lots} lot(s)</span>
-            {c.reason && <span className="text-fg-5">— {c.reason}</span>}
-        </span>
+        <div className={`text-2xs text-fg-4 ${asking ? 'rounded-lg border border-danger/40 bg-danger/5 p-2' : ''}`} data-testid="canary-line">
+            <span className="inline-flex flex-wrap items-center gap-1.5">
+                <StatusBadge level={level}>{CANARY_WORD[c.state] || `canary ${String(c.state).toLowerCase()}`}</StatusBadge>
+                <span>{c.liveTrades || 0}/{c.trades} live trades · net {inr(c.livePnl || 0, { sign: true })} (cap {inr(-Math.abs(c.lossCapInr))}) · {c.lots} lot(s)</span>
+                {c.reason && <span className="text-fg-5">— {c.reason}</span>}
+            </span>
+            {asking && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <span className="text-fg-3">It is still LIVE — nothing was switched. Your call:</span>
+                    <button type="button" onClick={onDemote} className="px-2.5 py-1 rounded text-2xs font-semibold border border-danger/40 bg-danger/10 text-danger">Demote to PAPER</button>
+                    <button type="button" onClick={() => onDecide('keep')} className="px-2.5 py-1 rounded text-2xs border border-line text-fg-3">Keep LIVE</button>
+                </div>
+            )}
+            {lifting && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <span className="text-fg-3">It trades {c.lots} lot(s) until you lift the cap (back to {c.originalLots}).</span>
+                    <button type="button" onClick={() => onDecide('lift')} className="px-2.5 py-1 rounded text-2xs border border-line text-fg-3">Lift size cap</button>
+                </div>
+            )}
+        </div>
     );
 }
 
-function DeploymentRow({ r, job, onGates, onVerify, onPromote, onDemote }) {
+function DeploymentRow({ r, job, onGates, onVerify, onPromote, onDemote, onCanary }) {
     const live = r.mode === 'LIVE';
     const p = r.paper || {};
     const running = job && job.state === 'running';
@@ -154,7 +177,7 @@ function DeploymentRow({ r, job, onGates, onVerify, onPromote, onDemote }) {
                 <div><dt className="inline text-fg-5">Paper: </dt><dd className="inline text-fg-3">{p.n ? `${p.n} trades over ${p.days} days · ${inr(p.mean, { sign: true })}/trade${p.t != null ? ` · t ${p.t.toFixed(2)}` : ''}` : 'no closed trades'}{p.skippedNoPnl ? ` (${p.skippedNoPnl} without P&L not counted)` : ''}</dd></div>
                 <div><dt className="inline text-fg-5">Backtest: </dt><dd className="inline text-fg-3">{evidenceText(r)}</dd></div>
             </dl>
-            {r.canary && <div className="mt-1.5"><CanaryLine c={r.canary} /></div>}
+            {r.canary && <div className="mt-1.5"><CanaryLine c={r.canary} live={live} onDemote={() => onDemote(r)} onDecide={(d) => onCanary(r, d)} /></div>}
             {job && job.state !== 'none' && (
                 <div className="mt-1.5 text-2xs">
                     {running && <Spinner label={`Backtesting ${job.window ? `${job.window.start} → ${job.window.end}` : ''}…`} />}
@@ -272,7 +295,26 @@ export default function GoLive() {
         } catch (e) { toast.error(errText(e)); }
     };
 
+    // your answer to the canary — it never decides by itself
+    const decideCanary = async (r, decision) => {
+        const keep = decision === 'keep';
+        const ok = await confirm({
+            title: keep ? `Keep ${r.name} LIVE?` : `Lift the size cap on ${r.name}?`,
+            body: keep
+                ? `It has lost ${inr(-(r.canary?.livePnl || 0))} live, past its ${inr(r.canary?.lossCapInr || 0)} canary cap. It keeps trading real money at ${r.canary?.lots} lot(s), and asks you again if it loses another ${inr(r.canary?.lossCapInr || 0)}.`
+                : `It goes back to ${r.canary?.originalLots} lot(s) per trade from the next entry.`,
+            confirmLabel: keep ? 'Keep LIVE' : 'Lift size cap',
+        });
+        if (!ok) return;
+        try {
+            await axios.post(`${GOLIVE}/deployments/${r.kind}/${r.id}/canary`, { decision });
+            toast.success(keep ? `${r.name} stays LIVE` : `${r.name}: size cap lifted`);
+            loadDeps();
+        } catch (e) { toast.error(errText(e)); }
+    };
+
     const reports = useMemo(() => (deps.data ? deps.data.reports : []), [deps.data]);
+    const asking = useMemo(() => reports.filter((r) => r.mode === 'LIVE' && r.canary && ['CAP_HIT', 'DEMOTE_PENDING', 'PASS_PENDING'].includes(r.canary.state)), [reports]);
     const counts = useMemo(() => ({
         all: reports.length,
         paper: reports.filter((r) => r.mode !== 'LIVE').length,
@@ -294,7 +336,7 @@ export default function GoLive() {
     return (
         <div className="p-4 md:p-6 space-y-5 max-w-7xl mx-auto">
             <PageHeader foldAll docs="go-live#overview" icon={Rocket} title="Go Live"
-                subtitle="PAPER → LIVE goes through here and nowhere else: prove the broker accepts your orders, show the strategy makes money, then promote with a canary that demotes itself on losses."
+                subtitle="PAPER → LIVE goes through here and nowhere else: prove the broker accepts your orders, show the strategy makes money, then promote with a canary that asks you before anything changes."
                 badges={verdict && <StatusBadge level={verdict.level}>{verdict.text}</StatusBadge>}
                 actions={(
                     <button type="button" onClick={() => { loadStatus(); loadDeps(); loadDrills(); }}
@@ -333,6 +375,18 @@ export default function GoLive() {
                 ]} />}>
                 {deps.error && <p className="text-xs text-danger" role="alert">{deps.error}</p>}
                 {deps.loading && !deps.data && <Spinner label="Checking every deployment (broker, evidence, risk)…" />}
+                {asking.length > 0 && (
+                    // always visible, whatever the Paper / Live filter: a LIVE strategy waiting on you
+                    <section className="mb-3 space-y-2" aria-label="Needs your decision">
+                        <h3 className="text-xs font-semibold text-danger">Needs your decision ({asking.length})</h3>
+                        {asking.map((r) => (
+                            <div key={`ask:${r.kind}:${r.id}`}>
+                                <div className="text-xs font-medium text-fg mb-1">{r.name}</div>
+                                <CanaryLine c={r.canary} live onDemote={() => demote(r)} onDecide={(d) => decideCanary(r, d)} />
+                            </div>
+                        ))}
+                    </section>
+                )}
                 {deps.data && deps.data.failed && deps.data.failed.length > 0 && (
                     <div className="text-2xs text-warning mb-2" role="status">
                         {deps.data.failed.length} deployment(s) could not be checked: {deps.data.failed.map((f) => `${f.name} (${f.error})`).join('; ')}
@@ -348,7 +402,7 @@ export default function GoLive() {
                         <DeploymentRow key={`${r.kind}:${r.id}`} r={r} job={jobs[r.id]}
                             onGates={setGatesOf} onVerify={verify}
                             onPromote={(x) => setPromote({ kind: x.kind, id: x.id, name: x.name })}
-                            onDemote={demote} />
+                            onDemote={demote} onCanary={decideCanary} />
                     ))}
                 </ul>
             </Card>

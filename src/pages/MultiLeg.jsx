@@ -22,15 +22,21 @@ import { pollInterval } from '../hooks/usePolling.js';
 import useCollapse from '../hooks/useCollapse.js';
 import useResultsTable from '../components/multileg/useResultsTable.js';
 import ResultsDayCurves from '../components/multileg/ResultsDayCurves.jsx';
+import DeploymentStructurePanel from '../components/multileg/DeploymentStructurePanel.jsx';
 import { presetWindow, rangeWindow, windowLabel, windowFromParams, stepTradingDay, istDate } from '../components/multileg/resultsWindow.js';
 import { API_URL } from '../config/api.js';
 import { pnlTone } from '../components/viz/tokens';
 import { spotMove, pfText, pfValue } from '../components/multileg/builderFormat';
+import { tailCoverText } from '../components/multileg/tailCoverText.js';
 import SavedStrategiesPanel from '../components/multileg/SavedStrategiesPanel';
 import EngineJournal from '../components/multileg/EngineJournal';
 import RegimePanel from '../components/multileg/RegimePanel';
 import { PromoteDialog } from '../components/golive/goLiveShared.jsx';
 import DocLink from '../components/DocLink.jsx';
+import NewTabLink from '../components/NewTabLink.jsx';
+
+/** One deployment's Results, as a full path — for the new-tab icon beside its name. */
+const resultsHref = (id) => `${ROUTES.multiLeg}?tab=results&deployment=${encodeURIComponent(String(id))}`;
 
 /** Multi-leg tab → its documentation section. */
 const TAB_DOC = { builder: 'builder-tab', backtest: 'backtest-tab', sweep: 'optimizer-tab', scan: 'scan-tab', auto: 'auto-tab', deploy: 'deploy-regime', results: 'results-tab' };
@@ -958,6 +964,7 @@ export default function MultiLeg() {
                                         <td className="py-1 pr-3">
                                             <Link to={{ search: `?tab=results&deployment=${encodeURIComponent(String(d._id))}` }} onClick={scrollPageToTop}
                                                 className="text-primary-ink hover:underline">{d.name}</Link>
+                                            <NewTabLink href={resultsHref(d._id)} label={d.name} className="ml-0.5 align-middle" />
                                         </td>
                                         <td className={`pr-3 ${d.trade_mode === 'LIVE' ? 'text-danger font-semibold' : 'text-fg-4'}`}>{d.trade_mode}</td>
                                         <td className="pr-3 text-fg-4">{d.status}</td>
@@ -2481,6 +2488,7 @@ export default function MultiLeg() {
                                                         title={d.totals?.trades > 0
                                                             ? `Open Results for ${d.name} only — every booked trade with its P&L, margin and legs, plus the breakdowns and curves`
                                                             : `Open Results for ${d.name} only — nothing booked yet, so it fills in after the first exit`}>🧾 results</Link>
+                                                    <NewTabLink href={resultsHref(d._id)} label={d.name} />
                                                     <button onClick={() => focusJournal(d._id)}
                                                         className="text-3xs px-1.5 py-0.5 rounded border border-line-2 text-fg-4 hover:text-fg"
                                                         title={`Engine journal for ${d.name} only — every event it raised (signals, skips, stand-downs, entries, exits), paged back to its first day`}>📜 journal</button>
@@ -3024,6 +3032,9 @@ export default function MultiLeg() {
                         </button>
                     </div>
 
+                    {/* one deployment picked: its structure and stops, open now or as it would enter now */}
+                    {resFilter.deploymentId !== 'all' && <DeploymentStructurePanel deploymentId={resFilter.deploymentId} />}
+
                     {resTotal === 0 ? (
                         <div className="bg-surface rounded-xl border border-line p-8 text-center text-sm text-fg-5">
                             {resLoading ? 'Loading…' : resDeploymentName ? (
@@ -3354,13 +3365,18 @@ function PreviewModal({ preview, deployLots, onConfirm, onCancel }) {
                                 <Row k="Net credit" v={`₹${fmt(data.creditRupees)} (${fmt(data.creditPerUnit, 1)}/u)`} cls={data.creditRupees >= 0 ? 'text-success' : 'text-warning'} />
                                 <Row k="Margin (est)" v={`₹${fmt(data.marginEst)}${data.marginBasis === 'span' ? ' (SPAN)' : ''}`} cls={data.fundsOk === false ? 'text-danger' : ''} />
                                 <Row k="Max profit" v={data.maxProfit != null ? `₹${fmt(data.maxProfit)}` : '∞'} cls="text-success" />
-                                <Row k="Max loss" v={data.maxLoss != null ? `₹${fmt(data.maxLoss)}` : 'UNLIMITED'} cls={data.maxLoss != null ? 'text-danger' : 'text-danger font-bold'} />
+                                <Row k="Max loss" v={data.maxLoss != null ? `₹${fmt(data.maxLoss)}` : data.stops?.capsTail ? 'UNLIMITED · stops set' : 'UNLIMITED'} cls={data.maxLoss != null || data.stops?.capsTail ? 'text-danger' : 'text-danger font-bold'} />
                                 <Row k="Break-evens" v={data.breakevens?.length ? data.breakevens.map(b => fmt(b)).join(' / ') : '—'} />
                                 <Row k="Prob. of profit" v={data.pop != null ? `${data.pop}%` : '—'} cls={data.pop >= 50 ? 'text-success' : 'text-warning'} />
                                 <Row k="Expected move (±1σ)" v={`±${fmt(data.expectedMove)} (${data.dte}DTE)`} />
                                 <Row k="ATM IV" v={`${data.ivAtmPct}%`} />
                             </div>
-                            {data.unbounded && <div className="text-2xs text-danger border border-red-800 rounded p-1.5">⚠ UNDEFINED tail risk — this structure can lose without limit unless leg-SL / structure-SL are set.</div>}
+                            {(() => {
+                                const t = tailCoverText(data);
+                                return t && (
+                                    <div className={`text-2xs rounded p-1.5 border ${t.tone === 'danger' ? 'text-danger border-red-800' : 'text-warning border-amber-800/60 bg-amber-950/10'}`} data-testid="tail-cover">{t.text}</div>
+                                );
+                            })()}
                             {data.fundsOk === false && <div className="text-2xs text-danger border border-red-800 rounded p-1.5">⛔ Insufficient funds — needs ₹{fmt(data.marginEst)} margin but only ₹{fmt(data.fundsAvailable)} available. A LIVE deploy will be refused.</div>}
                             {Array.isArray(data.lint) && data.lint.length > 0 && (
                                 <div className="space-y-1">

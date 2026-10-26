@@ -39,6 +39,7 @@
  * so on the page instead of rendering an empty section.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import NewTabLink from '../components/NewTabLink.jsx';
 import { Link, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
@@ -46,7 +47,7 @@ import {
     Legend as RcLegend, ResponsiveContainer,
 } from 'recharts';
 import {
-    RefreshCw, Wallet, ExternalLink, Layers, Activity, ChevronDown, ChevronUp, CheckSquare, Square, X,
+    RefreshCw, Wallet, Layers, Activity, ChevronDown, ChevronUp, CheckSquare, Square, X,
 } from 'lucide-react';
 import {
     Card, StatTile, StatRow, DataTable, Placeholder, StatusBadge, DivergingBars, PageHeader, Tabs, Segmented, Chip,
@@ -298,10 +299,13 @@ function StrategyCard({ g, color, selected, expanded, onToggleSelect, onToggleEx
                     Details
                 </button>
                 {href ? (
-                    <Link to={href} className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-line-2 text-2xs text-primary-ink hover:underline"
-                        title="Open this strategy's detail page (trades, charts, AI review)">
-                        Open page <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                    </Link>
+                    <span className="ml-auto inline-flex items-center gap-0.5">
+                        <Link to={href} className="inline-flex items-center gap-1 px-2 py-1 rounded border border-line-2 text-2xs text-primary-ink hover:underline"
+                            title="Open this strategy's detail page (trades, charts, AI review)">
+                            Open page
+                        </Link>
+                        <NewTabLink href={href} label={g.key} />
+                    </span>
                 ) : (
                     <span className="ml-auto text-3xs text-fg-5" title="No deployment with a symbol runs this strategy, so there is no detail route to open">no detail page</span>
                 )}
@@ -367,9 +371,12 @@ function DeploymentCards({ deployments, selected, onSelect, linkForDeployment })
                         <div className="flex items-center justify-between gap-2 border-t border-line-0 pt-2">
                             <span className="text-3xs text-fg-5">last {istStamp(s.lastTradeAt)}</span>
                             {href ? (
-                                <Link to={href} className="inline-flex items-center gap-1 text-2xs text-primary-ink hover:underline" title="Open this deployment's own page">
-                                    Open page <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                                </Link>
+                                <span className="inline-flex items-center gap-0.5">
+                                    <Link to={href} className="inline-flex items-center gap-1 text-2xs text-primary-ink hover:underline" title="Open this deployment's own page">
+                                        Open page
+                                    </Link>
+                                    <NewTabLink href={href} label={label} />
+                                </span>
                             ) : <span className="text-3xs text-fg-5">no detail page</span>}
                         </div>
                     </article>
@@ -444,7 +451,7 @@ function OpenNowSingle({ open, depById, linkForDeployment }) {
                                         const label = d?.meta?.name || r.strategyName || '—';
                                         return (
                                             <tr key={`${r.symbol}-${i}`} className="border-t border-line-0">
-                                                <td className="py-1 pr-3">{href ? <Link to={href} className="text-primary-ink hover:underline">{label}</Link> : label}</td>
+                                                <td className="py-1 pr-3">{href ? <><Link to={href} className="text-primary-ink hover:underline">{label}</Link><NewTabLink href={href} label={label} className="ml-0.5 align-middle" /></> : label}</td>
                                                 <td className="pr-3 text-fg-4">{String(r.symbol || '—').replace(/^(NSE|BSE):/, '')} · {r.type || '—'}</td>
                                                 <td className="pr-3 text-fg-4 whitespace-nowrap">{istStamp(r.entryTime)}</td>
                                                 <td className="pr-3 text-right tabular-nums text-fg-4">{r.entryPrice == null ? '—' : `₹${r.entryPrice}`} → {r.ltp == null ? '—' : `₹${r.ltp}`}</td>
@@ -509,7 +516,7 @@ function StrategyPanel({ g, color, depById, linkForDeployment, onClose }) {
 
     const depCols = [
         { key: 'name', header: 'Deployment', render: (r) => (r.href
-            ? <Link to={r.href} className="text-primary-ink hover:underline inline-flex items-center gap-1">{r.meta?.name || r.id}<ExternalLink className="w-3 h-3" aria-hidden="true" /></Link>
+            ? <span className="inline-flex items-center gap-0.5"><Link to={r.href} className="text-primary-ink hover:underline">{r.meta?.name || r.id}</Link><NewTabLink href={r.href} label={r.meta?.name || r.id} /></span>
             : <span className="text-fg-3">{r.meta?.name || r.id}</span>) },
         { key: 'symbol', header: 'Symbol', render: (r) => <span className="text-fg-4">{String(r.meta?.symbol || '—').replace(/^(NSE|BSE):/, '').replace(/-INDEX$/, '')}</span> },
         { key: 'mode', header: 'Mode', render: (r) => (r.meta?.mode ? <Chip tone={String(r.meta.mode).toUpperCase() === 'LIVE' ? 'live' : 'paper'}>{String(r.meta.mode).toUpperCase()}</Chip> : '—') },
@@ -818,7 +825,7 @@ export default function LivePortfolio() {
                 return (
                     <span className="inline-flex items-center gap-1 pl-5 min-w-0 text-fg-4">
                         {href
-                            ? <Link to={href} className="text-primary-ink hover:underline truncate max-w-[18rem]" title={`Open ${label}`}>{label}</Link>
+                            ? <><Link to={href} className="text-primary-ink hover:underline truncate max-w-[18rem]" title={`Open ${label}`}>{label}</Link><NewTabLink href={href} label={label} /></>
                             : <span className="truncate max-w-[18rem]" title={label}>{label}</span>}
                     </span>
                 );
@@ -851,10 +858,12 @@ export default function LivePortfolio() {
                 const losing = (isStrategyTab || isDeploymentTab) && (n(r.net) ?? 0) < 0;
                 const label = rowLabel(r);
                 const body = href ? (
-                    <Link to={href} className="text-primary-ink hover:underline inline-flex items-center gap-1" title={`Open ${label} detail`}>
-                        <span className="truncate max-w-[16rem] align-middle">{label}</span>
-                        <ExternalLink className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
-                    </Link>
+                    <span className="inline-flex items-center gap-0.5 min-w-0">
+                        <Link to={href} className="text-primary-ink hover:underline inline-flex items-center gap-1 min-w-0" title={`Open ${label} detail`}>
+                            <span className="truncate max-w-[16rem] align-middle">{label}</span>
+                        </Link>
+                        <NewTabLink href={href} label={label} />
+                    </span>
                 ) : (
                     <span className="truncate max-w-[16rem] inline-block align-middle" title={label}>{label}</span>
                 );
@@ -918,7 +927,7 @@ export default function LivePortfolio() {
                             Every multileg deployment as one book, from the structure engine. The same view lives on the Multi-Leg page's Results tab — this is it, without leaving the hub.
                         </p>
                         <Link to={ROUTES.multiLegResults} className="text-2xs text-primary-ink hover:underline inline-flex items-center gap-1" title="Filters by deployment, symbol and structure, plus every round-trip">
-                            Open Multi-Leg → Results <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                            Open Multi-Leg → Results
                         </Link>
                     </div>
                     <ResultsAnalytics templates={templates} />

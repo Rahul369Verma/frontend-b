@@ -105,16 +105,18 @@ describe('StrategyScorecard — ready for live, filters, columns (23-Oct-2026)',
         expect(screen.getByText(/2 of 4 match the filters — 2 hidden/)).toBeInTheDocument();
         expect(screen.getByRole('button', { name: /^Filters \(\d\)$/ })).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
-        expect(screen.getAllByRole('link', { name: /strat-\d/ })).toHaveLength(4);
+        expect(screen.getAllByRole('link', { name: /^strat-\d/ })).toHaveLength(4);
+        // each name has its new-tab twin, opening the same results page in a new tab
+        expect(screen.getAllByRole('link', { name: /^Open strat-\d.*in a new tab$/ }).map(a => a.getAttribute('target'))).toEqual(['_blank', '_blank', '_blank', '_blank']);
         fireEvent.click(screen.getByRole('button', { name: /Drifting · 1/ }));
-        expect(screen.getAllByRole('link', { name: /strat-\d/ }).map(a => a.textContent)).toEqual(['strat-3 (PAPER)']);
+        expect(screen.getAllByRole('link', { name: /^strat-\d/ }).map(a => a.textContent)).toEqual(['strat-3 (PAPER)']);
         expect(JSON.parse(localStorage.getItem('multileg:scorecard:filters')).verdicts).toEqual(['drifting']);
     });
 
     it('sorts by consistency, and the column picker hides a column and remembers it', () => {
         wrap(<StrategyScorecard sc={SC2([rr(1), rr(3), rr(2)])} />);
         fireEvent.change(screen.getByRole('combobox', { name: /Sort/ }), { target: { value: 'consistency' } });
-        expect(screen.getAllByRole('link', { name: /strat-\d/ }).map(a => a.textContent)).toEqual(['strat-3 (PAPER)', 'strat-2 (PAPER)', 'strat-1 (PAPER)']);
+        expect(screen.getAllByRole('link', { name: /^strat-\d/ }).map(a => a.textContent)).toEqual(['strat-3 (PAPER)', 'strat-2 (PAPER)', 'strat-1 (PAPER)']);
         expect(screen.getByRole('columnheader', { name: /Consistency/ })).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Columns' }));
         fireEvent.click(within(screen.getByTestId('scorecard-columns')).getByRole('checkbox', { name: 'Consistency' }));

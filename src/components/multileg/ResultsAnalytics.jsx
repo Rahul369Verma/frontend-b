@@ -48,6 +48,7 @@ import { StopGridPanel } from './StopReplay.jsx';
 import useScorecard from './useScorecard';
 import DocLink from '../DocLink.jsx';
 import { Panel } from '../viz/primitives';
+import { NameWithNewTab } from '../NewTabLink.jsx';
 
 // One deployment's own trades: the Results tab scoped to it. Works from the
 // Multi-Leg page and from Live Portfolio alike (MultiLeg reads ?deployment=).
@@ -473,10 +474,12 @@ export default function ResultsAnalytics({
                                                                     <span className="text-fg-5 shrink-0">· {r.strategies} strateg{r.strategies === 1 ? 'y' : 'ies'}</span>
                                                                 </button>
                                                             ) : r.deploymentId ? (
-                                                                <Link to={deploymentHref(r.deploymentId)} onClick={scrollMainTop}
-                                                                    className="truncate block text-primary-ink hover:underline" title="Open this deployment's trades">
-                                                                    {rowLabel(r.key)}
-                                                                </Link>
+                                                                <NameWithNewTab href={deploymentHref(r.deploymentId)} label={rowLabel(r.key)}>
+                                                                    <Link to={deploymentHref(r.deploymentId)} onClick={scrollMainTop}
+                                                                        className="text-primary-ink hover:underline" title="Open this deployment's trades">
+                                                                        {rowLabel(r.key)}
+                                                                    </Link>
+                                                                </NameWithNewTab>
                                                             ) : <span className="truncate block">{rowLabel(r.key)}</span>}
                                                         </td>
                                                         <FigureCells r={r} />
@@ -491,8 +494,10 @@ export default function ResultsAnalytics({
                                                         <tr key={`${id}::${c.deploymentId || c.key}`} className="border-t border-line-0/50 bg-slate-900/40 text-fg-4">
                                                             <td className="pl-5 py-0.5 max-w-[16rem]">
                                                                 {c.deploymentId ? (
-                                                                    <Link to={deploymentHref(c.deploymentId)} onClick={scrollMainTop}
-                                                                        className="block truncate text-primary-ink hover:underline" title={`Open ${c.key}'s trades`}>{c.key}</Link>
+                                                                    <NameWithNewTab href={deploymentHref(c.deploymentId)} label={c.key}>
+                                                                        <Link to={deploymentHref(c.deploymentId)} onClick={scrollMainTop}
+                                                                            className="text-primary-ink hover:underline" title={`Open ${c.key}'s trades`}>{c.key}</Link>
+                                                                    </NameWithNewTab>
                                                                 ) : <span className="block truncate">{c.key}</span>}
                                                                 <span className="block truncate text-4xs text-fg-5">
                                                                     {templates.find((t) => t.key === c.template)?.name || c.template || '—'} · {shortSymbol(c.symbol)}

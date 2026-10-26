@@ -407,7 +407,7 @@ export const HELP = {
     "unbounded-warning": {
         label: "⚠ UNDEFINED tail risk",
         short: "This structure can lose without a fixed limit.",
-        detail: "Raised when the payoff maths finds no floor on one side — typically a sold leg with no protective wing. The live engine will refuse to open such a structure unless BOTH a per-leg stop and a structure stop greater than 1× are configured, on the principle that you never write an uncapped policy without reinsurance.",
+        detail: "The payoff maths finds no floor on one side — typically a sold leg with no protective wing. With BOTH a per-leg stop and a structure stop greater than 1× set, the preview says so in amber and lists where each stop fires (each short leg's buy-back premium, the structure's ₹ loss, and the rupee stop if set). With either missing it is red: the live engine will refuse to open such a structure, on the principle that you never write an uncapped policy without reinsurance.",
         gotcha: "Configuring stops removes the refusal, not the risk — a gap through your strikes can still blow past both stops.",
     },
     "win-rate": {

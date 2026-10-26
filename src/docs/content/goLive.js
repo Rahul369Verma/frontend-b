@@ -3,7 +3,7 @@ export default {
     id: 'go-live',
     title: 'Go Live',
     route: '/go-live',
-    summary: 'Moving a strategy from PAPER (simulated) to LIVE (real money) happens here and nowhere else. The page proves the broker accepts your orders, shows whether the strategy has earned it, and promotes it with a "canary" that demotes itself if the first real trades lose.',
+    summary: 'Moving a strategy from PAPER (simulated) to LIVE (real money) happens here and nowhere else. The page proves the broker accepts your orders, shows whether the strategy has earned it, and promotes it with a "canary" that asks you what to do if the first real trades lose — it never switches anything by itself.',
     sections: [
         {
             id: 'overview',
@@ -55,7 +55,10 @@ A **Stopped** badge means the deployment takes no new entries.`,
             md: `Promotion asks for **canary** settings — how the first live trades are limited:
 
 - **Trades** — how many of the first live trades are canary trades (default 10).
-- **Loss cap ₹** — if the canary trades lose this much in total, the deployment **demotes itself to PAPER** (when flat). Canary trades are sized at 1 lot.
+- **Loss cap ₹** — if the canary trades lose this much in total, you get an **urgent alert** (the bell, and Telegram's alerts chat) and the deployment's row here shows **loss cap reached — your decision** with two buttons: **Demote to PAPER** or **Keep LIVE**. Nothing changes until you choose — it keeps trading LIVE at the canary size meanwhile. Keep LIVE asks again if it loses another loss cap. Canary trades are sized at 1 lot.
+- After the canary's trades, it asks **lift the size cap?** — it stays at the canary size until you press **Lift size cap**.
+
+A name that ends in "(LIVE)" or "(PAPER)" follows the mode when you promote or demote.
 
 If the evidence gates are not met, promotion is still possible only with a recorded **override**: type the exact phrase shown (it says you accept real losses) and a reason of at least 10 characters. Overrides are logged permanently. Hard gates cannot be overridden.
 

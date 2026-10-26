@@ -180,8 +180,8 @@ export function PromoteDialog({ open, kind, id, name, onClose, onDone }) {
                         <fieldset className="border border-line/60 rounded p-3 space-y-2">
                             <legend className="text-xs font-semibold text-fg-2 px-1">Canary — the first live trades</legend>
                             <p className="text-2xs text-fg-5">
-                                The first trades run at a capped size. If they lose more than the cap, the deployment goes back to PAPER on its own
-                                {kind === 'multileg' ? ' (once the structure is closed)' : ' (once the open position exits)'} and you get a Telegram alert.
+                                The first trades run at a capped size. If they lose more than the cap you get an urgent alert and decide here —
+                                demote to PAPER or keep it LIVE. Nothing switches by itself; it keeps trading LIVE at the canary size until you answer.
                             </p>
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                 <label className="text-2xs text-fg-4">Trades<input type="number" min="1" step="1" className={field} placeholder={String(def.trades)} value={form.trades} onChange={set('trades')} /></label>

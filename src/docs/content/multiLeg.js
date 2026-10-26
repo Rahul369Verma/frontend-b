@@ -373,5 +373,17 @@ Every booked structure: entry → exit, deployment, structure, index, mode, exit
 
 Results load **on demand**, so the tab opens fast however long the history: the table fetches only the 50 rows on screen (already filtered, searched and sorted by the server), a row's legs and path are fetched when you open it, and **Day by day** fetches the recorded paths when you scroll to it. A row **struck through** is [quarantined](glossary#quarantined): booked on a price that was not real, shown but excluded from every total.`,
         },
+        {
+            id: 'results-structure',
+            title: 'Results · Structure of one deployment',
+            md: `Pick ONE deployment in the Deployment filter and the Results tab shows its structure, the way the backtest shows one:
+
+- **Open now** — the structure as it stands: each leg's entry premium and its price now, the entry credit, the mark now.
+- **Not open** — how it would enter **right now**: the legs resolved at the live index level by the engine's own leg rules (a zone-finder deployment picks its strikes from the live chain at entry, so its strikes can differ — the panel says so).
+
+Every leg shows its **leg stop** (the premium at which a short leg is bought back) and the index level at which that stop would fire today. Below the legs: credit, max profit, max loss (or *UNBOUNDED*), breakevens, and each of its **stops** — the structure stop, the rupee stop (it fires on the mark **net** of the round-trip costs, so the line before costs sits that much higher) and the target — with the index levels at which each would fire today. A target is usually reached by time decay, not by a move, and the panel says so.
+
+The chart has the payoff **at expiry** and **today** (each leg at its own implied volatility), the spot now, and a line for every stop and the target. The levels are the engine's own (the shared exit rules), so the picture cannot show a stop the engine would not take. It is fetched when you pick the deployment and when you press **Refresh** — never polled.`,
+        },
     ],
 };

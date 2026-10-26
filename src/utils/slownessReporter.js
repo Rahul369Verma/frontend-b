@@ -9,7 +9,11 @@
  *             blocked it: the script time and its biggest script (bundle chunk, function,
  *             what started it), plus the style/layout time. A bare "froze 506 ms" on
  *             21-Oct-2026 could not say whether it was a render, a chart or a layout.
- *   api       an API answer took ≥ 5 s end to end (network + server), axios or fetch
+ *   api       an API answer took ≥ 5 s end to end (network + server), axios or fetch —
+ *             with the server's OWN time for it (its Server-Timing header, app;dur=N), so a
+ *             slow page can be told apart: a slow server, or a fast answer that sat in the
+ *             network / the browser's connection queue (23-Oct-2026: /multi-leg waited 6–60 s
+ *             with no slow request on the server).
  *
  * Batched and sent every 30 s to POST /api/telemetry/slow, where the server's
  * slowness watch turns them into notifications (bell + Telegram), one per
@@ -66,6 +70,21 @@ export function describeFrame(e) {
     return parts.join(' · ');
 }
 
+/** The server's own time from a Server-Timing value ("app;dur=123.4") → 123, or null. */
+export function serverMsFrom(value) {
+    const m = /(?:^|,)\s*app\s*;[^,]*?\bdur=([\d.]+)/.exec(String(value || ''));
+    const n = m ? Number(m[1]) : NaN;
+    return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+/** The Server-Timing header from an axios or fetch response (either kind of headers object). */
+function serverTimingOf(headers) {
+    if (!headers) return null;
+    try {
+        return serverMsFrom(typeof headers.get === 'function' ? headers.get('server-timing') : headers['server-timing']);
+    } catch { return null; }
+}
+
 export function installSlownessReporter({ axios, apiUrl, fetchImpl = null, getPath = () => window.location.pathname, now = () => performance.now(), PerfObserver = typeof PerformanceObserver !== 'undefined' ? PerformanceObserver : null, every = FLUSH_MS } = {}) {
     const queue = [];
     const push = (s) => { if (queue.length < MAX_QUEUE) queue.push(s); };
@@ -85,16 +104,18 @@ export function installSlownessReporter({ axios, apiUrl, fetchImpl = null, getPa
     } catch { /* long tasks not supported in this browser */ }
 
     // 2. slow answers through axios
-    const noteApi = (url, t0) => {
+    const noteApi = (url, t0, headers) => {
         if (t0 == null || isOwn(url)) return;
         const ms = now() - t0;
-        if (ms >= API_MS) push({ type: 'api', route: routeKey(getPath()), api: apiKey(url), ms: Math.round(ms) });
+        if (ms < API_MS) return;
+        const serverMs = serverTimingOf(headers);
+        push({ type: 'api', route: routeKey(getPath()), api: apiKey(url), ms: Math.round(ms), ...(serverMs != null ? { serverMs } : {}) });
     };
     if (axios && axios.interceptors) {
         axios.interceptors.request.use((cfg) => { cfg.__slowT0 = now(); return cfg; });
         axios.interceptors.response.use(
-            (r) => { noteApi(r.config && r.config.url, r.config && r.config.__slowT0); return r; },
-            (e) => { if (e && e.config) noteApi(e.config.url, e.config.__slowT0); return Promise.reject(e); },
+            (r) => { noteApi(r.config && r.config.url, r.config && r.config.__slowT0, r.headers); return r; },
+            (e) => { if (e && e.config) noteApi(e.config.url, e.config.__slowT0, e.response && e.response.headers); return Promise.reject(e); },
         );
     }
 
@@ -104,8 +125,9 @@ export function installSlownessReporter({ axios, apiUrl, fetchImpl = null, getPa
         wrappedFetch = async (input, init) => {
             const url = typeof input === 'string' ? input : input && input.url;
             const t0 = now();
-            try { return await fetchImpl(input, init); }
-            finally { if (/\/api\//.test(String(url || ''))) noteApi(url, t0); }
+            let res = null;
+            try { res = await fetchImpl(input, init); return res; }
+            finally { if (/\/api\//.test(String(url || ''))) noteApi(url, t0, res && res.headers); }
         };
     }
 
