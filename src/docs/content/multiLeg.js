@@ -107,6 +107,17 @@ Running net profit trade by trade. A steady upward line is what you want; long f
 | **Margin** | Estimated margin blocked. |
 | **Net ₹** | Profit after charges. |
 
+### Option prices
+The **Option prices** setting chooses what the backtest prices options with:
+
+| Choice | What it is | Dates |
+|---|---|---|
+| **Broker candles + model chain** | Index candles from the broker; option prices worked out with a formula. Read the result as the best case, not a forecast. | Any |
+| **Live option-chain archive** | Real bid/ask from the recorder, one snapshot a minute. Stops are checked at each snapshot. | From Aug 2026 |
+| **Live engine replay** | **The live engine itself**, run on recorded prices: the same 10-second loop, strike choice, stops, rupee stop, square-off and expiry handling. Fills follow the paper rule (last traded price), exactly as live paper trades do, so the result is what a paper deployment with these settings would have done. A second figure shows how much the same fills would have cost as real orders (sell at the bid, buy at the ask). Sessions on the [quote tape](data-manager#quote-tape) use every tick. Sessions before the tape use the archive, one quote a minute: the decisions are the same, but a stop that trips between two snapshots fills at the next one. The result says how many sessions came from each. | Tape: from the day it started recording. Archive: from Aug 2026 |
+
+In a live engine replay, a setting that calls an outside service (the AI zone review) cannot be replayed. It is switched off for the run, and the result says so. Each night the replay is checked against the day's live trades; the result is on the Data Manager page.
+
 ### Attribution
 Splits the profit into what came from the index moving (delta), time passing (theta), volatility changing (vega) and costs — useful to see *why* a structure made or lost money.
 
@@ -133,6 +144,20 @@ Each row is one combination. The **Val** columns (validation trades, win %, net,
 Columns: structure, its **outlook** (bullish / bearish / neutral / volatile), index, number of trades (validation trades if a hold-out is set), win %, net, profit factor, **ROI/margin**, train net. **Full backtest** opens the row in the Backtest tab; **Optimize** opens it in the Optimizer with the structure and index preloaded.`,
         },
         {
+            id: 'delta-options',
+            title: 'Delta Exchange options (BTC, ETH, gold)',
+            md: `Pick **BTC · Delta**, **ETH · Delta** or **Gold (XAUT) · Delta** as the symbol to backtest, optimize, scan or run **Auto** on Delta Exchange India's options. They are **research only** for now: deploying one is refused (paper and live trading on Delta are not built yet).
+
+What is real:
+- **Contracts** — the expiries and strikes Delta had listed **at that moment** (from its own records, kept for every option since Dec-2023). Strikes are placed on Delta's real strike ladder. **Expiry:** the nearest (a daily, settling 17:30 IST); set **expiry_type** to WEEKLY (Friday) or MONTHLY (last Friday). A positional structure takes the nearest expiry at least **min_dte_entry** days away.
+- **Size** — one lot is **one contract** (0.001 BTC, 0.01 ETH, 0.001 XAUT), valued at Delta's fixed **₹85 per USD**. Raise **lots** for a realistic size.
+- **Costs** — Delta's own fee on every fill: 0.01% of the underlying's value, at most 3.5% of the option's price, plus 18% GST. **Spreads** measured from Delta's live books (BTC ~0.5%, ETH ~1%, gold ~2.5% of the price at the money).
+- **Margin** — Delta's isolated-margin rule: each sold option posts 1% of the index plus its price; a bought option costs its price. Delta's portfolio margin would be lower for hedged structures.
+- **Clock** — crypto trades every day around the clock: entries can happen on any day (Saturday and Sunday included), time to expiry is calendar time, and there is no interest rate.
+
+What is **modelled**: the option **prices**. Delta keeps no minute quotes for old contracts, so prices come from the underlying's candles with Black–Scholes at the recent realised volatility (× **iv_mult**, 1.0 by default). The recorder saves Delta's real quotes from now on ([Data Archivist → Delta option data](data-manager#delta-options)); once enough have built up, a strategy can be checked on real prices.`,
+        },
+        {
             id: 'auto-tab',
             title: 'Auto ⚡ tab (the full race)',
             md: `The most thorough search: **every selected strategy × its settings × every structure × every index**, run in four stages so the time goes to the promising ideas.
@@ -151,6 +176,7 @@ Columns: structure, its **outlook** (bullish / bearish / neutral / volatile), in
 - **Budget level** — how many combinations each stage may try (quick → deep). **Advanced budget** edits every number.
 - **Entries** — *Signals + time-based neutrals* (directional structures wait for a signal, neutral ones enter on the clock) or *Strategy signals only*.
 - **AI-validate champions** — replay each champion's entries through the AI gate in stage 4.
+- **Consistent strategies first** (on by default) — see *Consistency* below.
 
 ### While it runs
 The progress card shows the stage, % done and an estimated finish time. **Pause** stops it and keeps its place (a [checkpoint](glossary#checkpoint), saved every few minutes and at the exact point on any stop), so **Resume** continues where it stopped. **Cancel run** ends it for good.
@@ -162,7 +188,76 @@ Every run is saved, so you can re-attach after a page refresh. The legend reads:
 - a run **you** paused stays paused until you press Resume.
 
 ### Champions and the leaderboard
-The best results appear as cards (🏆 = first). Each shows **Val net** (the honest number), **Train net**, **Full net** (whole period) and the exact settings. Load a champion into the Backtest tab to inspect it, or save it as a strategy. The **Full leaderboard** lists every stage-3 survivor; the **OOS** column marks with ✓ the ones that held up on validation and with ⚠ the ones that did not.`,
+The best results appear as cards (🏆 = first). Each shows **Val net** (the honest number), **Train net**, **Full net** (whole period) and the exact settings. Load a champion into the Backtest tab to inspect it, or save it as a strategy. The **Full leaderboard** lists every stage-3 survivor; the **OOS** column marks with ✓ the ones that held up on validation and with ⚠ the ones that did not.
+
+### Consistency: rising, falling and sideways markets
+Validation alone cannot tell a strategy that wins in **any** market from one that only wins in a **falling** one when the training and validation windows come from the same year. So every result is also split two ways:
+- **By market.** Each day is *rising*, *falling* or *sideways*, from the index's move over the previous 20 sessions (known before that day opens). The band is half that index's typical 20-session move. A trade counts in the market it was entered in.
+- **By month.** Each trade counts in the month it closed in.
+
+A result is:
+- **✓ Consistent** when it is profitable in each market, with at least 5 trades in each, and no single month carries more than half of its profit;
+- **◐ Partly tested** when nothing loses but one market had too few trades to judge. The range had too few such days, or the strategy rarely trades in them;
+- **✗ Not consistent** when it loses in some market, depends on one month, or is not profitable.
+
+With **Consistent strategies first** on, the search ranks them in that order. Within each group it ranks by the worse of train, validation and *every trade at its worst market's average*, so a structure carried by one market ranks by its weak side. Each card shows the verdict, its reasons and the net per market; the leaderboard has the same in its **Cons.** and ↑ ↓ → columns. **Show** reorders (*Consistent first*) or filters (*Consistent only*), and says how many it hides and why. The line above the cards gives each index's rising / falling / sideways days in the range. A range with few rising days cannot test a strategy in rising markets: run over a longer range that holds both.
+
+A run from before this check has no verdicts. **Check consistency of these N strategies** replays each listed strategy over the run's range (about a minute) and stores the answer with the run.
+
+*Example (17-Oct-2026 run, FINNIFTY + MIDCPNIFTY + SENSEX, Jan–Oct 2026):* every Put Ratio Backspread champion owed its profit to the March 2026 crash. Several made more than 100% of their profit that month, so the other months lost, and several lost in rising markets. The time-based short straddles and strangles were profitable in 7–8 of 8 months and in each market. Remember the multi-leg backtest prices options with a model, which flatters intraday premium selling: replay a consistent result on real recorded quotes before trusting it.`,
+        },
+        {
+            id: 'deploy-today',
+            title: 'Deploy · Each card\'s "Today" line',
+            where: 'On every deployment card',
+            md: `Every card says what its deployment did today, and why. The **headline** is the reason that matters most:
+- *entry failed*, with the broker's own words, for example a leg rejected for margin, and what was bought back;
+- *no entry today*: a stand-down and its reason;
+- *traded today*;
+- *not entered yet*: the refusal it keeps hitting, with how many times.
+
+**All today** lists every entry, failure, refusal, exit, leg stop and setting change since the morning, from the engine's journal. A repeat is one line with a count, so a refusal that recurs all morning reads *entry refused ×42 · 09:20–11:05*.
+
+One structure a day means a failed entry also uses the day's slot. The card says so, instead of "already traded today".
+
+In Results, a round trip that was **unwound** (its entry could not complete) says why. It names the leg that failed, the broker's words, what was bought back and at what prices, and what that cost. The legs table also shows the leg that failed and any leg never sent. **What happened while it was open** lists the journal of that trade.`,
+        },
+        {
+            id: 'deploy-live-capital',
+            title: 'Deploy · LIVE capital',
+            where: 'Deploy tab, above the deployments',
+            md: `What your LIVE multi-leg deployments need in **margin**, alone and all together, against the money in the Fyers account. Every figure is the **broker's margin calculator**, which places nothing:
+- **Account** — total balance, what is in use, what is available now.
+- **All together** — every LIVE structure on at once, priced as one basket. The exchange nets legs that offset each other, so this can be less than the sum of each one alone. If it is more than the account's total, they cannot all trade on the same day.
+- **Each deployment** — an *open* one is priced at the legs it holds now (a leg already stopped out needs nothing). A *flat* one is priced at the legs it would enter **right now** at the live index level. **Blocked at entry** is what it needed when it opened.
+- **Still to enter today** — the flat ones that have not entered today, in entry order, against what is available. The one the account cannot fund is named. At its entry time the engine refuses it before sending any order and stands it down for the day, with a Telegram message.
+
+Expiry days need more margin: the exchange charges extra on short options expiring that day. *Unavailable* means the calculator did not answer; no estimate is shown in its place. The panel asks the broker when the tab opens and on **Refresh**, never in the background, and at the lowest priority so it never delays a trading request. PAPER books use no account margin and are not counted.`,
+        },
+        {
+            id: 'deploy-broker-orders',
+            title: 'Deploy · Broker orders today',
+            where: 'Deploy tab, above the deployments',
+            md: `Today's **Fyers order book** — filled, pending, cancelled and rejected — with the **strategy that placed each order** and what it was for: entry, leg stop, exit, unwind, or safety stop at the broker.
+
+Every order the app places carries a **tag** at Fyers (letters and digits, at most 20). For example \`mlen86a4761422550PES\` is a **m**ulti-**l**eg **en**try by the deployment whose id ends \`86a47614\`, selling the 22550 PE. Single-leg orders carry \`sl…\` tags from 27-Oct-2026. The panel turns each tag back into the deployment's name. An order from before tags were written is matched by the order id the app recorded. An order the app did not place (by hand, another tool) is listed as **not from this app** and never hidden.
+
+The chips filter by strategy and count its pending and rejected orders. A **pending** order is usually a resting stop: the safety stop a LIVE multi-leg structure keeps at the broker in case the app is down.`,
+        },
+        {
+            id: 'deploy-twins',
+            title: 'Deploy · LIVE vs PAPER twins',
+            where: 'Deploy tab, above the deployments',
+            md: `A **paper twin** is a PAPER copy of a LIVE deployment: the same structure, settings, entry trigger and lots, with simulated fills and no broker orders. Make one with **Paper twin** on a LIVE card. It starts at its next entry time.
+
+The panel lists each pair day by day, from the day both existed: each book's net, and **LIVE − PAPER**. Because the rules are the same, a difference comes from what real trading adds:
+- fill prices and slippage;
+- a broker rejection, for example margin;
+- the funds check refusing an entry;
+- an entry that had to be unwound;
+- a stop filled at the broker.
+
+The LIVE events that explain a day's difference are listed on that day. Pairs made by hand before twins existed, like nifty-atm-straddle (LIVE / PAPER), are paired by name, structure and index. If their lots differ, the panel says the rupees are not like for like.`,
         },
         {
             id: 'deploy-regime',
@@ -384,6 +479,57 @@ Results load **on demand**, so the tab opens fast however long the history: the 
 Every leg shows its **leg stop** (the premium at which a short leg is bought back) and the index level at which that stop would fire today. Below the legs: credit, max profit, max loss (or *UNBOUNDED*), breakevens, and each of its **stops** — the structure stop, the rupee stop (it fires on the mark **net** of the round-trip costs, so the line before costs sits that much higher) and the target — with the index levels at which each would fire today. A target is usually reached by time decay, not by a move, and the panel says so.
 
 The chart has the payoff **at expiry** and **today** (each leg at its own implied volatility), the spot now, and a line for every stop and the target. The levels are the engine's own (the shared exit rules), so the picture cannot show a stop the engine would not take. It is fetched when you pick the deployment and when you press **Refresh** — never polled.`,
+        },
+        {
+            id: 'results-stop-grid',
+            title: 'Results · Which stops, on these trades',
+            md: `With ONE deployment picked, this replays its most recent closed trades (up to 30) on the **recorded option chain**, about one price a minute, through the same exit rules the engine uses. Each trade keeps its own strikes, fills and size. Only the stops change.
+
+**The grid.** Rows are the **leg stop** (a short leg is bought back when its premium reaches that multiple of its entry; *off* = no leg stop). Columns are the **rupee stop** (the whole structure closes when its net mark reaches −that; *off* = none). Each cell is the **total net P&L** over those trades with that pair of settings, and *worst* is its worst single trade. The **★** cell made the most; the **ringed** cell is what the deployment runs now. The structure stop (× credit) stays on in every cell.
+
+**The lines above it.**
+- *Lowest loss (best net)*: the ★ cell.
+- *Smallest worst trade*: the setting whose worst trade lost least, the safest one, often with less net.
+- *Current*: the ringed cell.
+- *No stops at all*: leg, structure and rupee stops all off, while the target and the time exits still apply.
+
+**The table under it** lists the trades the current stops closed early. *With stops* and *No stops* are the two replays. *Stops did* is the difference: *saved* means the stop cut a loss that grew afterwards, *cost* means the trade would have ended better held. *After the first stop* says whether the held trade went back above ₹0. Touching profit is not keeping it, so the count of trades that "finished better" is the one that matters.
+
+**How to read it.**
+- Compare the cells with each other, not with *Booked*. The replay marks short legs at the ask once a minute; the engine marks every 10 s, so booked and replayed numbers differ a little.
+- Look at the **neighbourhood**, not only the ★. A setting whose neighbours are also good is robust; a lone ★ surrounded by much worse cells is probably luck.
+- A cell that is ₹1,000 better over 20 trades is about ₹50 a trade: inside the noise of a small sample. A cheaper **worst trade** for the same net is a more solid reason to change.
+- *No stops* winning on a few weeks of trades does not make stops useless: stops are insurance against the day that is not in the sample (a gap, a trend day). Judge it on the worst-trade column too.
+- Every number is hindsight on these trades. Nothing here changes the deployment: use **Edit** to change its stops.`,
+        },
+        {
+            id: 'results-target-grid',
+            title: 'Results · Which target, on these trades',
+            md: `The twin of *Which stops*: the same trades, replayed with other **profit targets** × rupee stops. Every other setting (the leg stop, the structure stop, the time exits) stays as the deployment runs it now.
+
+A credit structure's target is a **% of the credit** it took in (a debit structure's is a % of its max profit, or a multiple of the debit). The target is checked on the mark **before** costs, as in the engine; the ₹ in the cells are **net** of estimated costs. Under each cell, *target ×N* counts the trades that exited at the target with that setting, and *never fired* means the target changed nothing.
+
+**Under the grid** each trade shows its **best point before costs**, in the target's unit. Any target at or below that point would have fired on it, so the spread of those numbers tells you which targets are reachable at all. *Target did* compares the trade with and without the current target: *added* means it banked a profit the trade later gave back, *cost* means holding on made more.
+
+**How to read it.**
+- A target that **never fires** is not protecting anything. That is common for intraday structures on a monthly contract: the credit is large and a day's decay is a few % of it.
+- A **low target** takes small wins early and gives up the rest of the decay into the close. If the strategy earns its money at square-off, low targets show up as worse rows.
+- A target that wins on **one or two trades** is noise. The panel says so when the best target fired that rarely.
+- Nothing here changes the deployment: use **Edit** to change its target.`,
+        },
+        {
+            id: 'history',
+            title: 'History and restore (every strategy and deployment)',
+            md: `Every saved strategy and every deployment, multileg and single-leg, keeps its **versions**. Each change to its settings is recorded as a version, saying what changed (\`leg_sl_x: 1.4 → 1.5\`) and when. That includes the builder, Edit, the rupee-stop and lots buttons, the go-live gate and the optimizer's *Save as strategy*.
+
+Open it with **History**: on a deployment card, on a saved strategy's row, or under *Start from Saved Config* when creating a single-leg deployment.
+
+**Restore.** Pick a version and the panel first shows exactly what restoring it would change (a dry run), or why it is refused. Restoring writes those settings as a **new** version, so a restore can itself be undone. Nothing is ever rewritten.
+- *A deployment* goes back through the same rules as Edit: exit settings act on an open structure at its next check, the rest from the next entry; a LIVE deployment cannot be sized up; a naked short keeps both stops. Its name and trading mode stay. A LIVE one asks you to type its name.
+- *A saved strategy* gets its settings, structure, entry trigger and the backtest saved with it back. Its name stays. Deployments made from it are not changed.
+- *A deleted saved strategy* keeps its last state: **Deleted strategies…** under the saved list re-creates it.
+
+**From before history was kept.** The first change to something saved before 27-Oct-2026 first records the state it had, so even that first change can be undone. A change made around the app (a script on the database) is recorded as *changed outside the app* the next time it changes. A multileg deployment's older edit log, which records the changes but not the states, is listed below its versions.`,
         },
     ],
 };

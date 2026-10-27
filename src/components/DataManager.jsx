@@ -5,6 +5,8 @@ import { INSTRUMENT_CONFIG } from '../constants';
 import { pollInterval } from '../hooks/usePolling.js';
 import { API_URL } from '../config/api.js';
 import DocLink from './DocLink.jsx';
+import DeltaOptionDataPanel from './DeltaOptionDataPanel.jsx';
+import QuoteTapePanel from './QuoteTapePanel.jsx';
 
 /**
  * Archive repair: fill the recorder's missing minutes from the broker's 1-minute candles
@@ -565,6 +567,8 @@ const DataManager = () => {
             </h1>
 
             {OptionArchivePanel}
+            <QuoteTapePanel />
+            <DeltaOptionDataPanel />
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
 

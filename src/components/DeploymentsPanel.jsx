@@ -44,6 +44,7 @@ import { PromoteDialog } from './golive/goLiveShared.jsx';
 import { GOLIVE } from './golive/goLiveApi.js';
 import DocLink from './DocLink.jsx';
 import useCollapse from '../hooks/useCollapse.js';
+import VersionHistory from './VersionHistory.jsx';
 
 
 // Fallback list — used only if /api/strategies/registry doesn't respond
@@ -144,6 +145,7 @@ function DeploymentsPanel({ onTest, onSim, onManualTrade, sessionHealth, globalC
     const [showCreate, setShowCreate] = useState(false);
     const [createDefaults, setCreateDefaults] = useState(null); // {symbol} prefill
     const [editingId, setEditingId] = useState(null);
+    const [historyFor, setHistoryFor] = useState(null);   // the deployment whose versions are shown (VersionHistory)
     const [busyId, setBusyId] = useState(null);           // deploymentId mid-mutation
     const [expanded, setExpanded] = useState({});         // { [deploymentId]: bool } params grid
     const [modeFilter, setModeFilter] = useState('all');  // all | live | paper | inactive
@@ -498,6 +500,7 @@ function DeploymentsPanel({ onTest, onSim, onManualTrade, sessionHealth, globalC
                                         onToggleExpand={() => setExpanded(s => ({ ...s, [d._id]: !s[d._id] }))}
                                         onToggleEdit={() => setEditingId(editingId === d._id ? null : d._id)}
                                         onEdited={() => { setEditingId(null); fetchAll(); }}
+                                        onHistory={() => setHistoryFor(d)}
                                         onTest={onTest}
                                         onSim={onSim}
                                         onManualTrade={onManualTrade}
@@ -513,11 +516,16 @@ function DeploymentsPanel({ onTest, onSim, onManualTrade, sessionHealth, globalC
             </div>
             </>)}
 
+            {historyFor && (
+                <VersionHistory kind="single-deployment" id={historyFor._id} name={historyFor.name} live={historyFor.tradeMode === 'LIVE'} open
+                    onClose={() => setHistoryFor(null)} onRestored={fetchAll} />
+            )}
             {showCreate && (
                 <CreateDeployment
                     defaults={createDefaults}
                     strategies={strategies}
                     savedConfigs={savedConfigs}
+                    onSavedChanged={() => axios.get(`${API_URL}/config/strategies/saved`).then((res) => { if (Array.isArray(res.data)) setSavedConfigs(res.data); }).catch(() => {})}
                     onClose={() => setShowCreate(false)}
                     onCreated={() => { setShowCreate(false); fetchAll(); }}
                 />
@@ -640,7 +648,7 @@ function DeploymentCard({
     d, strategies, sessionHealth, globalConfig,
     isBusy, isExpanded, isEditing,
     onToggleActive, onToggleMode, onToggleAi, onToggleInflight, onSetLots, onDelete, onToggleExpand, onToggleEdit, onEdited,
-    onTest, onSim, onManualTrade, onResults, resultsHref = null, pnlWindows,
+    onTest, onSim, onManualTrade, onResults, resultsHref = null, pnlWindows, onHistory = null,
 }) {
     const params = d.params || {};
     const isActive = d.isActive !== false;
@@ -868,6 +876,16 @@ function DeploymentCard({
                     >
                         {isEditing ? '× Close' : 'Edit'}
                     </button>
+                    {onHistory && (
+                        <button
+                            onClick={onHistory}
+                            className="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-fg-4"
+                            title="Every change to its settings, and going back to an earlier version"
+                            aria-label={`History of ${d.name}`}
+                        >
+                            History
+                        </button>
+                    )}
                     <button
                         onClick={onDelete}
                         disabled={isBusy}
@@ -1118,7 +1136,7 @@ function DeploymentCard({
     );
 }
 
-function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreated }) {
+function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreated, onSavedChanged }) {
     useEscapeKey(onClose);
     const stratList = (strategies && strategies.length) ? strategies : KNOWN_STRATEGIES_FALLBACK;
     const [symbol, setSymbol] = useState(defaults?.symbol || KNOWN_SYMBOLS[0]);
@@ -1132,6 +1150,7 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
     const [submitting, setSubmitting] = useState(false);
     const [err, setErr] = useState(null);
     const [sourceConfigId, setSourceConfigId] = useState('');
+    const [savedHistory, setSavedHistory] = useState(false);   // VersionHistory of the picked saved config
     // Delta Exchange: venue settings kept apart from the free-form JSON so they are always valid.
     const [deltaParams, setDeltaParams] = useState({ lots: 1, delta_leverage: 10, delta_mode: 'DIRECT', holding_enabled: true });
     const isDelta = isDeltaSymbol(symbol);
@@ -1205,7 +1224,19 @@ function CreateDeployment({ defaults, strategies, savedConfigs, onClose, onCreat
                                     </option>
                                 ))}
                             </select>
+                            {sourceConfigId && (
+                                <button type="button" onClick={() => setSavedHistory(true)} className="mt-1 text-2xs text-blue-300 hover:underline"
+                                    title="Every saved version of this config, and going back to one">
+                                    History of this saved config…
+                                </button>
+                            )}
                         </label>
+                    )}
+                    {savedHistory && sourceConfigId && (
+                        <VersionHistory kind="single-strategy" id={sourceConfigId}
+                            name={(savedConfigs.find((c) => c._id === sourceConfigId) || {}).name || sourceConfigId} open
+                            onClose={() => setSavedHistory(false)}
+                            onRestored={() => { onSavedChanged?.(); setSavedHistory(false); }} />
                     )}
                     <div>
                         <span className="text-xs text-fg-4">Exchange</span>

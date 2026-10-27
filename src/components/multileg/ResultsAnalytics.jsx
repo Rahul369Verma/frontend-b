@@ -45,6 +45,7 @@ import useLocalStorage from '../../hooks/useLocalStorage';
 import StrategyScorecard, { OpenNow } from './StrategyScorecard';
 import ExcursionsPanel from './ExcursionsPanel';
 import { StopGridPanel } from './StopReplay.jsx';
+import TargetGridPanel from './TargetReplay.jsx';
 import useScorecard from './useScorecard';
 import DocLink from '../DocLink.jsx';
 import { Panel } from '../viz/primitives';
@@ -524,8 +525,14 @@ export default function ResultsAnalytics({
 
                     {/* 6 ── the same trades replayed with other stops (recorded option chain) */}
                     {deploymentId && deploymentId !== 'all' && (
-                        <Panel title="Which stops, on these trades" subtitle="Each trade replayed on the recorded option chain with other stop settings, and with none" storageKey="fold:results|stopgrid">
+                        <Panel title="Which stops, on these trades" subtitle="Each trade replayed on the recorded option chain with other stop settings, and with none" docs="multi-leg#results-stop-grid" storageKey="fold:results|stopgrid">
                             <StopGridPanel deploymentId={deploymentId} />
+                        </Panel>
+                    )}
+                    {/* 7 ── …and with other profit targets */}
+                    {deploymentId && deploymentId !== 'all' && (
+                        <Panel title="Which target, on these trades" subtitle="The same trades replayed with other profit targets × rupee stops; how close each one came to its target" docs="multi-leg#results-target-grid" storageKey="fold:results|targetgrid">
+                            <TargetGridPanel deploymentId={deploymentId} />
                         </Panel>
                     )}
                 </>

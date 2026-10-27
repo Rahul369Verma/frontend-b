@@ -12,7 +12,7 @@
  * The replays mark short legs at the ask once a minute, so they are compared with EACH
  * OTHER — never with the booked number, which the engine marked at LTP every 10 s.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import axios from 'axios';
 import { API_URL } from '../../config/api.js';
 import TradePathChart from '../viz/TradePathChart';
@@ -21,6 +21,8 @@ import useTradeVix from '../../hooks/useTradeVix.js';
 import { vixRangeOver } from '../../utils/vixOverlay.js';
 import { rup, signed, tone, hhmm, reasonText, stopsText, recoveryText, tradeStopsText, firedLines, stopLossText, archiveNotes, vixLine } from './stopReplayFormat.js';
 import { Spinner } from '../viz/primitives';
+import useWhatIfJob from './useWhatIfJob.js';
+import { JobStatus, ReplayedLine, GridTable } from './WhatIfGrid.jsx';
 
 const BTN = 'inline-flex items-center gap-1 px-2 py-1 rounded border border-line-2 bg-card-2 text-2xs text-fg-3 hover:text-fg disabled:opacity-50';
 
@@ -147,49 +149,21 @@ const legLabel = (x) => (x > 0 ? `${x}×` : 'off');
 const lossLabel = (x) => (x > 0 ? rup(x) : 'off');
 
 export function StopGridPanel({ deploymentId, limit = 30 }) {
-    // keyed by deployment: switching the filter shows the new one idle
-    const [state, setSt] = useState({ id: null, status: 'idle' });
-    const st = state.id === deploymentId ? state : { status: 'idle' };
+    const { st, job, res, start } = useWhatIfJob('stop-grid', deploymentId, limit);
     const [showAll, setShowAll] = useState(false);
-    const timer = useRef(null);
-    useEffect(() => () => clearTimeout(timer.current), [deploymentId]);
-
-    const poll = (id) => {
-        axios.get(`${API_URL}/multileg/deployments/${id}/stop-grid`, { params: { limit }, timeout: 60000 })
-            .then((r) => {
-                setSt({ id, status: r.data.status, job: r.data });
-                if (r.data.status !== 'done' && r.data.status !== 'failed') timer.current = setTimeout(() => poll(id), 2000);
-            })
-            .catch((e) => setSt({ id, status: 'error', error: e.response?.data?.error || e.message }));
-    };
-    const start = () => { clearTimeout(timer.current); setSt({ id: deploymentId, status: 'queued' }); poll(deploymentId); };
-
     if (!deploymentId || deploymentId === 'all') {
         return <div className="text-3xs text-fg-5">Pick one deployment in the filter bar to replay its trades with other stops.</div>;
     }
-    const job = st.job;
-    const res = job?.result;
     return (
         <div className="space-y-2 text-3xs text-fg-4" data-testid="stop-grid">
-            {st.status === 'idle' && (
-                <div className="flex items-center gap-2 flex-wrap">
-                    <button type="button" className={BTN} onClick={start}>Replay its last {limit} trades with other stops</button>
-                    <span className="text-fg-5">Each trade keeps its strikes, fills and size; only the stops change. Takes ~10–60 s.</span>
-                </div>
-            )}
-            {['queued', 'loading', 'running'].includes(st.status) && (
-                <Spinner size="xs" label={st.status === 'running' && job?.total ? `Replaying… ${job.done}/${job.total}` : st.status === 'loading' ? 'Loading recorded quotes…' : 'Waiting for another replay to finish…'} />
-            )}
-            {st.status === 'error' && <div className="text-danger">Failed: {st.error} <button type="button" className="ml-1 underline" onClick={start}>retry</button></div>}
-            {st.status === 'failed' && <div className="text-danger">Replay failed: {job?.error}</div>}
+            <JobStatus st={st} job={job} start={start} label={`Replay its last ${limit} trades with other stops`}
+                hint="Each trade keeps its strikes, fills and size; only the stops change. Takes ~10–60 s." />
             {res && <GridResult res={res} job={job} showAll={showAll} setShowAll={setShowAll} />}
         </div>
     );
 }
 
 function GridResult({ res, job, showAll, setShowAll }) {
-    const legs = [...new Set(res.rows.map((r) => r.legSlX))].sort((a, b) => (a === 0) - (b === 0) || a - b);
-    const losses = [...new Set(res.rows.map((r) => r.maxLoss))].sort((a, b) => (a === 0) - (b === 0) || a - b);
     const cell = (l, m) => res.rows.find((r) => r.legSlX === l && r.maxLoss === m);
     const best = res.rows[0];   // the server sorts best net first: the lowest loss on these trades
     // the other "minimum loss": the setting whose WORST single trade lost least (ties → better net)
@@ -201,48 +175,17 @@ function GridResult({ res, job, showAll, setShowAll }) {
     const list = showAll ? res.perTrade : stopped;
     return (
         <div className="space-y-2">
-            <div>
-                {res.trades} trade(s) replayed{job.beyondLimit > 0 ? `; ${job.beyondLimit} older trade(s) not included (limit ${job.limit})` : ''}
-                {job.quarantinedExcluded > 0 ? `; ${job.quarantinedExcluded} void fill(s) excluded` : ''}
-                {res.perTrade.some((t) => t.gaps?.length) ? `; ${res.perTrade.filter((t) => t.gaps?.length).length} ran through a hole in the recorded prices (⚠ below)` : ''}
-                {res.skipped.length > 0 ? `; ${res.skipped.length} could not be replayed (${[...new Set(res.skipped.map((s) => s.why))].join('; ')})` : ''}.
-            </div>
+            <ReplayedLine res={res} job={job} perTrade={res.perTrade} />
             <div>
                 Lowest loss on these trades (best net): <b>leg {legLabel(best.legSlX)} + rupee {lossLabel(best.maxLoss)}</b> → <b className={tone(best.net)}>{signed(best.net)}</b> (worst trade {signed(best.worst)}).
                 {safest && safest !== best && <>{' '}Smallest worst trade: <b>leg {legLabel(safest.legSlX)} + rupee {lossLabel(safest.maxLoss)}</b> → worst {signed(safest.worst)}, net <b className={tone(safest.net)}>{signed(safest.net)}</b>.</>}
                 {' '}Current <b>leg {legLabel(res.current.legSlX)} + rupee {lossLabel(res.current.maxLoss)}</b> → {cur ? <b className={tone(cur.net)}>{signed(cur.net)}</b> : 'not in the grid'}{cur ? ` (worst ${signed(cur.worst)})` : ''}.
                 {' '}No stops at all → <b className={tone(res.noStops.net)}>{signed(res.noStops.net)}</b> (worst {signed(res.noStops.worst)}).
             </div>
-            <div className="overflow-x-auto">
-                <table className="text-3xs font-mono" aria-label="Net P&L by leg stop and rupee stop">
-                    <thead>
-                        <tr className="text-fg-5">
-                            <th className="text-left pr-3 font-normal">leg stop ↓ · rupee stop →</th>
-                            {losses.map((m) => <th key={m} className="text-right px-2 font-normal">{lossLabel(m)}</th>)}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {legs.map((l) => (
-                            <tr key={l} className="border-t border-line-0/60">
-                                <td className="pr-3 text-fg-5">{legLabel(l)}</td>
-                                {losses.map((m) => {
-                                    const c = cell(l, m);
-                                    const isCur = l === res.current.legSlX && m === res.current.maxLoss;
-                                    const isBest = c === best;
-                                    return (
-                                        <td key={m} className={`text-right px-2 py-0.5 ${isCur ? 'ring-1 ring-primary rounded' : ''}`}
-                                            title={c ? `${c.n} trades · ${c.wins} winners · worst ${signed(c.worst)} · avg ${signed(c.avg)}${isCur ? ' · CURRENT setting' : ''}` : ''}>
-                                            <span className={`${tone(c?.net)} ${isBest ? 'font-bold' : ''}`}>{c ? signed(c.net) : '—'}</span>
-                                            {isBest && <span className="text-warning" aria-label="best"> ★</span>}
-                                            <div className="text-fg-5 text-4xs">worst {c ? signed(c.worst) : '—'}</div>
-                                        </td>
-                                    );
-                                })}
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
+            <GridTable rows={res.rows} rowKey="legSlX" colKey="maxLoss" rowLabel={legLabel} colLabel={lossLabel}
+                corner="leg stop ↓ · rupee stop →" current={{ row: res.current.legSlX, col: res.current.maxLoss }}
+                ariaLabel="Net P&L by leg stop and rupee stop"
+                sub={(c) => <div className="text-fg-5 text-4xs">worst {signed(c.worst)}</div>} />
             <div>
                 With the current stops, {stopped.length} of {res.perTrade.length} trades were stopped;
                 {' '}<b className={cameBack.length ? 'text-warning' : 'text-fg-3'}>{cameBack.length}</b> of those touched profit again after the stop when held with no stops,
@@ -264,12 +207,7 @@ function GridResult({ res, job, showAll, setShowAll }) {
                         <tbody>
                             {list.map((t) => (
                                 <tr key={t.id} className="border-t border-line-0/60">
-                                    <td>
-                                        {tokIstDateTime(t.entryAt)}
-                                        {t.gaps?.length > 0 && (
-                                            <span className="ml-1 text-warning" title={`No recorded prices ${t.gaps.map((g) => `${hhmm(g.from)}–${hhmm(g.to)} (${g.minutes} min)`).join(', ')}: its replays act at the first price after the hole`}>⚠ hole</span>
-                                        )}
-                                    </td>
+                                    <td><DayCell t={t} /></td>
                                     <td className={`text-right ${tone(t.booked)}`}>{signed(t.booked)}</td>
                                     <td className={`text-right ${tone(t.withStops)}`} title={reasonText(t.withStopsReason)}>{signed(t.withStops)}</td>
                                     <td className={`text-right ${tone(t.noStops)}`} title={reasonText(t.noStopsReason)}>{signed(t.noStops)}</td>
@@ -288,6 +226,18 @@ function GridResult({ res, job, showAll, setShowAll }) {
             )}
             {(res.caveats || []).map((c, i) => <div key={i} className="text-fg-5">{c}</div>)}
         </div>
+    );
+}
+
+/** A round trip's day, flagged when the recorded prices had a hole while it ran. */
+export function DayCell({ t }) {
+    return (
+        <>
+            {tokIstDateTime(t.entryAt)}
+            {t.gaps?.length > 0 && (
+                <span className="ml-1 text-warning" title={`No recorded prices ${t.gaps.map((g) => `${hhmm(g.from)}–${hhmm(g.to)} (${g.minutes} min)`).join(', ')}: its replays act at the first price after the hole`}>⚠ hole</span>
+            )}
+        </>
     );
 }
 

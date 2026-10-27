@@ -1,5 +1,5 @@
 import React, { useId, useMemo, useRef, useState } from 'react';
-import { Save, Trash2, ChevronDown, ChevronRight, Search, X, ArrowDownWideNarrow, ArrowUpNarrowWide } from 'lucide-react';
+import { Save, Trash2, ChevronDown, ChevronRight, Search, X, ArrowDownWideNarrow, ArrowUpNarrowWide, History } from 'lucide-react';
 import { Chip } from '../viz/primitives';
 import { pnlTone } from '../viz/tokens';
 import { fmt, num, pfText, pfValue, shortSym } from './builderFormat';
@@ -114,7 +114,7 @@ function Meta({ r }) {
     );
 }
 
-function Actions({ r, pending, onLoad, onDeploy, onDelete, className = '' }) {
+function Actions({ r, pending, onLoad, onDeploy, onDelete, onHistory, className = '' }) {
     const { s } = r;
     const busy = !!pending[`deploy:${s._id}`];
     return (
@@ -122,6 +122,11 @@ function Actions({ r, pending, onLoad, onDeploy, onDelete, className = '' }) {
             <button type="button" onClick={() => onLoad(s)} className={`${BTN} ${BTN_TONE.load}`} title="Load into Backtest for inspection">Load</button>
             <button type="button" onClick={() => onDeploy(s, 'PAPER')} disabled={busy} className={`${BTN} ${BTN_TONE.paper}`} title="Deploy as PAPER (simulated fills at quotes)">▶ Paper</button>
             <button type="button" onClick={() => onDeploy(s, 'LIVE')} disabled={busy} className={`${BTN} ${BTN_TONE.live}`} title="Deploy LIVE — shows a risk preview + type-to-confirm before any real order">● LIVE</button>
+            {onHistory && (
+                <button type="button" onClick={() => onHistory(s)} className={`${BTN} ${BTN_TONE.neutral} px-0 w-7`} aria-label={`History of ${s.name}`} title="Its saved versions, what each changed, and going back to one">
+                    <History className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+            )}
             <button type="button" onClick={() => onDelete(s)} className={`${BTN} ${BTN_TONE.del} px-0 w-7`} aria-label={`Delete saved strategy ${s.name}`} title="Delete saved strategy">
                 <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
@@ -300,6 +305,8 @@ function StrategyCard({ r, open, onToggle, renderDetails, actionProps }) {
 export default function SavedStrategiesPanel({
     list, templates, deployLots, onDeployLots, pending,
     openId, onToggle, onLoad, onDeploy, onDelete, renderDetails, live = null,
+    // version history (VersionHistory.jsx): a row's History button, and the deleted ones
+    onHistory = null, onShowDeleted = null,
     // Accordion. CLOSED by default (user, 13-Oct): the Deploy tab opens on the
     // live deployments, not on a long list of recipes. Controlled when the
     // parent passes `open` + `onOpenChange` (MultiLeg keeps it across tab
@@ -347,7 +354,7 @@ export default function SavedStrategiesPanel({
     const onSort = (key) => setSort(prev => (prev.key === key
         ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
         : { key, dir: SORT_BY_KEY[key].dir }));
-    const actionProps = { pending, onLoad, onDeploy, onDelete };
+    const actionProps = { pending, onLoad, onDeploy, onDelete, onHistory };
     const total = (list || []).length;
     // what is behind the closed header, so collapsing never hides a fact
     const deployedCount = live ? (list || []).filter(s => live.get(String(s._id))?.deployments?.length).length : 0;
@@ -418,6 +425,11 @@ export default function SavedStrategiesPanel({
                         <StrategyTable rows={rows} wide={layout === 'wide'} sort={sort} onSort={onSort}
                             openId={openId} onToggle={onToggle} renderDetails={renderDetails} actionProps={actionProps} />
                     )}
+                </div>
+            )}
+            {expanded && onShowDeleted && (
+                <div className="mt-2 text-right">
+                    <button type="button" onClick={onShowDeleted} className="text-2xs text-fg-5 hover:text-fg-3 underline">Deleted strategies…</button>
                 </div>
             )}
         </div>

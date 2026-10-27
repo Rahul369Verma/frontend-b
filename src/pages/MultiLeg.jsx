@@ -4,7 +4,7 @@ import axios from 'axios';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceDot, ReferenceArea, Legend,
 } from 'recharts';
-import { Layers, Play, Pause, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp, Wallet, ChevronDown, ChevronRight, Pencil } from 'lucide-react';
+import { Layers, Play, Pause, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp, Wallet, ChevronDown, ChevronRight, Pencil, History, Copy } from 'lucide-react';
 import StructureAttributionPanel from '../components/viz/StructureAttributionPanel';
 import StrategyBuilder from '../components/multileg/StrategyBuilder';
 import ResultsAnalytics from '../components/multileg/ResultsAnalytics';
@@ -13,7 +13,9 @@ import { deploymentEditBody, editBlocker, changeLine } from '../components/multi
 import AutoRunProgress from '../components/multileg/AutoRunProgress';
 import { estimateStageSizes, sizesForRequest, runSummary, useRunTracker } from '../components/multileg/runProgress';
 import ZoomableChart from '../components/charts/ZoomableChart';
-import { PageHeader, Tabs, Panel } from '../components/viz/primitives';
+import { PageHeader, Tabs, Panel, Segmented } from '../components/viz/primitives';
+import { ConsistencyBadge, MarketMix, ConsistencyCheckBar } from '../components/multileg/ConsistencyView.jsx';
+import { orderRows, verdictFor } from '../components/multileg/consistencyFormat.js';
 import { ROUTES } from '../config/routes.js';
 import { riskOpenMin, riskCloseMin } from '../config/marketSession.js';
 import { HELP } from '../data/multilegHelp';
@@ -29,6 +31,13 @@ import { pnlTone } from '../components/viz/tokens';
 import { spotMove, pfText, pfValue } from '../components/multileg/builderFormat';
 import { tailCoverText } from '../components/multileg/tailCoverText.js';
 import SavedStrategiesPanel from '../components/multileg/SavedStrategiesPanel';
+import VersionHistory, { DeletedStrategies } from '../components/VersionHistory.jsx';
+import LiveCapitalPanel from '../components/multileg/LiveCapitalPanel.jsx';
+import TwinsPanel from '../components/multileg/TwinsPanel.jsx';
+import BrokerOrdersPanel from '../components/BrokerOrdersPanel.jsx';
+import TradeStory from '../components/multileg/TradeStory.jsx';
+import TodayStory from '../components/multileg/TodayStory.jsx';
+import { failedLegRows } from '../components/multileg/tradeStoryFormat.js';
 import EngineJournal from '../components/multileg/EngineJournal';
 import RegimePanel from '../components/multileg/RegimePanel';
 import { PromoteDialog } from '../components/golive/goLiveShared.jsx';
@@ -43,12 +52,24 @@ const TAB_DOC = { builder: 'builder-tab', backtest: 'backtest-tab', sweep: 'opti
 
 
 // Static fallback — replaced by /api/config/instruments (same source as Backtest).
+// Delta Exchange India options (27-Oct-2026) — RESEARCH ONLY: backtest, Optimizer, Scan and
+// Auto run on Delta's own listed contracts, fees and margin rule with modelled (Black–Scholes)
+// prices; the server refuses to deploy them (paper/live on Delta is not built).
+const DELTA_SYMBOLS = [
+    { v: 'DELTA:BTCUSD', label: 'BTC · Delta', spot: 80000, venue: 'DELTA' },
+    { v: 'DELTA:ETHUSD', label: 'ETH · Delta', spot: 2300, venue: 'DELTA' },
+    { v: 'DELTA:XAUTUSD', label: 'Gold (XAUT) · Delta', spot: 4000, venue: 'DELTA' },
+];
+const isDeltaSym = (s) => String(s || '').toUpperCase().startsWith('DELTA:');
+const DELTA_NOTE = 'Delta options are research-only: contracts, fees and margin are Delta\'s own (listing as of each date, ₹85/USD), but option prices are MODELLED from the underlying\'s candles (Black–Scholes, 24/7 clock) — Delta keeps no minute-level option quotes for past contracts; the recorder now stores them going forward. One lot = one contract (0.001 BTC · 0.01 ETH · 0.001 XAUT) — raise lots for a realistic size. Paper/live trading on Delta is not built yet.';
+
 const FALLBACK_SYMBOLS = [
     { v: 'NSE:NIFTY50-INDEX', label: 'NIFTY', spot: 24000 },
     { v: 'NSE:NIFTYBANK-INDEX', label: 'BANKNIFTY', spot: 57000 },
     { v: 'NSE:FINNIFTY-INDEX', label: 'FINNIFTY', spot: 25500 },
     { v: 'NSE:MIDCPNIFTY-INDEX', label: 'MIDCPNIFTY', spot: 14700 },
     { v: 'BSE:SENSEX-INDEX', label: 'SENSEX', spot: 82000 },
+    ...DELTA_SYMBOLS,
 ];
 
 const OUTLOOK_COLORS = {
@@ -232,9 +253,19 @@ export default function MultiLeg() {
     const [autoTrack, recordAutoProgress] = useRunTracker();
     const [autoStrategies, setAutoStrategies] = useState([]);  // [] = all optimizable
     const [autoEntryStyle, setAutoEntryStyle] = useState('both'); // both | signal-only
+    // consistent strategies first (profit in rising, falling and sideways markets; no one-month wonders)
+    const [autoConsistency, setAutoConsistency] = useState('require'); // require | off
+    const [autoView, setAutoView] = useState('ranked');   // results: ranked | consistent | only
     // Saved strategies + live deployments (Deploy tab)
     const [savedList, setSavedList] = useState([]);
     const [savedDetail, setSavedDetail] = useState(null); // _id of the expanded saved-strategy row
+    // version history (VersionHistory.jsx): { kind, id, name, live } of the one shown, and the deleted list
+    const [historyFor, setHistoryFor] = useState(null);
+    // LIVE ↔ PAPER twins (GET /api/multileg/twins): the comparison panel and each card's twin chip
+    const [twins, setTwins] = useState(null);
+    // each deployment's day so far (GET /api/multileg/today): the card's "Today" line and list
+    const [todayStory, setTodayStory] = useState(null);
+    const [deletedOpen, setDeletedOpen] = useState(false);
     // Deploy-tab accordions — CLOSED on every page load (user, 13-Oct), kept
     // while you move between tabs. Deliberately not in localStorage.
     // closed by default (the Deploy tab opens on the live deployments); remembered, and folded/unfolded by "Collapse all"
@@ -370,7 +401,7 @@ export default function MultiLeg() {
             const list = Object.keys(cfg).filter(s => s.includes('-INDEX')).map(v => ({
                 v, label: shortSym(v), spot: FALLBACK_SYMBOLS.find(f => f.v === v)?.spot || 20000,
             }));
-            if (list.length) setInstruments(list);
+            if (list.length) setInstruments([...list, ...DELTA_SYMBOLS]);
         }).catch(() => {});
         // Single-leg strategies as SIGNAL SOURCES (same registry as Backtest).
         axios.get(`${API_URL}/strategies/registry`).then(r => {
@@ -401,13 +432,16 @@ export default function MultiLeg() {
     }, [tpl, symbol, spot, iv]);
     useEffect(() => { fetchPreview(); }, [fetchPreview]);
     useEffect(() => {
-        if (chainSource !== 'archive') return undefined;
+        if (chainSource !== 'archive' && chainSource !== 'tape') return undefined;
         let dead = false;
-        axios.get(`${API_URL}/multileg/archive/coverage`, { params: { symbol } })
-            .then(r => { if (!dead) setArchiveCov(r.data); })
-            .catch(e => { if (!dead) setArchiveCov({ error: e.response?.data?.error || e.message }); });
+        // tagged with its source and symbol, so a stale answer never labels the other one
+        const tag = { src: chainSource, sym: symbol };
+        axios.get(`${API_URL}/multileg/${chainSource === 'tape' ? 'tape' : 'archive'}/coverage`, { params: { symbol } })
+            .then(r => { if (!dead) setArchiveCov({ ...r.data, ...tag }); })
+            .catch(e => { if (!dead) setArchiveCov({ error: e.response?.data?.error || e.message, ...tag }); });
         return () => { dead = true; };
     }, [chainSource, symbol]);
+    const sourceCov = archiveCov && archiveCov.src === chainSource && archiveCov.sym === symbol ? archiveCov : null;
 
     const runBacktest = async (overrideParams = null) => {
         setRunning(true); setError(null); setResult(null);
@@ -476,6 +510,7 @@ export default function MultiLeg() {
                 budget: effBudget, ai_validate: autoAi,
                 ai_confidence_threshold: aiThreshold,
                 entry_style: autoEntryStyle,
+                consistency: autoConsistency,
             });
             setAutoJob(r.data);
             if (r.data?.deferred) {
@@ -506,6 +541,8 @@ export default function MultiLeg() {
         if (req.metric) setMetric(req.metric);
         if (req.split != null) setSplit(Number(req.split));
         if (req.entry_style) setAutoEntryStyle(req.entry_style);
+        // a run from before the consistency check ranked without it — the form says so
+        setAutoConsistency(req.consistency === 'require' ? 'require' : 'off');
         if (Array.isArray(req.symbols) && req.symbols.length) setScanSymbols(req.symbols);
         if (typeof req.templates === 'string') setScanOutlook(req.templates);
         setAutoStrategies(req.strategiesAll ? [] : (Array.isArray(req.strategyKeys) ? req.strategyKeys : []));
@@ -636,6 +673,28 @@ export default function MultiLeg() {
         scrollPageToTop();
     };
 
+    // A champion card → a saved strategy WITH its out-of-sample record (server:
+    // logic/multileg/championStrategy.js). "Load config → Backtest → Save" stores a plain
+    // backtest instead, so the Go-Live evidence gate can't see the validation split.
+    const [champSave, setChampSave] = useState({});   // rank → { busy, ok, msg }
+    const saveChampion = async (rank, name = undefined) => {
+        const jobId = autoState?.jobId || autoJob?.jobId;
+        if (!jobId) return;
+        setChampSave(s => ({ ...s, [rank]: { busy: true } }));
+        try {
+            const r = await axios.post(`${API_URL}/multileg/optimize/${encodeURIComponent(jobId)}/champions/${rank}/save`, name ? { name } : {});
+            setChampSave(s => ({ ...s, [rank]: { ok: true, msg: `Saved as “${r.data.strategy.name}” — find it on the Deploy tab` } }));
+            refreshSaved();
+        } catch (e) {
+            const d = e.response?.data || {};
+            if (e.response?.status === 409 && !d.alreadySaved) {
+                const other = window.prompt(`${d.error}\n\nName for this one:`, `${d.name} (2)`);
+                if (other && other.trim()) { saveChampion(rank, other.trim()); return; }
+            }
+            setChampSave(s => ({ ...s, [rank]: { ok: !!d.alreadySaved, msg: d.error || e.message } }));
+        }
+    };
+
     // ── Saved strategies + deployments (Deploy tab) ─────────────────────────
     const refreshSaved = useCallback(() => {
         axios.get(`${API_URL}/multileg/strategies`).then(r => setSavedList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
@@ -662,13 +721,26 @@ export default function MultiLeg() {
         [refreshDeployCards, refreshMlTrades]);
     // poll while the Deploy tab is visible. Separate pollers so a slow trades
     // read never holds back the cards.
+    const refreshTwins = useCallback(() => axios.get(`${API_URL}/multileg/twins`, { timeout: 20000 }).then((r) => setTwins(r.data)).catch(() => {}), []);
+    const refreshToday = useCallback(() => axios.get(`${API_URL}/multileg/today`, { timeout: 20000 })
+        .then((r) => { if (r.data && r.data.deployments) setTodayStory(r.data); }).catch(() => {}), []);
+    // deployment id → its twin's name (both directions)
+    const twinOf = useMemo(() => {
+        const m = new Map();
+        for (const p of (twins && Array.isArray(twins.pairs) ? twins.pairs : [])) {
+            if (!p || !p.live || !p.paper) continue;
+            m.set(p.live.id, { name: p.paper.name, role: 'paper' }); m.set(p.paper.id, { name: p.live.name, role: 'live' });
+        }
+        return m;
+    }, [twins]);
     useEffect(() => {
         if (mode !== 'deploy') return;
-        refreshSaved(); refreshDeployments();
+        refreshSaved(); refreshDeployments(); refreshTwins(); refreshToday();
         const stopCards = pollInterval(refreshDeployCards, 5000);
+        const stopToday = pollInterval(refreshToday, 30000);   // the day's story changes at entries and exits, not every tick
         const stopTrades = pollInterval(refreshMlTrades, 15000);   // trades change only when a structure exits
-        return () => { stopCards?.(); stopTrades?.(); };
-    }, [mode, refreshSaved, refreshDeployments, refreshDeployCards, refreshMlTrades]);
+        return () => { stopCards?.(); stopTrades?.(); stopToday?.(); };
+    }, [mode, refreshSaved, refreshDeployments, refreshDeployCards, refreshMlTrades, refreshTwins, refreshToday]);
 
     // Eligibility as a STABLE primitive — depending on mlDeps.deployments (a
     // fresh array identity every 5s poll) would re-create this effect every
@@ -1080,6 +1152,16 @@ export default function MultiLeg() {
         } else { runDepAction(dep, action); }
     };
 
+    // A PAPER copy of a LIVE deployment, to compare the two books (logic/multileg/twins.js)
+    const makePaperTwin = (dep) => setConfirmState({
+        title: `Make a PAPER twin of “${dep.name}”?`, confirmLabel: 'Make paper twin',
+        body: <span>Creates <b>{String(dep.name).replace(/\s*\((LIVE|PAPER)\)\s*$/i, '')} (PAPER)</b>: the same structure, settings, entry trigger and lots, with simulated fills and no broker orders. It starts at its next entry time. Compare the two books under <b>LIVE vs PAPER twins</b>.</span>,
+        onConfirm: () => withPending(`twin:${dep._id}`, async () => {
+            await axios.post(`${API_URL}/multileg/deployments/${dep._id}/paper-twin`, {});
+            await Promise.allSettled([refreshDeployments(), refreshTwins()]);
+        }, `Paper twin of “${dep.name}” created`),
+    });
+
     // Bulk: stop-all (halt new entries) or close-all (square off every open structure).
     const bulkAction = (kind) => {
         const targets = (mlDeps.deployments || []).filter(d => kind === 'stop-all' ? d.status === 'ACTIVE' : ['OPEN', 'EXITING'].includes(d.position?.state));
@@ -1138,17 +1220,30 @@ export default function MultiLeg() {
 
     const ChainSourceInputs = (
         <div className="mb-3 text-xs">
-            <label className="text-fg-4" title="broker: candles from the broker + the kernel's synthetic Black-Scholes option prices (any dates; an upper bound for short premium). archive: the real option-chain archive — actual bid/ask every ~60 s, shorts sold at bid, stops and targets on the real path (from Aug 2026).">Option prices
+            <label className="text-fg-4" title="broker: candles from the broker + the kernel's synthetic Black-Scholes option prices (any dates; an upper bound for short premium). archive: the real option-chain archive — actual bid/ask every ~60 s, shorts sold at bid, stops and targets on the real path (from Aug 2026). quote tape: every live quote tick, and the live multileg engine itself replayed on them — its own 10-second loop, strike choice, stops and square-off, filling as live paper trades fill (from the day the tape was deployed).">Option prices
                 <select value={chainSource} onChange={e => setChainSource(e.target.value)} className={inputCls}>
                     <option value="broker">Broker candles + model chain (any dates · synthetic option prices)</option>
                     <option value="archive">Live option-chain archive (real bid/ask · from Aug 2026)</option>
+                    <option value="tape">Live engine replay (every tick from the quote tape · archive minutes before it)</option>
                 </select>
             </label>
             {chainSource === 'archive' && (
                 <div className="mt-1 text-3xs text-fg-5">
-                    {archiveCov?.error ? <span className="text-danger">{archiveCov.error}</span>
-                        : archiveCov ? <>Archive for {archiveCov.idx}: <b className="text-fg-3">{archiveCov.sessions}</b> sessions, {archiveCov.firstDay} → {archiveCov.lastDay} ({archiveCov.snapshots} snapshots, {archiveCov.source}). Dates outside this range have no data; the candle resolution is ignored — marks are the archive's own snapshots.</>
+                    {sourceCov?.error ? <span className="text-danger">{sourceCov.error}</span>
+                        : sourceCov ? <>Archive for {sourceCov.idx}: <b className="text-fg-3">{sourceCov.sessions}</b> sessions, {sourceCov.firstDay} → {sourceCov.lastDay} ({sourceCov.snapshots} snapshots, {sourceCov.source}). Dates outside this range have no data; the candle resolution is ignored — marks are the archive's own snapshots.</>
                         : 'checking archive coverage…'}
+                </div>
+            )}
+            {chainSource === 'tape' && (
+                <div className="mt-1 text-3xs text-fg-5" data-testid="tape-coverage">
+                    {sourceCov?.error ? <span className="text-danger">{sourceCov.error}</span>
+                        : sourceCov ? <>
+                            {sourceCov.sessions
+                                ? <>Quote tape for {sourceCov.group}: <b className="text-fg-3">{sourceCov.sessions}</b> session(s), {sourceCov.firstDay} → {sourceCov.lastDay} — every tick. </>
+                                : <>No quote tape for {sourceCov.group || symbol} yet (it records in production from the day it was deployed). </>}
+                            {sourceCov.archive?.sessions > 0 && <>Before it, <b className="text-fg-3">{sourceCov.archive.sessions}</b> archive session(s), {sourceCov.archive.firstDay} → {sourceCov.archive.lastDay} — one quote a minute. </>}
+                            Either way the live engine itself makes every decision; the candle resolution is ignored. Up to 60 sessions per run.
+                        </> : 'checking coverage…'}
                 </div>
             )}
         </div>
@@ -1208,8 +1303,9 @@ export default function MultiLeg() {
 
     const SetupCard = (
         <Panel icon={SlidersHorizontal} title={<>Setup — {tpl?.name || tplKey}</>} storageKey="fold:multi-leg|setup">
-            <MarketRead symbol={symbol} presets={presets} onApplyPreset={applyPreset} />
-            <BookCost symbol={symbol} />
+            {isDeltaSym(symbol)
+                ? <div className="mb-2 text-2xs text-warning border border-amber-800/60 bg-amber-950/10 rounded p-2" data-testid="delta-note">{DELTA_NOTE}</div>
+                : <><MarketRead symbol={symbol} presets={presets} onApplyPreset={applyPreset} /><BookCost symbol={symbol} /></>}
             <div className="grid grid-cols-2 gap-2 text-xs">
                 <label className="text-fg-4">Symbol
                     <select value={symbol} onChange={e => { setSymbol(e.target.value); const s = instruments.find(x => x.v === e.target.value); if (s?.spot) setSpot(s.spot); }}
@@ -1459,13 +1555,16 @@ export default function MultiLeg() {
     );
 
     const SymbolChips = (max) => (
-        <div className="flex gap-1 flex-wrap">
-            {instruments.map(s => (
-                <button key={s.v} onClick={() => setScanSymbols(prev => prev.includes(s.v) ? prev.filter(x => x !== s.v) : prev.length < max ? [...prev, s.v] : prev)}
-                    className={`px-2 py-1 rounded border text-2xs ${scanSymbols.includes(s.v) ? 'bg-primary/20 border-primary text-primary-ink' : 'bg-slate-800 border-line text-fg-4'}`}>
-                    {s.label}
-                </button>
-            ))}
+        <div>
+            <div className="flex gap-1 flex-wrap">
+                {instruments.map(s => (
+                    <button key={s.v} onClick={() => setScanSymbols(prev => prev.includes(s.v) ? prev.filter(x => x !== s.v) : prev.length < max ? [...prev, s.v] : prev)}
+                        className={`px-2 py-1 rounded border text-2xs ${scanSymbols.includes(s.v) ? 'bg-primary/20 border-primary text-primary-ink' : 'bg-slate-800 border-line text-fg-4'}`}>
+                        {s.label}
+                    </button>
+                ))}
+            </div>
+            {scanSymbols.some(isDeltaSym) && <div className="mt-1.5 text-2xs text-warning" data-testid="delta-note">{DELTA_NOTE}</div>}
         </div>
     );
 
@@ -1622,10 +1721,17 @@ export default function MultiLeg() {
                                 <div className="text-3xs text-fg-5 mt-1">{saveMsg || 'Saves template + all params + entry trigger to the DB — load or deploy it from the Deploy tab.'}</div>
                             </div>
                             {result?.chainSource && (
-                                <div className={`mt-3 rounded border p-2 text-2xs ${result.chainSource === 'archive' ? 'border-sky-700/50 bg-sky-950/20 text-sky-200' : 'border-amber-700/50 bg-amber-950/20 text-warning'}`}>
-                                    <div className="font-semibold mb-1">{result.chainSource === 'archive' ? 'Real option quotes — archive replay' : 'Synthetic option prices — read this as an UPPER BOUND, not a forecast'}</div>
+                                <div className={`mt-3 rounded border p-2 text-2xs ${result.chainSource === 'tape' ? 'border-green-700/50 bg-green-950/20 text-success' : result.chainSource === 'archive' ? 'border-sky-700/50 bg-sky-950/20 text-sky-200' : 'border-amber-700/50 bg-amber-950/20 text-warning'}`}>
+                                    <div className="font-semibold mb-1">{result.chainSource === 'tape' ? 'The live engine, replayed on every recorded quote' : result.chainSource === 'archive' ? 'Real option quotes — archive replay' : 'Synthetic option prices — read this as an UPPER BOUND, not a forecast'}</div>
                                     {(result.caveats || []).map((c, i) => <div key={i}>• {c}</div>)}
-                                    {result.coverage && (
+                                    {result.chainSource === 'tape' && result.coverage && (
+                                        <div className="mt-1 text-fg-5" data-testid="tape-result-coverage">
+                                            Coverage: {result.coverage.sessions} session(s) ({result.coverage.firstDay} → {result.coverage.lastDay}) · {result.coverage.tapeSessions} on the quote tape, {result.coverage.archiveSessions} on archive minutes · {fmt(result.coverage.ticks)} quotes
+                                            {result.coverage.truncated ? ` · truncated to the last ${result.coverage.sessions} of ${result.coverage.daysAvailable} available` : ''}
+                                            {result.coverage.openAtEnd ? ' · a position was still open at the end (not in the trades)' : ''}
+                                        </div>
+                                    )}
+                                    {result.chainSource !== 'tape' && result.coverage && (
                                         <div className="mt-1 text-fg-5">
                                             Coverage: {result.coverage.sessions} sessions ({result.coverage.firstDay} → {result.coverage.lastDay}) · entered {result.coverage.entered} · finder declined {result.coverage.declinedDays} day(s)
                                             {result.coverage.truncated ? ` · truncated to the last ${result.coverage.sessions} of ${result.coverage.daysAvailable} available` : ''}
@@ -1914,6 +2020,17 @@ export default function MultiLeg() {
                                         </select>
                                     </label>
                                 </div>
+                                <label className="mt-2 flex items-start gap-2 text-fg-4 cursor-pointer">
+                                    <input type="checkbox" className="mt-0.5 accent-sky-500" checked={autoConsistency === 'require'}
+                                        onChange={(e) => setAutoConsistency(e.target.checked ? 'require' : 'off')} />
+                                    <span>
+                                        Consistent strategies first
+                                        <span className="block text-2xs text-fg-5">
+                                            Ranks first the ones that make money in rising, falling AND sideways markets, with no single month carrying more than half the profit.
+                                            A train/validation split cannot catch a structure that only wins in a falling year when both halves come from that year.
+                                        </span>
+                                    </span>
+                                </label>
                                 {autoState?.status !== 'running' && (
                                     <div className="mt-2 text-2xs text-fg-5">
                                         ≈ {fmt(autoEstimate.total)} backtests · est. {autoEstimate.dur}
@@ -2071,10 +2188,36 @@ export default function MultiLeg() {
                         </Panel>
                     )}
 
-                    {autoState?.status === 'done' && autoState.result?.champions?.length > 0 && (
+                    {autoState?.status === 'done' && autoState.result?.champions?.length > 0 && (() => {
+                        const R = autoState.result;
+                        const measured = !!R.consistency || !!R.consistencyCheck;
+                        const champs = orderRows(R.champions, (i) => verdictFor(R, 'champions', i), measured ? autoView : 'ranked');
+                        const board = orderRows(R.leaderboard || [], (i) => verdictFor(R, 'leaderboard', i), measured ? autoView : 'ranked');
+                        return (
                         <div>
+                            <div className="mb-3 space-y-1.5">
+                                <MarketMix markets={(R.consistency && R.consistency.markets) || (R.consistencyCheck && R.consistencyCheck.markets)}
+                                    rules={(R.consistency && R.consistency.rules) || (R.consistencyCheck && R.consistencyCheck.rules)} />
+                                {!R.consistency && (
+                                    <ConsistencyCheckBar jobId={autoJob?.jobId || autoState.jobId} count={new Set([...R.champions, ...(R.leaderboard || [])].map((r) => JSON.stringify([r.symbol, r.template, r.signal_strategy || null, r.signal_params || null, r.structure_params || null]))).size}
+                                        checked={R.consistencyCheck?.at || null}
+                                        onDone={() => axios.get(`${API_URL}/multileg/optimize/${autoJob?.jobId || autoState.jobId}`, { timeout: 20000 }).then((r) => setAutoState(r.data)).catch(() => {})} />
+                                )}
+                                {R.consistency?.mode === 'require' && <div className="text-2xs text-fg-5">Ranked with the consistency check on: consistent strategies first, then partly tested, then the rest.</div>}
+                                {measured && (
+                                    <div className="flex flex-wrap items-center gap-2 text-2xs text-fg-4">
+                                        <span>Show</span>
+                                        <Segmented value={autoView} onChange={setAutoView} size="sm"
+                                            options={[{ v: 'ranked', label: 'As ranked' }, { v: 'consistent', label: 'Consistent first' }, { v: 'only', label: 'Consistent only' }]} />
+                                        {champs.hidden > 0 && <span className="text-fg-5">{champs.shown.length} of {R.champions.length} cards shown; hidden: {champs.hiddenWhy}</span>}
+                                    </div>
+                                )}
+                                {measured && autoView === 'only' && champs.shown.length === 0 && (
+                                    <div className="text-2xs text-warning">None of these strategies is consistent across markets and months. Run again with a range that holds rising, falling and sideways stretches, or with the consistency check on.</div>
+                                )}
+                            </div>
                             <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-                                {autoState.result.champions.map((ch, i) => (
+                                {champs.shown.map(({ row: ch, i, v: cv }) => (
                                     <div key={i} className={`bg-surface rounded-xl border p-4 ${i === 0 ? 'border-amber-500/60' : 'border-line'}`}>
                                         <div className="flex items-center justify-between mb-1">
                                             <div className="text-sm font-semibold text-fg">{i === 0 ? '🏆 ' : `#${i + 1} `}{ch.name}</div>
@@ -2090,6 +2233,7 @@ export default function MultiLeg() {
                                                 {ch.robustness.ratio != null ? ` · val/train ${ch.robustness.ratio}` : ''} — {ch.robustness.note}
                                             </div>
                                         )}
+                                        <ConsistencyBadge v={cv} />
                                         <div className="grid grid-cols-3 gap-1 text-2xs mb-2">
                                             <Tile label="Val net" help="oos-validation" value={`₹${fmt(ch.val?.netPnl)}`} good={ch.val?.netPnl > 0} bad={ch.val?.netPnl < 0} />
                                             <Tile label="Train net" value={`₹${fmt(ch.train?.netPnl)}`} good={ch.train?.netPnl > 0} bad={ch.train?.netPnl < 0} />
@@ -2111,15 +2255,26 @@ export default function MultiLeg() {
                                             className="w-full py-1.5 bg-primary/15 hover:bg-primary/25 border border-primary/40 text-primary-ink rounded text-xs font-semibold">
                                             Load config → Backtest
                                         </button>
+                                        <button onClick={() => saveChampion(i + 1)} disabled={champSave[i + 1]?.busy}
+                                            title="Saves it with its out-of-sample (validation) record — the Deploy table's Val / Train columns and the Go-Live evidence check read it"
+                                            className="w-full mt-1.5 py-1.5 border border-line text-fg-3 hover:text-fg rounded text-xs disabled:opacity-50">
+                                            {champSave[i + 1]?.busy ? 'Saving…' : 'Save as strategy'}
+                                        </button>
+                                        {champSave[i + 1]?.msg && (
+                                            <div role="status" className={`mt-1 text-2xs ${champSave[i + 1].ok ? 'text-success' : 'text-danger'}`}>{champSave[i + 1].msg}</div>
+                                        )}
                                     </div>
                                 ))}
                             </div>
-                            {autoState.result.leaderboard?.length > 0 && (
+                            {R.leaderboard?.length > 0 && (
                                 <Panel className="mt-4" bodyClassName="overflow-x-auto" title="Full leaderboard (stage-3 survivors)" docs="multi-leg#auto-tab">
+                                    {board.hidden > 0 && <div className="text-2xs text-fg-5 mb-1">{board.shown.length} of {R.leaderboard.length} rows shown; hidden: {board.hiddenWhy}</div>}
                                     <table className="w-full text-2xs text-fg-3">
-                                        <thead><tr className="text-fg-5 text-left"><th>#</th><th>Structure</th><th>Symbol</th><th>Signal</th><th className="text-right">Val net ₹</th><th className="text-right">Val PF</th><th className="text-right">Val win%</th><th className="text-right">Train net ₹</th><th className="text-right">OOS</th></tr></thead>
+                                        <thead><tr className="text-fg-5 text-left"><th>#</th><th>Structure</th><th>Symbol</th><th>Signal</th><th className="text-right">Val net ₹</th><th className="text-right">Val PF</th><th className="text-right">Val win%</th><th className="text-right">Train net ₹</th><th className="text-right">OOS</th>
+                                            <th className="text-right" title="Consistent across markets and months: ✓ consistent · ◐ partly tested · ✗ not consistent · — not measured">Cons.</th>
+                                            <th className="text-right" title="Net over the range by the market each trade was entered in">↑ rising</th><th className="text-right">↓ falling</th><th className="text-right">→ sideways</th></tr></thead>
                                         <tbody>
-                                            {autoState.result.leaderboard.map((r, i) => (
+                                            {board.shown.map(({ row: r, i, v: rv }) => (
                                                 <tr key={i} className="border-t border-line-0">
                                                     <td className="text-fg-5">{i + 1}</td>
                                                     <td>{r.name || r.template}</td>
@@ -2130,6 +2285,11 @@ export default function MultiLeg() {
                                                     <td className="text-right">{r.val?.winRate ?? '—'}</td>
                                                     <td className="text-right text-fg-4">₹{fmt(r.train?.netPnl)}</td>
                                                     <td className="text-right" title={r.robustness?.note || ''}>{r.robustness?.robust === true ? <span className="text-success">✓</span> : r.robustness?.robust === false ? <span className="text-danger">⚠</span> : <span className="text-fg-5">—</span>}</td>
+                                                    <td className="text-right"><ConsistencyBadge v={rv} compact /></td>
+                                                    {['rising', 'falling', 'sideways'].map((k) => {
+                                                        const m = rv?.markets?.[k];
+                                                        return <td key={k} className={`text-right ${!m || !m.n ? 'text-fg-5' : m.net >= 0 ? 'text-success' : 'text-danger'}`} title={m ? `${m.n} trades` : ''}>{m && m.n ? `₹${fmt(m.net)}` : '—'}</td>;
+                                                    })}
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -2137,7 +2297,8 @@ export default function MultiLeg() {
                                 </Panel>
                             )}
                         </div>
-                    )}
+                        );
+                    })()}
                 </>
             )}
 
@@ -2153,7 +2314,15 @@ export default function MultiLeg() {
                         deployLots={deployLots} onDeployLots={setDeployLots} pending={pending}
                         openId={savedDetail} onToggle={setSavedDetail}
                         onLoad={loadSaved} onDeploy={deploySaved} onDelete={deleteSaved}
-                        renderDetails={renderSavedDetails} live={liveByStrategy} />
+                        renderDetails={renderSavedDetails} live={liveByStrategy}
+                        onHistory={(s) => setHistoryFor({ kind: 'multileg-strategy', id: s._id, name: s.name })}
+                        onShowDeleted={() => setDeletedOpen(true)} />
+                    {historyFor && (
+                        <VersionHistory kind={historyFor.kind} id={historyFor.id} name={historyFor.name} live={!!historyFor.live} open
+                            onClose={() => setHistoryFor(null)}
+                            onRestored={() => (historyFor.kind === 'multileg-strategy' ? refreshSaved() : refreshDeployments())} />
+                    )}
+                    <DeletedStrategies kind="multileg-strategy" open={deletedOpen} onClose={() => setDeletedOpen(false)} onRestored={refreshSaved} />
 
                     {/* ── Summary cards (live-engine dashboard parity) ───────────── */}
                     {mlStatus && (() => {
@@ -2203,6 +2372,11 @@ export default function MultiLeg() {
                             </div>
                         );
                     })()}
+
+                    {/* ── what the LIVE book needs, which strategy placed which broker order, LIVE vs PAPER ── */}
+                    <LiveCapitalPanel />
+                    <BrokerOrdersPanel />
+                    <TwinsPanel data={twins} />
 
                     {/* ── Signal Status Timeline (per deployment) ────────────────── */}
                     {mlDeps.signalStatus && Object.keys(mlDeps.signalStatus).length > 0 && (
@@ -2732,9 +2906,13 @@ export default function MultiLeg() {
                                                     flat — waiting for {d.entry_mode === 'signal' ? `a ${d.signal_strategy} signal` : `the ${P.entry_time || '09:20'} entry`}
                                                     {/* `entered` is the one-per-day SLOT; a stand-down (DTE guard, uncapped
                                                         tail, funds) uses it WITHOUT a trade — say which */}
-                                                    {d.daily?.standDown
-                                                        ? <span className="text-warning" title={`Stood down ${istTimeSec(d.daily.standDown.at)} IST — no structure was entered today`}> · no entry today: {d.daily.standDown.reason}</span>
-                                                        : d.daily?.entered ? ' · already entered today' : ''}{exitBits.length ? ` · exits: ${exitBits.slice(0, 3).join(' · ')}` : ''}
+                                                    {/* `entered` is the one-per-day SLOT: say what used it — a failed entry
+                                                        (27-Oct-2026: PE rejected for margin, CE unwound) is not "entered" */}
+                                                    {d.daily?.entryFailure
+                                                        ? <span className="text-danger"> · no structure today: the {istTime(d.daily.entryFailure.at)} entry failed ({d.daily.entryFailure.leg?.action} {String(d.daily.entryFailure.leg?.symbol || '').replace(/^(NSE|BSE):/, '')} {d.daily.entryFailure.kind === 'rejected' ? 'rejected' : 'not filled'}: {d.daily.entryFailure.message}){d.daily.entryFailure.unwound?.length ? ' — the filled leg was bought back' : ''}</span>
+                                                        : d.daily?.standDown
+                                                            ? <span className="text-warning" title={`Stood down ${istTimeSec(d.daily.standDown.at)} IST — no structure was entered today`}> · no entry today: {d.daily.standDown.reason}</span>
+                                                            : d.daily?.entered ? ' · already traded today' : ''}{exitBits.length ? ` · exits: ${exitBits.slice(0, 3).join(' · ')}` : ''}
                                                 </div>
                                             )}
                                             {/* ── Full order detail (professional view) ── */}
@@ -2874,11 +3052,19 @@ export default function MultiLeg() {
                                                 </div>
                                             )}
                                             {d.lastError && <div className="text-3xs text-danger mb-2">⚠ {d.lastError}</div>}
+                                            <TodayStory story={todayStory?.deployments?.[d._id] || null} istTime={istTime} />
                                             <div className="flex gap-1 flex-wrap">
                                                 {d.status === 'ACTIVE'
                                                     ? <button onClick={() => depAction(d, open ? 'stop-close' : 'stop')} disabled={busy} aria-label={open ? `Stop and close ${d.name}` : `Stop ${d.name}`} className="px-2 py-0.5 rounded border border-amber-700/50 bg-amber-900/20 text-warning text-2xs hover:bg-amber-900/40 disabled:opacity-40"><StopCircle className="w-3 h-3 inline mr-0.5" />{open ? 'Stop + close' : 'Stop'}</button>
                                                     : <button onClick={() => depAction(d, 'start')} disabled={busy} aria-label={`Resume ${d.name}`} className="px-2 py-0.5 rounded border border-emerald-700/50 bg-emerald-900/20 text-success text-2xs hover:bg-emerald-900/40 disabled:opacity-40"><Play className="w-3 h-3 inline mr-0.5" />Resume</button>}
                                                 <button onClick={() => editDeployment(d)} disabled={busy} aria-label={`Edit ${d.name}`} title="Load its settings into the builder, change them, and save them back to this deployment" className="px-2 py-0.5 rounded border border-line bg-slate-800 text-fg-3 text-2xs hover:text-fg disabled:opacity-40"><Pencil className="w-3 h-3 inline mr-0.5" />Edit</button>
+                                                <button onClick={() => setHistoryFor({ kind: 'multileg-deployment', id: d._id, name: d.name, live: d.trade_mode === 'LIVE' })} aria-label={`History of ${d.name}`} title="Every change to its settings, and going back to an earlier version" className="px-2 py-0.5 rounded border border-line bg-slate-800 text-fg-3 text-2xs hover:text-fg"><History className="w-3 h-3 inline mr-0.5" />History</button>
+                                                {d.trade_mode === 'LIVE' && twins && Array.isArray(twins.pairs) && !twinOf.has(d._id) && (
+                                                    <button onClick={() => makePaperTwin(d)} disabled={!!pending[`twin:${d._id}`]} aria-label={`Make a paper twin of ${d.name}`} title="A PAPER copy with the same settings, to compare real and simulated trading" className="px-2 py-0.5 rounded border border-line bg-slate-800 text-fg-3 text-2xs hover:text-fg disabled:opacity-40"><Copy className="w-3 h-3 inline mr-0.5" />Paper twin</button>
+                                                )}
+                                                {twinOf.has(d._id) && (
+                                                    <span className="px-2 py-0.5 rounded border border-line-0 text-fg-5 text-2xs" title={`Compared under "LIVE vs PAPER twins"`}>⇄ twin: {twinOf.get(d._id).name}</span>
+                                                )}
                                                 {st === 'OPEN' && <button onClick={() => depAction(d, 'close')} disabled={busy} aria-label={`Close ${d.name} now`} className="px-2 py-0.5 rounded border border-red-700/50 bg-red-900/20 text-danger text-2xs hover:bg-red-900/40 disabled:opacity-40"><Square className="w-3 h-3 inline mr-0.5" />Close now</button>}
                                                 {!open && <button onClick={() => depAction(d, 'delete')} disabled={busy} aria-label={`Delete ${d.name}`} className="px-2 py-0.5 rounded border border-line bg-slate-800 text-fg-4 text-2xs hover:text-danger disabled:opacity-40"><Trash2 className="w-3 h-3 inline mr-0.5" />Delete</button>}
                                             </div>
@@ -3187,6 +3373,7 @@ export default function MultiLeg() {
                                                     <div className="text-3xs text-fg-4 mb-1">Held {full.exitAt ? fmtSpan(full.entryAt, full.exitAt) : fmtDur(full.entryAt)} · spot {fmt(full.entrySpot)} → {fmt(full.exitSpot)} · net credit at entry ₹{fmt(full.origCredit, 1)}/u{full.lots ? ` · ${full.lots} lot(s)` : ''}</div>
                                                     {/* What it DID while open — MAE/MFE and the gave-back number.
                                                         Renders its own explanation for pre-feature trades. */}
+                                                    <TradeStory trade={full} istTime={istTime} />
                                                     <div className="mb-2"><TradeStopReplay trade={full} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} /></div>
                                                     {allLegs.length > 0 ? (
                                                         <table className="w-full text-3xs font-mono text-fg-3">
@@ -3207,7 +3394,16 @@ export default function MultiLeg() {
                                                                     <td className="text-fg-5">{l.closeReason || l.reason || l.status || '—'}</td>
                                                                 </tr>
                                                                 );
-                                                            })}</tbody>
+                                                            })}
+                                                            {/* an unwound entry: the leg that failed, and those never sent */}
+                                                            {failedLegRows(full).map((l, j) => (
+                                                                <tr key={`f${j}`} className="border-t border-line-0/60">
+                                                                    <td className={l.action === 'BUY' ? 'text-success' : 'text-danger'}>{l.action} {l.type}</td>
+                                                                    <td>{l.strike ?? String(l.symbol || '').replace(/^(NSE|BSE):/, '')}</td>
+                                                                    <td className="text-right text-fg-5">—</td><td className="text-right text-fg-5">—</td><td className="text-right text-fg-5">—</td>
+                                                                    <td className="text-danger font-sans">{l.note}</td>
+                                                                </tr>
+                                                            ))}</tbody>
                                                         </table>
                                                     ) : <div className="text-3xs text-fg-5">No leg detail stored for this trade.</div>}
                                                 </td></tr>
