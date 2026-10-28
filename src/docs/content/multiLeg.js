@@ -220,6 +220,10 @@ A run from before this check has no verdicts. **Check consistency of these N str
 
 One structure a day means a failed entry also uses the day's slot. The card says so, instead of "already traded today".
 
+**Re-arm today** appears on a card that was *stood down* (a refusal that used the day's entry without trading, for example the funds check). It lifts today's stand-down, so the deployment enters at its **next check** while its entry window is open. It enters at the prices of that moment, not at its entry time, and every check (funds, liquidity, stops) runs again first. A LIVE one asks you to type its name. It is never offered after a trade, or while a structure is open.
+
+**The funds check** for a LIVE entry asks Fyers' own margin calculator, fresh, what this structure adds to the margin in use and what is available. Without the calculator it reads the balance fresh and subtracts only structures still being entered.
+
 In Results, a round trip that was **unwound** (its entry could not complete) says why. It names the leg that failed, the broker's words, what was bought back and at what prices, and what that cost. The legs table also shows the leg that failed and any leg never sent. **What happened while it was open** lists the journal of that trade.`,
         },
         {

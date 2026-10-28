@@ -1152,6 +1152,17 @@ export default function MultiLeg() {
         } else { runDepAction(dep, action); }
     };
 
+    // Lift TODAY's stand-down (POST /rearm-today): it enters at its next check, at that moment's prices
+    const rearmToday = (dep) => setConfirmState({
+        title: `Re-arm “${dep.name}” for today?`, danger: dep.trade_mode === 'LIVE', confirmLabel: 'Re-arm for today',
+        requireText: dep.trade_mode === 'LIVE' ? dep.name : null,
+        body: <span>It was stood down: <i>{dep.daily?.standDown?.reason}</i>. Re-armed, it {dep.trade_mode === 'LIVE' ? <b>sends REAL orders</b> : 'enters on paper'} at its next check (within ~10 s) while its entry window is open, at the spot and premiums of <b>that moment</b>, not at its {dep.params?.entry_time || 'entry'} time. Every other check (funds, liquidity, stops) runs again first.</span>,
+        onConfirm: () => withPending(`rearm:${dep._id}`, async () => {
+            await axios.post(`${API_URL}/multileg/deployments/${dep._id}/rearm-today`, {});
+            await Promise.allSettled([refreshDeployments(), refreshToday()]);
+        }, `“${dep.name}” re-armed for today`),
+    });
+
     // A PAPER copy of a LIVE deployment, to compare the two books (logic/multileg/twins.js)
     const makePaperTwin = (dep) => setConfirmState({
         title: `Make a PAPER twin of “${dep.name}”?`, confirmLabel: 'Make paper twin',
@@ -3061,6 +3072,9 @@ export default function MultiLeg() {
                                                 <button onClick={() => setHistoryFor({ kind: 'multileg-deployment', id: d._id, name: d.name, live: d.trade_mode === 'LIVE' })} aria-label={`History of ${d.name}`} title="Every change to its settings, and going back to an earlier version" className="px-2 py-0.5 rounded border border-line bg-slate-800 text-fg-3 text-2xs hover:text-fg"><History className="w-3 h-3 inline mr-0.5" />History</button>
                                                 {d.trade_mode === 'LIVE' && twins && Array.isArray(twins.pairs) && !twinOf.has(d._id) && (
                                                     <button onClick={() => makePaperTwin(d)} disabled={!!pending[`twin:${d._id}`]} aria-label={`Make a paper twin of ${d.name}`} title="A PAPER copy with the same settings, to compare real and simulated trading" className="px-2 py-0.5 rounded border border-line bg-slate-800 text-fg-3 text-2xs hover:text-fg disabled:opacity-40"><Copy className="w-3 h-3 inline mr-0.5" />Paper twin</button>
+                                                )}
+                                                {!open && d.status === 'ACTIVE' && d.daily?.standDown && !(Number(d.daily?.tradesToday) > 0) && (
+                                                    <button onClick={() => rearmToday(d)} disabled={!!pending[`rearm:${d._id}`]} aria-label={`Re-arm ${d.name} for today`} title="Lift today's stand-down so it can enter at its next check" className="px-2 py-0.5 rounded border border-amber-700/50 bg-amber-900/20 text-warning text-2xs hover:bg-amber-900/40 disabled:opacity-40"><RefreshCw className="w-3 h-3 inline mr-0.5" />Re-arm today</button>
                                                 )}
                                                 {twinOf.has(d._id) && (
                                                     <span className="px-2 py-0.5 rounded border border-line-0 text-fg-5 text-2xs" title={`Compared under "LIVE vs PAPER twins"`}>⇄ twin: {twinOf.get(d._id).name}</span>
