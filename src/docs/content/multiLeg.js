@@ -236,6 +236,11 @@ In Results, a round trip that was **unwound** (its entry could not complete) say
 - **Each deployment** — an *open* one is priced at the legs it holds now (a leg already stopped out needs nothing). A *flat* one is priced at the legs it would enter **right now** at the live index level. **Blocked at entry** is what it needed when it opened.
 - **Still to enter today** — the flat ones that have not entered today, in entry order, against what is available. The one the account cannot fund is named. At its entry time the engine refuses it before sending any order and stands it down for the day, with a Telegram message.
 
+**Margin priority.** The table lists the LIVE deployments in their **priority** order; ▲ / ▼ change it, and each LIVE card shows its place. Priority decides who gets the margin:
+- On the same tick (for example everyone at 09:20) the first in priority enters first. The next is then checked against what is left.
+- Across the day, a lower deployment only uses margin that the higher ones **still due today** do not need. Still due means flat, active, not yet entered or stood down today, an entry day, and the window not yet closed. If it would need that margin, it **waits**, and the card says *waiting for margin priority … held for X*. It is not stood down: once X has entered, or X's window has closed, it is checked again on the broker's real numbers. A waiting deployment can therefore enter later than its own entry time.
+- Deployments without a number come after the numbered ones, oldest first. The still-to-enter list follows the same priority order.
+
 Expiry days need more margin: the exchange charges extra on short options expiring that day. *Unavailable* means the calculator did not answer; no estimate is shown in its place. The panel asks the broker when the tab opens and on **Refresh**, never in the background, and at the lowest priority so it never delays a trading request. PAPER books use no account margin and are not counted.`,
         },
         {

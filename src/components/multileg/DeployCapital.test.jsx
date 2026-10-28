@@ -10,9 +10,9 @@ import { stateText, togetherLine, planLine } from './liveCapitalFormat.js';
 const CAP = {
     at: '2026-10-27T03:55:00Z', funds: { total: 474648, available: 288621, utilized: 192725 },
     deployments: [
-        { id: 'w', name: 'nifty-wide-tail (LIVE)', structure: 'Short Strangle', lots: 1, open: true, status: 'ACTIVE', legs: [{ symbol: 'x' }], margin: 130000, blockedAtEntry: 258656, note: '1 leg(s) already closed — counted: the legs still open' },
-        { id: 's', name: 'nifty-atm-straddle (LIVE)', structure: 'Short Straddle', lots: 1, open: false, status: 'ACTIVE', enteredToday: false, entryTime: '09:20', legs: [{}, {}], margin: 260000, blockedAtEntry: null },
-        { id: 'l', name: 'late-runway (LIVE)', structure: 'Short Straddle', lots: 1, open: false, status: 'ACTIVE', enteredToday: false, entryTime: '11:00', legs: [{}, {}], margin: null, blockedAtEntry: null, note: 'could not price it: no contract' },
+        { id: 'w', priority: 1, prioritySet: true, name: 'nifty-wide-tail (LIVE)', structure: 'Short Strangle', lots: 1, open: true, status: 'ACTIVE', legs: [{ symbol: 'x' }], margin: 130000, blockedAtEntry: 258656, note: '1 leg(s) already closed — counted: the legs still open' },
+        { id: 's', priority: 2, prioritySet: true, name: 'nifty-atm-straddle (LIVE)', structure: 'Short Straddle', lots: 1, open: false, status: 'ACTIVE', enteredToday: false, entryTime: '09:20', legs: [{}, {}], margin: 260000, blockedAtEntry: null },
+        { id: 'l', priority: 3, prioritySet: false, name: 'late-runway (LIVE)', structure: 'Short Straddle', lots: 1, open: false, status: 'ACTIVE', enteredToday: false, entryTime: '11:00', legs: [{}, {}], margin: null, blockedAtEntry: null, note: 'could not price it: no contract' },
     ],
     allTogether: { margin: 524000, source: 'broker', sumOfEach: null, missing: ['late-runway (LIVE)'] },
     stillToEnter: { plan: [{ id: 's', name: 'nifty-atm-straddle (LIVE)', entryTime: '09:20', margin: 260000, fits: true, availableBefore: 288621 }, { id: 'l', name: 'late-runway (LIVE)', entryTime: '11:00', margin: 300000, fits: false, availableBefore: 28621 }], margin: 560000, available: 288621, refused: ['late-runway (LIVE)'] },
@@ -34,7 +34,8 @@ vi.mock('axios', () => {
         if (/broker\/orders$/.test(url)) return Promise.resolve({ data: ORDERS });
         return Promise.resolve({ data: {} });
     });
-    const api = { get, post: vi.fn(), defaults: { headers: { common: {} } }, interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } } };
+    const post = vi.fn(() => Promise.resolve({ data: { ok: true } }));
+    const api = { get, post, defaults: { headers: { common: {} } }, interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } } };
     api.create = vi.fn(() => api);
     return { default: api, ...api };
 });
@@ -71,6 +72,18 @@ describe('LiveCapitalPanel', () => {
         expect(t).toMatch(/The engine will refuse late-runway \(LIVE\) at entry \(no order is sent\)/);
         expect(t).toMatch(/Expiry day/);
         expect(t).toMatch(/PAPER books use no account margin/);
+    });
+    it('margin priority: each row\'s place, and ▲ / ▼ send the new order', async () => {
+        const axios = (await import('axios')).default;
+        render(<LiveCapitalPanel />);
+        openPanel('LIVE capital');
+        await waitFor(() => expect(screen.getByTestId('live-capital')).toBeTruthy());
+        const t = screen.getByTestId('live-capital').textContent;
+        expect(t).toMatch(/Margin priority: LIVE deployments claim margin in this order/);
+        expect(t).toMatch(/#1.*nifty-wide-tail/);
+        expect(screen.getByRole('button', { name: 'Move nifty-wide-tail (LIVE) up in priority' }).disabled).toBe(true);
+        fireEvent.click(screen.getByRole('button', { name: 'Move late-runway (LIVE) up in priority' }));
+        await waitFor(() => expect(axios.post).toHaveBeenCalledWith(expect.stringMatching(/\/multileg\/live-priority$/), { order: ['w', 'l', 's'] }, expect.anything()));
     });
 });
 

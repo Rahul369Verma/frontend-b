@@ -3076,6 +3076,9 @@ export default function MultiLeg() {
                                                 {!open && d.status === 'ACTIVE' && d.daily?.standDown && !(Number(d.daily?.tradesToday) > 0) && (
                                                     <button onClick={() => rearmToday(d)} disabled={!!pending[`rearm:${d._id}`]} aria-label={`Re-arm ${d.name} for today`} title="Lift today's stand-down so it can enter at its next check" className="px-2 py-0.5 rounded border border-amber-700/50 bg-amber-900/20 text-warning text-2xs hover:bg-amber-900/40 disabled:opacity-40"><RefreshCw className="w-3 h-3 inline mr-0.5" />Re-arm today</button>
                                                 )}
+                                                {d.trade_mode === 'LIVE' && Number(d.priority) >= 1 && (
+                                                    <span className="px-2 py-0.5 rounded border border-line-0 text-fg-4 text-2xs" title="Margin priority: set in LIVE capital. Lower numbers claim margin first.">priority #{d.priority}</span>
+                                                )}
                                                 {twinOf.has(d._id) && (
                                                     <span className="px-2 py-0.5 rounded border border-line-0 text-fg-5 text-2xs" title={`Compared under "LIVE vs PAPER twins"`}>⇄ twin: {twinOf.get(d._id).name}</span>
                                                 )}
