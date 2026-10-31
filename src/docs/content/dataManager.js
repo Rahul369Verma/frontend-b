@@ -6,6 +6,28 @@ export default {
     summary: 'Backtests, the optimizer and the AI models all need past prices. The broker only gives limited history (and none for options that have already expired), so the app keeps its own archive. This page shows the live option-chain recorder and lets you download and store more history.',
     sections: [
         {
+            id: 'data-health',
+            title: 'Data health',
+            md: `The top panel answers four questions: is every recorder saving, is what it saved intact, did last night's backup reach the off-site bucket, and how long until the server disk or the bucket fills up? It checks every 15 minutes. **Check now** runs it at once.
+
+| Priority | Meaning |
+|---|---|
+| **critical** | Data is being lost now, or will be within two weeks. Examples: a session the quote tape did not record, a stored minute that will not read back, no backup for over a day, a disk or bucket about to fill. |
+| **warning** | Something is degraded or heading for trouble. Examples: a session with gaps, a failed upload, a recorder that fell behind, the archive about to delete days nothing else holds. |
+| **info** | How things stand. |
+
+Every critical and warning item is also a notification (the bell and the Notifications page, and Telegram by your notification settings). It clears itself when the problem goes away.
+
+**Storage forecast.** For each recorder: its size now, how much it adds per day, how long it is kept, and its size in 30 days, 90 days and a year. The quote tape shows **estimate** until it has recorded a session. Below the table:
+- **Server disk:** how full it is and when it reaches 90%.
+- **Off-site bucket:** its size against its 18 GB budget (Oracle's free limit is 20 GB), what each recorder keeps there, and when the budget would be reached.
+- **Backups:** what the last nightly backup reported.
+
+**Backups.** Each night the server saves everything except the recorders in one small file (14 kept on the server, 7 rotating copies in the bucket). Each finished day of each recorder goes to the bucket once, as its own file. Every run reports to the app. A missed night or a failed upload appears here.
+
+**Staying on the free plan.** The bucket never passes its 18 GB budget. The quote tape keeps its newest 60 sessions there and Delta its newest 30 days: each new day replaces the oldest. The option-chain archive and the decision log keep every day. Older tape and Delta days stay on the server only, where the database keeps them. A day file that would cross the budget waits in the database and shows here as critical.`,
+        },
+        {
             id: 'option-archive',
             title: 'Live option-chain archive',
             md: `While the market is open, the production server continuously records every index's **option chain** — the premium, open interest, bid/ask and implied volatility of every strike. Once an option expires the broker no longer provides its history, so this recording is the only way to backtest on **real** option prices (including skew — the way far-away strikes are priced differently), instead of estimating them with a formula.

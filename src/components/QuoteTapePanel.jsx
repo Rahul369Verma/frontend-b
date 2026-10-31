@@ -71,7 +71,7 @@ export default function QuoteTapePanel() {
                         ) : <p className="text-fg-5">Nothing recorded yet.</p>}
                         <p className="text-2xs text-fg-5 mt-1">
                             Stored {mb(st.tape.storage?.storageSizeBytes)} on disk · {num(st.tape.storage?.documents)} chunks
-                            {rec?.metrics?.errors ? ` · ${rec.metrics.errors} write error(s) (last: ${rec.metrics.lastError})` : ''}
+                            {rec?.metrics?.errors ? ` · ${rec.metrics.errors} error(s) (last: ${rec.metrics.lastError})` : ''}
                             {(st.tape.events || []).length ? ` · socket today: ${st.tape.events.length} event(s), last ${st.tape.events[0].kind} ${when(st.tape.events[0].at)}` : ''}
                         </p>
                         <h3 className="font-semibold text-fg-2 mt-3 mb-1">Decision log (the engine's own loops)</h3>

@@ -8,7 +8,8 @@
  * backend/logic/analytics/multilegAnalytics.js for the arithmetic and caveats).
  */
 import React, { useMemo, useState } from 'react';
-import { ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Legend } from 'recharts';
+import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Legend } from 'recharts';
+import ZoomableChart from '../charts/ZoomableChart';
 import { useChartTheme } from '../../theme/chartTheme.js';
 import { pnlTone, rupeeTick } from '../viz/tokens';
 import { fmt, rup } from './builderFormat';
@@ -169,9 +170,9 @@ export default function ExcursionsPanel({ excursions: x, basis = 'net', missingN
             {x.missing > 0 && (
                 <p className="text-2xs text-fg-5">{x.missing} trade{x.missing === 1 ? '' : 's'} in this filter have no recorded worst/best mark and are not in these figures{missingNote ? ` — ${missingNote}` : ''}.</p>
             )}
-            {/* not ZoomableChart: it zooms by slicing ONE shared data array, and a
-                scatter's two series each carry their own */}
-            <ResponsiveContainer width="100%" height={260}>
+            {/* xy mode: a scatter's two series each carry their own data, so zoom sets
+                the axis domains (a box drag zooms both) instead of slicing one array */}
+            <ZoomableChart mode="xy" height={260} csvRows={rows} title="How trades travelled">
                 <ScatterChart margin={{ top: 8, right: 12, bottom: 14, left: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                     <XAxis type="number" dataKey="mae" name="Worst point" tickFormatter={rupeeTick}
@@ -190,7 +191,7 @@ export default function ExcursionsPanel({ excursions: x, basis = 'net', missingN
                     <Scatter name="finished in profit" data={wins} fill={ct.diverging.positive} isAnimationActive={false} />
                     <Scatter name="finished at a loss" data={losses} fill={ct.diverging.negative} isAnimationActive={false} />
                 </ScatterChart>
-            </ResponsiveContainer>
+            </ZoomableChart>
 
             <StopLossPicker rows={rows} level={shownLevel} setLevel={setLevel} canApply={canApplyStop} basis={basis} ApplyDialog={ApplyDialog} applyNote={applyNote} />
 

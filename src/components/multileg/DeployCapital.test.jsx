@@ -19,11 +19,11 @@ const CAP = {
     notes: ['Expiry day for nifty-wide-tail (LIVE): the exchange charges extra margin on short options expiring today, so these figures are higher than on other days.'],
 };
 const ORDERS = {
-    at: '2026-10-27T03:58:30Z',
+    at: '2026-10-28T19:28:30Z', today: '2026-10-29', session: '2026-10-28', stale: true,
     rows: [
         { id: '1', time: '27-Oct-2026 09:20:08', symbol: 'NSE:NIFTY26OCT22550PE', side: 'SELL', type: 'LIMIT', qty: 65, filledQty: 65, limitPrice: 43.15, tradedPrice: 44.05, status: 'filled', tag: 'mlen86a4761422550PES', strategy: { id: 'w', name: 'nifty-wide-tail (LIVE)', engine: 'multileg', mode: 'LIVE' }, why: 'entry', matchedBy: 'tag' },
         { id: '2', time: '27-Oct-2026 09:20:10', symbol: 'NSE:NIFTY26OCT22650PE', side: 'SELL', type: 'LIMIT', qty: 65, filledQty: 0, status: 'rejected', message: 'RED:Margin Shortfall:INR 42,626.67', strategy: { id: 's', name: 'nifty-atm-straddle (LIVE)', engine: 'multileg', mode: 'LIVE' }, why: 'entry', matchedBy: 'tag' },
-        { id: '3', time: '27-Oct-2026 09:20:24', symbol: 'NSE:NIFTY26OCT22550PE', side: 'BUY', type: 'SL-LIMIT', qty: 65, filledQty: 0, stopPrice: 132.15, limitPrice: 138.75, status: 'pending', strategy: { id: 'w', name: 'nifty-wide-tail (LIVE)', engine: 'multileg', mode: 'LIVE' }, why: 'safety stop at the broker', matchedBy: 'tag' },
+        { id: '3', time: '28-Oct-2026 15:10:07', day: '2026-10-28', at: '2026-10-28T09:40:07Z', placedAt: '2026-10-28T04:32:57Z', symbol: 'NSE:NIFTY26OCT22550PE', side: 'BUY', type: 'SL-LIMIT', qty: 65, filledQty: 0, stopPrice: 132.15, limitPrice: 138.75, status: 'pending', strategy: { id: 'w', name: 'nifty-wide-tail (LIVE)', engine: 'multileg', mode: 'LIVE' }, why: 'safety stop at the broker', matchedBy: 'tag' },
         { id: '4', time: '27-Oct-2026 10:00:00', symbol: 'NSE:SBIN-EQ', side: 'BUY', type: 'MARKET', qty: 1, filledQty: 1, status: 'filled', strategy: null, why: 'not placed by this app (no tag the app writes)', matchedBy: null },
     ],
     byStrategy: { 'nifty-wide-tail (LIVE)': { orders: 2, filled: 1, pending: 1, rejected: 0 }, 'nifty-atm-straddle (LIVE)': { orders: 1, filled: 0, pending: 0, rejected: 1 }, 'not from this app': { orders: 1, filled: 1, pending: 0, rejected: 0 } },
@@ -90,13 +90,15 @@ describe('LiveCapitalPanel', () => {
 describe('BrokerOrdersPanel', () => {
     it('each order with its strategy and purpose; a strategy chip filters; an order not from the app is named', async () => {
         render(<BrokerOrdersPanel />);
-        openPanel('Broker orders today');
+        openPanel('Broker orders');
         await waitFor(() => expect(screen.getByTestId('broker-orders')).toBeTruthy());
         const t = screen.getByTestId('broker-orders').textContent;
         expect(t).toMatch(/safety stop at the broker/);
         expect(t).toMatch(/₹132.15 → ₹138.75/);
         expect(t).toMatch(/RED:Margin Shortfall/);
         expect(t).toMatch(/not from this app/);
+        expect(t).toMatch(/This is the order book of the last session, Wed 28 Oct 2026: Fyers keeps it until the next session starts/);
+        expect(t).toMatch(/Wed 28 Oct 15:10:07placed 10:02:57/);
         fireEvent.click(screen.getByRole('button', { name: /^nifty-wide-tail \(LIVE\): 2 · 1 pending/ }));
         const rows = screen.getByTestId('broker-orders').querySelectorAll('tbody tr');
         expect(rows.length).toBe(2);

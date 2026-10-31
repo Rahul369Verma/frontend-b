@@ -34,7 +34,8 @@
  */
 import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import axios from 'axios';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine } from 'recharts';
+import ZoomableChart from '../components/charts/ZoomableChart';
 import { CandlestickChart, RefreshCw, Crosshair, ExternalLink, PenLine, Trash2, Keyboard, Lock, Unlock } from 'lucide-react';
 import {
     Card, StatTile, StatRow, DataTable, Placeholder, EmptyState, PageHeader, Segmented, Chip, Spinner, StatusBadge,
@@ -788,8 +789,8 @@ export default function Charts() {
                                             <div className="text-2xs text-fg-5 mb-1">
                                                 Mark-to-market through the hold{sel.maeRupees != null ? ` · worst ${inr(sel.maeRupees)} · best ${inr(sel.mfeRupees)}` : ''}
                                             </div>
-                                            <ResponsiveContainer width="100%" height={140}>
-                                                <LineChart data={pathRows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                                            <ZoomableChart data={pathRows} height={140} title="Trade mark-to-market">
+                                                <LineChart margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                                                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                                     <XAxis dataKey="t" tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} minTickGap={28} />
                                                     <YAxis width={50} tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} tickFormatter={(v) => `₹${Math.round(v)}`} />
@@ -797,7 +798,7 @@ export default function Charts() {
                                                     <ReferenceLine y={0} stroke={ct.axis} ifOverflow="extendDomain" />
                                                     <Line type="monotone" dataKey="net" stroke={ct.mark.equity} dot={false} strokeWidth={2} isAnimationActive={false} />
                                                 </LineChart>
-                                            </ResponsiveContainer>
+                                            </ZoomableChart>
                                         </div>
                                     ) : (
                                         <div className="text-3xs text-fg-5">

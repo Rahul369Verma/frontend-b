@@ -43,8 +43,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 import {
-    ComposedChart, Area, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
-} from 'recharts';
+    ComposedChart, Area, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, } from 'recharts';
 import {
     RefreshCw, Zap, ExternalLink, AlertTriangle, Scissors, ChevronDown, ChevronUp, X, CheckSquare, Square,
 } from 'lucide-react';
@@ -737,8 +736,8 @@ export default function TickResults() {
                     {compareSeries.members.length > 0 && (
                         <Card docs="tick-results#strategies" title="Compare equity curves" subtitle="Cumulative net per strategy on the selected basis. Default is the four with the most trades — a one-trade strategy is noise on a curve.">
                             <Legend items={compareSeries.members.map((m) => ({ label: m.name, color: m.color }))} />
-                            <ResponsiveContainer width="100%" height={240}>
-                                <ComposedChart data={compareSeries.rows} margin={{ top: 8, right: 10, bottom: 2, left: 4 }}>
+                            <ZoomableChart data={compareSeries.rows} height={240} title="Compare equity curves">
+                                <ComposedChart margin={{ top: 8, right: 10, bottom: 2, left: 4 }}>
                                     <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                     <XAxis dataKey="label" tick={axisTick} minTickGap={26} />
                                     <YAxis width={54} tick={axisTick} tickFormatter={rupeeTick} />
@@ -748,7 +747,7 @@ export default function TickResults() {
                                         <Line key={m.key} type="monotone" dataKey={m.key} name={m.key} stroke={m.color} dot={false} strokeWidth={2} isAnimationActive={false} connectNulls />
                                     ))}
                                 </ComposedChart>
-                            </ResponsiveContainer>
+                            </ZoomableChart>
                         </Card>
                     )}
 

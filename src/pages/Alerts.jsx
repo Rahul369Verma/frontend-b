@@ -32,8 +32,9 @@ import { pollInterval, usePolling } from '../hooks/usePolling.js';
 import useRemWidth from '../hooks/useRemWidth.js';
 import DocLink from '../components/DocLink.jsx';
 import {
-    ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Cell,
+    LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Cell,
 } from 'recharts';
+import ZoomableChart from '../components/charts/ZoomableChart';
 
 const API = `${API_URL}/screener`;
 
@@ -232,15 +233,15 @@ function SeriesChart({ title, data, dataKey, color, format, step = false, height
         <figure>
             <figcaption className="text-2xs text-fg-3 mb-1">{title}</figcaption>
             {has ? (
-                <ResponsiveContainer width="100%" height={height}>
-                    <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                <ZoomableChart data={data} height={height} title={title}>
+                    <LineChart margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                         <CartesianGrid stroke={ct.gridSoft} vertical={false} />
                         <XAxis dataKey="date" tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} minTickGap={48} tickFormatter={(d) => String(d).slice(5)} stroke={ct.axis} />
                         <YAxis width={52} tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} domain={['auto', 'auto']} tickFormatter={format} stroke={ct.axis} />
                         <Tooltip contentStyle={ct.tooltipStyle({ fontSize: ct.type['3xs'] })} formatter={(v) => [format(v), title]} labelFormatter={(d) => d} cursor={{ stroke: ct.axis, strokeWidth: 1 }} />
                         <Line type={step ? 'stepAfter' : 'linear'} dataKey={dataKey} stroke={color} strokeWidth={2} dot={false} connectNulls={false} isAnimationActive={false} activeDot={{ r: 4, strokeWidth: 2, stroke: ct.surface }} />
                     </LineChart>
-                </ResponsiveContainer>
+                </ZoomableChart>
             ) : <Placeholder>No {title.toLowerCase()} for this stock.</Placeholder>}
         </figure>
     );
@@ -424,8 +425,8 @@ function MonthBars({ months }) {
     const ct = useChartTheme();
     const data = months.map(m => ({ ...m, v: m.meanExcessPct ?? 0 }));
     return (
-        <ResponsiveContainer width="100%" height={170}>
-            <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+        <ZoomableChart data={data} height={170} title="Mean excess return by month">
+            <BarChart margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
                 <CartesianGrid stroke={ct.gridSoft} vertical={false} />
                 <XAxis dataKey="month" tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} stroke={ct.axis} />
                 <YAxis width={58} tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} tickFormatter={(v) => `${Number(v).toFixed(1)}%`} stroke={ct.axis} />
@@ -436,7 +437,7 @@ function MonthBars({ months }) {
                     {data.map((m, i) => <Cell key={i} fill={m.v >= 0 ? ct.diverging.positive : ct.diverging.negative} />)}
                 </Bar>
             </BarChart>
-        </ResponsiveContainer>
+        </ZoomableChart>
     );
 }
 
@@ -518,8 +519,8 @@ function TradeSim({ b, mode, horizon, sessions, side }) {
                     </StatRow>
                     <figure>
                         <figcaption className="text-2xs text-fg-3 mb-1">Cumulative profit after costs, by exit date (₹)</figcaption>
-                        <ResponsiveContainer width="100%" height={180}>
-                            <LineChart data={sim.curve} margin={{ top: 6, right: 12, bottom: 0, left: 0 }}>
+                        <ZoomableChart data={sim.curve} height={180} title="Cumulative profit after costs">
+                            <LineChart margin={{ top: 6, right: 12, bottom: 0, left: 0 }}>
                                 <CartesianGrid stroke={ct.gridSoft} vertical={false} />
                                 <XAxis dataKey="date" tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} minTickGap={48} tickFormatter={(d) => String(d).slice(2, 7)} stroke={ct.axis} />
                                 <YAxis width={64} tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} tickFormatter={(v) => `₹${fmt(v / 1000, 0)}k`} stroke={ct.axis} />
@@ -528,7 +529,7 @@ function TradeSim({ b, mode, horizon, sessions, side }) {
                                 <Line type="linear" dataKey="pnl" stroke={ct.categorical[0]} strokeWidth={2} dot={false} isAnimationActive={false} activeDot={{ r: 4, strokeWidth: 2, stroke: ct.surface }} />
                                 <Line type="linear" dataKey="bench" stroke={ct.categorical[1]} strokeWidth={2} dot={false} isAnimationActive={false} activeDot={{ r: 4, strokeWidth: 2, stroke: ct.surface }} />
                             </LineChart>
-                        </ResponsiveContainer>
+                        </ZoomableChart>
                         <Legend items={[{ label: 'this alert', color: ct.categorical[0] }, { label: benchLabel, color: ct.categorical[1] }]} />
                     </figure>
                     <div className="text-3xs text-fg-5">

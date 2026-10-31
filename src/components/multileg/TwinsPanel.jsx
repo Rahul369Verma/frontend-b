@@ -44,7 +44,8 @@ export default function TwinsPanel({ data }) {
                                                     <td className={`text-right ${d.live.n ? pnlTone(d.live.net) : 'text-fg-5'}`} title={d.live.reasons.join(', ')}>{d.live.n ? signedRs(d.live.net) : 'no trade'}</td>
                                                     <td className={`text-right ${d.paper.n ? pnlTone(d.paper.net) : 'text-fg-5'}`} title={d.paper.reasons.join(', ')}>{d.paper.n ? signedRs(d.paper.net) : 'no trade'}</td>
                                                     <td className={`text-right ${pnlTone(d.diff)}`}>{signedRs(d.diff)}</td>
-                                                    <td className="pl-2 text-fg-5">{d.why.length ? d.why.map((w, i) => <div key={i}>{w}</div>) : (d.live.n && d.paper.n ? 'fills and slippage' : '')}</td>
+                                                    {/* the server compares the two days' trades (twins.explainDay) — nothing is assumed here */}
+                                                    <td className="pl-2 text-fg-5">{d.why.map((w, i) => <div key={i}>{w}</div>)}</td>
                                                 </tr>
                                             ))}
                                         </tbody>

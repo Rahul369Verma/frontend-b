@@ -2,9 +2,9 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
-    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-    BarChart, Bar, ReferenceLine, Cell, LabelList,
+    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, BarChart, Bar, ReferenceLine, Cell, LabelList,
 } from 'recharts';
+import ZoomableChart from '../components/charts/ZoomableChart';
 import {
     RefreshCw, Activity, TrendingUp, TrendingDown,
     Calendar as CalendarIcon, Clock, BarChart3, Table as TableIcon,
@@ -651,8 +651,8 @@ function EquityCurveView({ data }) {
     return (
         <div>
             <h2 className="text-base font-semibold text-fg-2 mb-3 flex items-center gap-2">Cumulative P&L <DocLink to="strategy-detail#tabs" /></h2>
-            <ResponsiveContainer width="100%" height={420}>
-                <LineChart data={data} margin={{ top: 10, right: 20, bottom: 10, left: 10 }}>
+            <ZoomableChart data={data} height={420} title="Cumulative P&L">
+                <LineChart margin={{ top: 10, right: 20, bottom: 10, left: 10 }}>
                     <CartesianGrid stroke={ct.grid} strokeDasharray="3 3" />
                     <XAxis
                         dataKey="idx"
@@ -673,7 +673,7 @@ function EquityCurveView({ data }) {
                     <ReferenceLine y={0} stroke={ct.axis} strokeDasharray="3 3" />
                     <Line type="monotone" dataKey="cum" stroke={ct.categorical[0]} strokeWidth={2} dot={false} name="cum" />
                 </LineChart>
-            </ResponsiveContainer>
+            </ZoomableChart>
             <div className="text-xs text-fg-5 mt-2">
                 Each point = one trade exit. Line = cumulative realised P&L. The 0-line is the break-even threshold.
             </div>
@@ -1035,8 +1035,8 @@ function DistributionView({ histogram, hourMap, kpis }) {
             {/* P&L Distribution */}
             <div>
                 <h2 className="text-base font-semibold text-fg-2 mb-3 flex items-center gap-2">Trade P&L Distribution <DocLink to="strategy-detail#tabs" /></h2>
-                <ResponsiveContainer width="100%" height={280}>
-                    <BarChart data={histogram} margin={{ top: 24, right: 20, bottom: 30, left: 10 }}>
+                <ZoomableChart data={histogram} height={280} title="Trade P&L distribution">
+                    <BarChart margin={{ top: 24, right: 20, bottom: 30, left: 10 }}>
                         <CartesianGrid stroke={ct.grid} strokeDasharray="3 3" />
                         {/* Each tick is now a RANGE (e.g. "-₹1,392…-₹1,160"), not a single
                             point — so users don't read the center as "the exact loss". */}
@@ -1074,7 +1074,7 @@ function DistributionView({ histogram, hourMap, kpis }) {
                             ))}
                         </Bar>
                     </BarChart>
-                </ResponsiveContainer>
+                </ZoomableChart>
                 <div className="text-3xs text-fg-5 mt-1">
                     Each bar = a P&L <span className="text-fg-4">range</span>, not a single trade. A bar of height N means N trades fell into that range — hover for the exact bracket.
                 </div>

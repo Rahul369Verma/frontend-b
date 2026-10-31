@@ -20,7 +20,7 @@ export default {
 - **Resolution (Timeframe)** — candle size in minutes (5 is the usual).
 - **Min Conf (%)** — for strategies that output a confidence, ignore signals below this.
 - **Exchange / Symbol** — the index (or stock) to test on. **Start / End Date** — the period.
-- **Backtest Mode** — *Simulated Premium* estimates the option price from the index move (fast, approximate); *Real Option Data* uses recorded option prices (slow, accurate).
+- **Backtest Mode** — *Simulated Premium* estimates the option price from the index move (fast, approximate); *Real Option Data* uses recorded option prices (slow, accurate). For each trade-day it takes the option's prices from, in order: local option files, then the **recorded option-chain archive** (production's real prices for the trade's own contract, from Aug 2026), then the broker. The broker has nothing for a contract that has already expired. The line under the box shows where recorded prices are read from and whether that source answers. The result's notes count how many trade-days came from each source.
 - **Data Source** — where index candles come from: the broker API, the current-month future, or the **local archive** (stored history, fast). *Auto* picks for you.
 - **Trading Mode** — *Buying (long options)*, *Selling (naked shorts)* or *Selling (hedged)*. Selling modes show extra inputs: lot size, margin per lot, theta (time decay is already built into the simulated premium) and hedge width.`,
         },

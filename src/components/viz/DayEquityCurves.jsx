@@ -47,8 +47,8 @@
  */
 import React, { memo, useCallback, useId, useMemo, useState } from 'react';
 import {
-    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ReferenceDot, ResponsiveContainer,
-} from 'recharts';
+    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ReferenceDot, } from 'recharts';
+import ZoomableChart from '../charts/ZoomableChart';
 import { useChartTheme } from '../../theme/chartTheme.js';
 import { inr, pnlTone, rupeeTick, istTime, istDateTime, istDayLabel } from './tokens';
 import { Chip, DataTable, Spinner } from './primitives';
@@ -392,7 +392,9 @@ function DayDetail({ day, vixOn = false, vixDay = null, vixIntra = null, onVixRe
     return (
         <div className="px-2 pb-3 pt-1">
             {points.length ? (
-                <ResponsiveContainer width="100%" height={220}>
+                // xy mode: the time axis has a FIXED domain (the session), so zoom sets
+                // that domain rather than slicing the rows
+                <ZoomableChart mode="xy" yAxisId="pnl" csvRows={data} height={220} title={`Day ${day.day}`}>
                     {/* Every P&L mark names yAxisId 'pnl': with a second axis present,
                         recharts drops a mark whose axis id matches no YAxis. The grid
                         too: on the default id 0 it finds no axis and draws only the
@@ -432,7 +434,7 @@ function DayDetail({ day, vixOn = false, vixDay = null, vixIntra = null, onVixRe
                                 label={labelMarkers ? { value: String(m.n), position: 'top', fontSize: ct.type['5xs'], fill: ct.text.secondary } : undefined} />
                         ))}
                     </LineChart>
-                </ResponsiveContainer>
+                </ZoomableChart>
             ) : (
                 <p className="text-3xs text-fg-5 py-2">No points to draw for this day.</p>
             )}

@@ -23,8 +23,9 @@ import {
 } from '../components/viz/primitives';
 import { useChartTheme, inr as inrShared } from '../components/viz/tokens';
 import {
-    ResponsiveContainer, ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Cell,
+    ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Cell,
 } from 'recharts';
+import ZoomableChart from '../components/charts/ZoomableChart';
 
 const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
 /** Whole rupees, via the app's single rupee formatter (was a private copy using U+2212). */
@@ -142,8 +143,8 @@ export default function AiScore() {
                     >
                         {calBars.length ? (
                             <>
-                                <ResponsiveContainer width="100%" height={180}>
-                                    <ComposedChart data={calBars} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                                <ZoomableChart data={calBars} height={180} title="AI confidence calibration">
+                                    <ComposedChart margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
                                         <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                         <XAxis dataKey="name" tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} />
                                         <YAxis width={56} tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} tickFormatter={(v) => `₹${Math.round(v)}`} />
@@ -158,7 +159,7 @@ export default function AiScore() {
                                             ))}
                                         </Bar>
                                     </ComposedChart>
-                                </ResponsiveContainer>
+                                </ZoomableChart>
                                 <div className="mt-2 text-2xs text-fg-4">{data.calibration.verdict}</div>
                                 <div className="mt-2"><TestLine test={data.calibration?.highVsLow?.test} what="high vs low confidence" /></div>
                             </>

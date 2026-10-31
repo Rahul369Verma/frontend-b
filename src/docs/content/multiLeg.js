@@ -118,6 +118,8 @@ The **Option prices** setting chooses what the backtest prices options with:
 
 In a live engine replay, a setting that calls an outside service (the AI zone review) cannot be replayed. It is switched off for the run, and the result says so. Each night the replay is checked against the day's live trades; the result is on the Data Manager page.
 
+The archive and the quote tape are recorded only in production. On a development copy of the app, both are read from production's database, read-only, through an SSH tunnel. The line under **Option prices** shows where recorded prices come from and whether that source answers. If it does not answer, it says so instead of reporting an empty archive.
+
 ### Attribution
 Splits the profit into what came from the index moving (delta), time passing (theta), volatility changing (vega) and costs — useful to see *why* a structure made or lost money.
 

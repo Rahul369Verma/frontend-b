@@ -12,7 +12,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { RefreshCw } from 'lucide-react';
-import { ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer, Legend } from 'recharts';
+import { ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Legend } from 'recharts';
+import ZoomableChart from '../charts/ZoomableChart';
 import { API_URL } from '../../config/api.js';
 import { useChartTheme } from '../../theme/chartTheme.js';
 import { Panel, Spinner } from '../viz/primitives';
@@ -85,9 +86,8 @@ export function StructureView({ d, onRefresh, loading }) {
                 ))}
             </div>
 
-            <div style={{ height: 300 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={d.curve} margin={{ top: 8, right: 12, bottom: 2, left: 4 }}>
+            <ZoomableChart data={d.curve} height={300} title={`Structure — ${d.structureName || d.template || 'payoff'}`}>
+                    <ComposedChart margin={{ top: 8, right: 12, bottom: 2, left: 4 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                         <XAxis dataKey="spot" type="number" domain={['dataMin', 'dataMax']} tick={{ fill: ct.text.secondary, fontSize: ct.type['5xs'] }} tickFormatter={fmt} />
                         <YAxis width={58} tick={{ fill: ct.text.secondary, fontSize: ct.type['5xs'] }} tickFormatter={rupeeTick} />
@@ -102,8 +102,7 @@ export function StructureView({ d, onRefresh, loading }) {
                         <Line type="monotone" name="at expiry" dataKey="expiry" stroke={ct.mark.terminal} dot={false} strokeWidth={2} isAnimationActive={false} />
                         <Line type="monotone" name="today" dataKey="today" stroke={ct.mark.live} dot={false} strokeWidth={1.5} strokeDasharray="5 3" isAnimationActive={false} />
                     </ComposedChart>
-                </ResponsiveContainer>
-            </div>
+            </ZoomableChart>
             <p className="text-3xs text-fg-5">
                 ₹ for {d.lots} lot{d.lots === 1 ? '' : 's'} × {d.lotSize}, against the {d.source === 'open' ? 'entry' : 'current'} premiums, before costs.
                 &quot;Today&quot; prices each leg at its own implied volatility with today&apos;s time to expiry; the stops fire on the live mark, so where a line crosses

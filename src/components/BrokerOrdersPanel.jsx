@@ -10,6 +10,7 @@ import axios from 'axios';
 import { ListOrdered, RefreshCw } from 'lucide-react';
 import { API_URL } from '../config/api.js';
 import { Panel, Spinner } from './viz/primitives';
+import { istDayLabel } from './viz/tokens';
 
 const TONE = { filled: 'text-success', rejected: 'text-danger', cancelled: 'text-fg-5', pending: 'text-warning', 'trigger pending': 'text-warning' };
 const px = (v) => (v == null || v === 0 ? '—' : `₹${v}`);
@@ -29,15 +30,20 @@ export default function BrokerOrdersPanel({ className = 'mb-4' }) {
     const names = useMemo(() => (d ? Object.keys(d.byStrategy || {}) : []), [d]);
     const rows = d ? d.rows.filter((r) => who === 'all' || label(r) === who) : [];
     return (
-        <Panel className={className} icon={ListOrdered} iconClassName="text-sky-400" title="Broker orders today — which strategy placed each"
+        <Panel className={className} icon={ListOrdered} iconClassName="text-sky-400" title="Broker orders — which strategy placed each"
             storageKey="fold:multi-leg|broker-orders" docs="multi-leg#deploy-broker-orders"
-            summary={d ? `${d.rows.length} order(s) at Fyers today · ${names.length} source(s)` : null}
+            summary={d ? `${d.rows.length} order(s) at Fyers ${d.stale ? `from the last session (${istDayLabel(d.session, { year: false })})` : 'today'} · ${names.length} source(s)` : null}
             right={<button type="button" onClick={load} disabled={st.busy} className="inline-flex items-center gap-1 px-2 py-1 rounded border border-line-2 bg-card-2 text-2xs text-fg-3 hover:text-fg disabled:opacity-50">
                 <RefreshCw className={`w-3 h-3 ${st.busy ? 'animate-spin' : ''}`} aria-hidden="true" /> Refresh</button>}>
             {!d && st.busy && <Spinner label="Reading the broker's order book…" />}
             {st.err && <p className="text-xs text-danger">Could not read it: {st.err}</p>}
             {d && (
                 <div className="space-y-2 text-xs" data-testid="broker-orders">
+                    {d.stale && (
+                        <div className="text-warning">
+                            This is the order book of the last session, {istDayLabel(d.session)}: Fyers keeps it until the next session starts. Today&apos;s orders appear from the market open.
+                        </div>
+                    )}
                     <div className="flex flex-wrap gap-1.5">
                         <button type="button" onClick={() => setWho('all')} aria-pressed={who === 'all'} className={`px-2 py-0.5 rounded border text-2xs ${who === 'all' ? 'border-primary text-primary-ink' : 'border-line text-fg-4'}`}>All ({d.rows.length})</button>
                         {names.map((n) => {
@@ -55,14 +61,19 @@ export default function BrokerOrdersPanel({ className = 'mb-4' }) {
                         <div className="overflow-x-auto">
                             <table className="w-full text-2xs font-mono">
                                 <thead><tr className="text-fg-5 text-left">
-                                    <th className="font-normal py-1">Time</th><th className="font-normal">Strategy</th><th className="font-normal">For</th>
+                                    <th className="font-normal py-1" title="Fyers gives the time of the order's LAST change: a cancelled stop shows when it was cancelled. When the app placed it is shown under it.">Last change</th><th className="font-normal">Strategy</th><th className="font-normal">For</th>
                                     <th className="font-normal">Order</th><th className="font-normal text-right">Qty</th><th className="font-normal text-right">Price / trigger</th>
                                     <th className="font-normal text-right">Filled at</th><th className="font-normal pl-2">Status</th>
                                 </tr></thead>
                                 <tbody>
                                     {rows.map((r) => (
                                         <tr key={r.id} className="border-t border-line-0 align-top">
-                                            <td className="py-1 text-fg-5">{String(r.time || '').slice(-8)}</td>
+                                            <td className="py-1 text-fg-5 whitespace-nowrap">
+                                                {r.day && d.today && r.day !== d.today ? `${istDayLabel(r.day, { year: false })} ` : ''}{String(r.time || '').slice(-8)}
+                                                {r.placedAt && r.at && Math.abs(Date.parse(r.at) - Date.parse(r.placedAt)) >= 60e3 && (
+                                                    <span className="block text-4xs">placed {new Date(r.placedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false })}</span>
+                                                )}
+                                            </td>
                                             <td className={r.strategy ? 'text-fg-2' : 'text-warning'} title={r.matchedBy ? `matched by ${r.matchedBy}${r.tag ? ` · tag ${r.tag}` : ''}` : r.tag ? `tag ${r.tag}` : 'no tag'}>
                                                 {label(r)}{r.strategy && r.strategy.mode ? <span className={r.strategy.mode === 'LIVE' ? 'text-danger' : 'text-fg-5'}> · {r.strategy.mode}</span> : null}
                                             </td>

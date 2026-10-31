@@ -7,6 +7,7 @@ import { API_URL } from '../config/api.js';
 import DocLink from './DocLink.jsx';
 import DeltaOptionDataPanel from './DeltaOptionDataPanel.jsx';
 import QuoteTapePanel from './QuoteTapePanel.jsx';
+import DataHealthPanel from './DataHealthPanel.jsx';
 
 /**
  * Archive repair: fill the recorder's missing minutes from the broker's 1-minute candles
@@ -566,6 +567,7 @@ const DataManager = () => {
                 <DocLink to="data-manager" label="Guide" className="text-xs" />
             </h1>
 
+            <DataHealthPanel />
             {OptionArchivePanel}
             <QuoteTapePanel />
             <DeltaOptionDataPanel />

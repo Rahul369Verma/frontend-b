@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { Play, Plus, Trash2 } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
+import ZoomableChart from '../charts/ZoomableChart';
 import { API_URL } from '../../config/api.js';
 import { Card, DataTable, StatTile, StatRow, Spinner, EmptyState } from '../viz/primitives';
 import { inr, pnlTone, istDateTime } from '../viz/tokens';
@@ -239,9 +240,9 @@ export default function PortfolioRunPanel({ baseParams, strategyOptions = [], pr
 
                     {chart && chart.data.length > 1 && (
                         <Card title="Equity curves" subtitle="Each strategy on its own share of the capital, all of them added together, and the combined book under the account caps.">
-                            <div style={{ height: '20rem' }}>
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <LineChart data={chart.data}>
+                            <div>
+                                <ZoomableChart data={chart.data} height={'20rem'} title="Equity curves">
+                                    <LineChart>
                                         <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                         <XAxis dataKey="t" tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} tickFormatter={v => String(v).slice(5, 10)} minTickGap={40} />
                                         <YAxis width={64} tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} tickFormatter={v => inr(v, { compact: true })} domain={['auto', 'auto']} />
@@ -252,7 +253,7 @@ export default function PortfolioRunPanel({ baseParams, strategyOptions = [], pr
                                                 stroke={ct.categorical[si % ct.categorical.length]} strokeWidth={si === 0 ? 2.5 : 1.25} strokeDasharray={s.name === 'With account caps' ? '5 3' : undefined} />
                                         ))}
                                     </LineChart>
-                                </ResponsiveContainer>
+                                </ZoomableChart>
                             </div>
                         </Card>
                     )}

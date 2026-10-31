@@ -156,5 +156,25 @@ To guard against overfitting, the app splits history in two: settings are chosen
 
 **Slippage** is the difference between the price the system *decided* on and the price it actually *got*. PAPER trades fill at the live market price, so they have little slippage; LIVE trades can slip, especially in fast markets.`,
         },
+        {
+            id: 'charts',
+            title: 'Using the charts',
+            where: 'Every chart in the app',
+            md: `Every line, bar and scatter chart has the same tools, with a small toolbar under it:
+
+| To | Do this |
+|---|---|
+| **Zoom into a range** | Drag across the chart. On a scatter, the box you drag zooms both axes. |
+| **Zoom at a point** | Hold **Ctrl** (⌘ on a Mac) and scroll the wheel over the spot, or pinch on a trackpad. The **+** and **−** buttons zoom about the middle. |
+| **Move a zoomed view** | Hold **Shift** and drag, or turn on the ✋ hand and drag. You can also scroll sideways, use the **←** and **→** buttons, or drag the bar under the chart (it shows which part of the whole you are looking at). |
+| **Go back to the full view** | Double-click the chart, or press **reset**. |
+| **Hide a line** | Click its name in the legend. Click it again to bring it back. The toolbar counts hidden lines, and **N hidden** shows them all again. |
+| **See it bigger** | ⤢ opens the chart full screen with the same zoom. Press Esc to return. |
+| **Save it** | **PNG** saves an image of the chart, legend included. **CSV** saves the points shown; a zoomed chart saves only the zoomed part. |
+
+**Keyboard:** click a chart (or Tab to it), then use **+ − ← → 0** and **F** for full screen.
+
+Zoomed axes get round tick labels, and time axes tick on whole IST minutes. The small trend lines on cards (sparklines) have no axes, so they have no zoom.`,
+        },
     ],
 };

@@ -24,6 +24,7 @@ import { pollInterval } from '../hooks/usePolling.js';
 import useCollapse from '../hooks/useCollapse.js';
 import useResultsTable from '../components/multileg/useResultsTable.js';
 import ResultsDayCurves from '../components/multileg/ResultsDayCurves.jsx';
+import ResearchSourceLine from '../components/data/ResearchSourceLine.jsx';
 import DeploymentStructurePanel from '../components/multileg/DeploymentStructurePanel.jsx';
 import { presetWindow, rangeWindow, windowLabel, windowFromParams, stepTradingDay, istDate } from '../components/multileg/resultsWindow.js';
 import { API_URL } from '../config/api.js';
@@ -1238,6 +1239,7 @@ export default function MultiLeg() {
                     <option value="tape">Live engine replay (every tick from the quote tape · archive minutes before it)</option>
                 </select>
             </label>
+            {(chainSource === 'archive' || chainSource === 'tape') && <ResearchSourceLine className="mt-1" />}
             {chainSource === 'archive' && (
                 <div className="mt-1 text-3xs text-fg-5">
                     {sourceCov?.error ? <span className="text-danger">{sourceCov.error}</span>

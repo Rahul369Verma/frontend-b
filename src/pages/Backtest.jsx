@@ -2,7 +2,9 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
 import { Play, Activity, ChevronDown, ChevronUp, Bot, Copy, Check, Square, PanelLeftClose, PanelLeftOpen, CandlestickChart, X } from 'lucide-react';
 import PriceChart from '../components/charts/PriceChart';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
+import ZoomableChart from '../components/charts/ZoomableChart';
+import ResearchSourceLine from '../components/data/ResearchSourceLine.jsx';
 import { useGlobalState } from '../context/GlobalContext';
 import CollapsibleCard from '../components/CollapsibleCard';
 import { PageHeader, Spinner, Chip, Segmented, Panel } from '../components/viz/primitives';
@@ -1839,6 +1841,14 @@ export default function Backtest() {
                         <option value="Simulated Premium">Simulated Premium (Fast & Approx - 0.5 Delta)</option>
                         <option value="Real Option Data">Real Option Data (Slow & Accurate)</option>
                     </select>
+                    {shown.backtest_mode === 'Real Option Data' && (
+                        <>
+                            <p className="mt-1 text-3xs text-fg-5">
+                                Each trade-day&apos;s option prices come from local option files, then the recorded option-chain archive (real prices of the trade&apos;s own contract, from Aug 2026), then the broker (which has nothing for an expired contract). The result&apos;s pricing notes count each.
+                            </p>
+                            <ResearchSourceLine className="mt-0.5" />
+                        </>
+                    )}
                 </div>
                 <div>
                     <label htmlFor="backtest-data-source-indices-12" className="block text-sm font-medium text-blue-400 mb-1">Data Source (Indices)</label>
@@ -3671,9 +3681,9 @@ export default function Backtest() {
                     </p>
                   )}
 
-                  <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData}>
+                  <div>
+                  <ZoomableChart data={chartData} height={'18rem'} title="Backtest equity">
+                    <LineChart>
                       <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
                       <XAxis
                         dataKey={isComparison ? 't' : 'date'}
@@ -3697,7 +3707,7 @@ export default function Backtest() {
                         <Line type="monotone" dataKey="balance" stroke={ct.categorical[0]} strokeWidth={2} dot={false} />
                       )}
                     </LineChart>
-                  </ResponsiveContainer>
+                  </ZoomableChart>
                   </div>
                 </Panel>
                 );

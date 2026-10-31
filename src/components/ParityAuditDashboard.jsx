@@ -5,8 +5,9 @@ import {
 } from 'react-icons/fa';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-    ResponsiveContainer, ReferenceLine, Legend,
+    ReferenceLine, Legend,
 } from 'recharts';
+import ZoomableChart from './charts/ZoomableChart';
 import { INSTRUMENT_CONFIG } from '../constants';
 import { useChartTheme } from '../theme/chartTheme.js';
 import { pollInterval } from '../hooks/usePolling.js';
@@ -247,9 +248,9 @@ function ResultRow({ row, expanded, onToggle }) {
                                         Standard vs. Nitro delta — illustrative (bars 100+, warm-up skipped)
                                         <span className="italic text-fg-5">Synthetic profile scaled to reported max_diff</span>
                                     </div>
-                                    <div className="h-32">
-                                        <ResponsiveContainer width="100%" height="100%">
-                                            <LineChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                                    <div>
+                                        <ZoomableChart data={chartData} height={'8rem'} title="Parity drift">
+                                            <LineChart margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                                                 <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} />
                                                 <XAxis dataKey="bar" tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} />
                                                 <YAxis tick={{ fontSize: ct.type['4xs'], fill: ct.text.secondary }} width={55} tickFormatter={v => v.toExponential(1)} />
@@ -264,7 +265,7 @@ function ResultRow({ row, expanded, onToggle }) {
                                                 <Line type="monotone" dataKey="nitro"    stroke={ct.categorical[1]} dot={false} strokeWidth={1.5} name="Nitro delta" />
                                                 <Legend wrapperStyle={{ fontSize: ct.type['3xs'] }} />
                                             </LineChart>
-                                        </ResponsiveContainer>
+                                        </ZoomableChart>
                                     </div>
                                 </div>
                             </div>

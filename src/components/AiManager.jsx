@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FaRobot, FaBrain, FaChartLine, FaPlay, FaSync, FaExclamationTriangle, FaStop, FaChevronDown, FaChevronUp, FaPlus } from 'react-icons/fa';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
+import ZoomableChart from './charts/ZoomableChart';
 
 const API_URL  = `${API_BASE}/api/ai`;
 
@@ -1524,16 +1525,16 @@ const AiManager = () => {
                         <ResultCard label="Trades"        value={backtestResult.total_trades}                    color="text-fg" />
                         <ResultCard label="Drawdown"      value={`₹${backtestResult.max_drawdown?.toFixed(2)}`}  color="text-danger" />
                     </div>
-                    <div className="h-64 w-full bg-slate-900 rounded-lg p-4">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={backtestResult.equity_curve}>
+                    <div className="w-full bg-slate-900 rounded-lg p-4">
+                        <ZoomableChart data={backtestResult.equity_curve} height={'14rem'} title="AI backtest equity">
+                            <LineChart>
                                 <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
                                 <XAxis dataKey="timestamp" hide />
                                 <YAxis stroke={ct.axis} tick={{ fill: ct.text.secondary }} />
                                 <Tooltip contentStyle={ct.tooltipStyle({ borderRadius: 8 })} itemStyle={{ color: ct.tooltip.text }} />
                                 <Line type="monotone" dataKey="equity" stroke={ct.categorical[0]} strokeWidth={2} dot={false} />
                             </LineChart>
-                        </ResponsiveContainer>
+                        </ZoomableChart>
                     </div>
                 </div>
             )}

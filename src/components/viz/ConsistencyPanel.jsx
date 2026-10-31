@@ -1,5 +1,6 @@
 import React from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, ReferenceLine } from 'recharts';
+import ZoomableChart from '../charts/ZoomableChart';
 import { StatTile, StatRow } from './primitives';
 import { inr } from './tokens';
 import { useChartTheme } from '../../theme/chartTheme.js';
@@ -44,9 +45,9 @@ export default function ConsistencyPanel({ data, compact = false }) {
                 </p>
             )}
             {!compact && bars.length > 1 && (
-                <div style={{ height: '12rem' }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={bars} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                <div>
+                    <ZoomableChart data={bars} height={'12rem'} title="Monthly P&L">
+                        <BarChart margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke={ct.gridSoft} vertical={false} />
                             <XAxis dataKey="label" tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} interval="preserveStartEnd" minTickGap={8} />
                             <YAxis width={56} tick={{ fontSize: ct.type['5xs'], fill: ct.text.secondary }} tickFormatter={v => inr(v, { compact: true })} />
@@ -57,7 +58,7 @@ export default function ConsistencyPanel({ data, compact = false }) {
                                 {bars.map((b, i) => <Cell key={i} fill={b.trades === 0 ? ct.gridSoft : b.net >= 0 ? ct.diverging.positive : ct.diverging.negative} />)}
                             </Bar>
                         </BarChart>
-                    </ResponsiveContainer>
+                    </ZoomableChart>
                 </div>
             )}
             {!compact && (
