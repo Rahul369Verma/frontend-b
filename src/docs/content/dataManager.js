@@ -41,7 +41,13 @@ Every critical and warning item is also a notification (the bell and the Notific
 
 The table shows, per index: snapshots, days covered, strikes, last spot price, first and last snapshot. The capture button takes one snapshot of every index **now** (it works outside market hours, for checking the recorder).
 
-**Repairing holes.** If the recorder misses minutes (for example while the broker is rate-limiting requests), those minutes are refilled from the broker's **1-minute candles**: every weekday at 15:45 IST automatically, or now with **🩹 Repair holes** (today and the two days before). A repaired minute holds the minute's last traded price and the implied volatility worked out from it, but **no bid/ask or open interest** — a candle does not have them — and it is labelled as repaired. It only works while the contract has **not expired**: after expiry the broker keeps no history, so a hole must be repaired before then. Trade replays say how many of their minutes were repaired and shade any hole that is left.`,
+**Repairing holes.** If the recorder misses minutes (for example while the broker is rate-limiting requests), those minutes are refilled from the broker's **1-minute candles**: every weekday at 15:45 IST automatically, or now with **🩹 Repair holes** (today and the two days before). A repaired minute holds the minute's last traded price and the implied volatility worked out from it, but **no bid/ask or open interest** — a candle does not have them — and it is labelled as repaired. It only works while the contract has **not expired**: after expiry the broker keeps no history, so a hole must be repaired before then. Trade replays say how many of their minutes were repaired and shade any hole that is left.
+
+**Moving to the quote tape.** Each snapshot costs one broker request per index per minute (about 2,250 a session). The quote tape below already holds every strike's price, bid/ask, volume and open interest, so the same snapshot can be built from it with no request. While the archive still uses broker requests, every minute it also builds the snapshot from the tape and compares the two. The comparison is in [Data health](#data-health). When the two have agreed for 10 sessions, Data health says so, and setting \`OPTION_ARCHIVE_SOURCE=tape\` on the server switches the archive to the tape. BANKEX is not on the tape and keeps using broker requests. A minute the tape cannot supply (for example while its recorder restarts) also falls back to a request, so no minute is lost.
+
+What differs in a snapshot built from the tape:
+- **Change in open interest** is worked out against the previous session's last open interest on the tape. It is blank when that is unknown, for example on the first day.
+- **PCR** adds up the strikes near the index. The broker's PCR adds up the whole chain, so the two numbers differ.`,
         },
         {
             id: 'quote-tape',
@@ -50,7 +56,15 @@ The table shows, per index: snapshots, days covered, strikes, last spot price, f
 
 **What is recorded.** Every quote tick (last price, bid/ask and their sizes, volume, open interest) of the NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY and SENSEX option chains: about 15 strikes either side of the index on the two nearest expiries, both calls and puts, plus the indices and India VIX. BANKEX is left out because its options do not trade. Recording runs on exchange days from a minute before the open to six minutes after the derivatives close (09:14–15:46), in production only. Each minute is packed and compressed to about a tenth of its size, and it is **kept forever**, because past ticks cannot be downloaded again.
 
-**Decision log.** The multi-leg engine also writes down each of its loops: when it looked, every price it read (and whether it came from the live feed or a broker request), and where each open structure stood afterwards. This is the record a backtest is checked against.
+**Prices for the trading engines.** The recorder also keeps the newest price of every recorded symbol in memory. Both engines read a price from their own live feed first. If that has nothing from the last 15 seconds, they use the recorder's price before asking the broker:
+- **Multi-leg engine:** for its marks and its one-second stop check. When building strikes for an entry, it also builds the option chain from the recorder at that moment, the same way a replay does. If the feed sends open interest for fewer than half the strikes, it uses the archive's chain instead.
+- **Single-leg engine:** when an open position's feed goes quiet, it keeps the position priced and its stops checked from the recorder (a second connection to the same exchange feed) instead of asking the broker every 5 seconds and closing the position after 2 minutes without a price. Entry checks also read the recorder before asking the broker. One check is unchanged: the entry price guard still compares against a fresh broker quote on purpose.
+
+This saves broker requests and makes entries faster. Because the recorder's prices are the tape, a replay sees the same prices. \`MULTILEG_TAPE_QUOTES=false\` or \`LIVE_TAPE_QUOTES=false\` on the server turns this off for one engine.
+
+**Open interest.** Whether the live feed sends open interest for options was unknown until the tape recorded a session. [Data health](#data-health) checks it after every session. If fewer than half the options carry open interest, it raises a warning. Nothing breaks: the engine keeps the archive's chain, and the archive keeps using broker requests.
+
+**Decision log.** The multi-leg engine also writes down each of its loops: when it looked, every price it read and where it came from (its live feed, the recorder, or a broker request), and where each open structure stood afterwards. This is the record a backtest is checked against. The tape cannot replace it: it records the market, while the log records what the engine did, including what the broker answered.
 
 **Live vs exact replay.** Every evening (with the nightly audit, 19:30 IST) the day's whole multi-leg book is replayed on the tape by the live engine itself, at the moments the live loop actually ran. Each deployment's trades are then compared with what live did:
 

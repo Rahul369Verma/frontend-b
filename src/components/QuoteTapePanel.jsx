@@ -64,6 +64,7 @@ export default function QuoteTapePanel() {
                         {rec && !rec.recording && <p className="text-fg-4 mb-1">{rec.reason || (rec.active ? 'starting…' : 'outside the recording window')}</p>}
                         {rec && <p className="text-fg-4 mb-1">{rec.window} · ATM ± {rec.strikes} strikes, two expiries, both rights · {num(rec.symbols)} symbols now</p>}
                         {rec?.metrics?.day && <p className="text-fg-3">Today: {num(rec.metrics.ticks)} ticks in {num(rec.metrics.chunks)} minute-chunks · {mb(rec.metrics.bytes)} compressed</p>}
+                        {rec?.board?.slots > 0 && <p className="text-fg-4" data-testid="tape-board">Quote board: the latest tick of {num(rec.board.slots)} symbols, read by the multileg engine before it asks the broker{rec.board.full ? <span className="text-warning"> · board full: {num(rec.board.full)} symbol(s) priced through the broker</span> : ''}</p>}
                         {(st.tape.days || []).length > 0 ? (
                             <ul className="space-y-0.5 text-fg-3 mt-1">
                                 {st.tape.days.map((d) => <li key={d._id}><span className="text-fg-2">{d._id}</span> · {num(d.ticks)} ticks · {mb(d.bytes)}{d.raw ? ` (${(d.raw / Math.max(1, d.bytes)).toFixed(1)}× compressed)` : ''}</li>)}

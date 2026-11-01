@@ -36,4 +36,12 @@ describe('Live quote tape panel', () => {
         expect(screen.getByText('no trades on either side')).toBeTruthy();
         expect(screen.getByText(/99.8% identical over 12,000 reads/)).toBeTruthy();
     });
+
+    it('recording: the quote board says how many symbols the multileg engine can read without asking the broker, and says when it is full', async () => {
+        const rec = { ...tape.recorder, recording: true, active: true, reason: null, symbols: 640, board: { slots: 640, capacity: 4096, full: 3 } };
+        axios.get.mockImplementation((url) => Promise.resolve({ data: /quote-tape/.test(url) ? { ...tape, recorder: rec } : { day: null, rows: [] } }));
+        render(<QuoteTapePanel />);
+        const line = await screen.findByTestId('tape-board');
+        expect(line.textContent).toMatch(/latest tick of 640 symbols, read by the multileg engine before it asks the broker · board full: 3 symbol\(s\) priced through the broker/);
+    });
 });

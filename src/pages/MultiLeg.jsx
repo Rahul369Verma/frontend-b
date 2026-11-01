@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
@@ -21,6 +21,8 @@ import { riskOpenMin, riskCloseMin } from '../config/marketSession.js';
 import { HELP } from '../data/multilegHelp';
 import { useChartTheme } from '../theme/chartTheme.js';
 import { pollInterval } from '../hooks/usePolling.js';
+import { useLiveRoom } from '../hooks/useLiveRoom.js';
+import { applyMarks, applyBook, applyPoll, stateChanged } from '../components/multileg/liveMerge.js';
 import useCollapse from '../hooks/useCollapse.js';
 import useResultsTable from '../components/multileg/useResultsTable.js';
 import ResultsDayCurves from '../components/multileg/ResultsDayCurves.jsx';
@@ -200,7 +202,7 @@ export default function MultiLeg() {
     const [resolution, setResolution] = useState('5');
     // Which option prices the backtest runs on: 'broker' = candles + the kernel's
     // synthetic Black-Scholes chain (any date range); 'archive' = the real
-    // option-chain archive (bid/ask every ~60 s, from Aug 2026).
+    // option-chain archive (bid/ask every ~60 s, from 15 Sep 2026 — the August recording was lost).
     const [chainSource, setChainSource] = useState('broker');
     const [archiveCov, setArchiveCov] = useState(null);
     const [running, setRunning] = useState(false);
@@ -702,13 +704,15 @@ export default function MultiLeg() {
     }, []);
     // Cards + book status. Returns its promise so pollInterval skips a tick while
     // the previous one is still in flight (no "(pending)" pile-up on slow links).
-    const refreshDeployCards = useCallback(() => Promise.allSettled([
-        axios.get(`${API_URL}/multileg/deployments`, { timeout: 20000 })
-            .then(r => { setMlDeps(r.data || { deployments: [], events: [] }); setLastPoll({ at: Date.now(), ok: true }); })
-            .catch(() => setLastPoll(p => ({ at: p.at, ok: false }))),
-        axios.get(`${API_URL}/multileg/status`, { timeout: 20000 })
-            .then(r => setMlStatus(r.data || null)).catch(() => {}),
-    ]), []);
+    const refreshDeployList = useCallback(() => axios.get(`${API_URL}/multileg/deployments`, { timeout: 20000 })
+        // a fresher streamed mark is kept (components/multileg/liveMerge.js)
+        .then(r => { const next = r.data || { deployments: [], events: [] }; setMlDeps(prev => ({ ...next, deployments: applyPoll(prev.deployments, next.deployments) })); setLastPoll({ at: Date.now(), ok: true }); })
+        .catch(() => setLastPoll(p => ({ at: p.at, ok: false }))), []);
+    // the engine's status (halt, loop liveness, limits) — small, and the "Loop stale" alarm reads its
+    // lastTickAt, so it keeps its 5 s poll even while the cards are streamed
+    const refreshMlStatus = useCallback(() => axios.get(`${API_URL}/multileg/status`, { timeout: 20000 })
+        .then(r => setMlStatus(r.data || null)).catch(() => {}), []);
+    const refreshDeployCards = useCallback(() => Promise.allSettled([refreshDeployList(), refreshMlStatus()]), [refreshDeployList, refreshMlStatus]);
     // "Structure trades" table: the 30 newest rows, only the columns it shows.
     // Was the server's default 200 FULL rows (≈4 MB on prod, 92% of it the
     // per-trade MTM path) every 5 s, sliced to 30 here.
@@ -734,14 +738,36 @@ export default function MultiLeg() {
         }
         return m;
     }, [twins]);
+    // LIVE STREAM (hooks/useLiveRoom.js, backend logic/services/liveStream.js): every open
+    // structure's mark each second, and a deployment's state the moment the engine saves it —
+    // an entry, an exit or a leg stop shows at once, not at the next poll.
+    const mlDepsRef = useRef(mlDeps.deployments);
+    useEffect(() => { mlDepsRef.current = mlDeps.deployments; }, [mlDeps.deployments]);
+    const onLiveMarks = useCallback(({ marks }) => {
+        setMlDeps(prev => { const deployments = applyMarks(prev.deployments, marks); return deployments === prev.deployments ? prev : { ...prev, deployments }; });
+        setLastPoll({ at: Date.now(), ok: true });
+    }, []);
+    const onLiveBook = useCallback(({ deployments: incoming }) => {
+        // a structure opened or closed: the trades table and the day's story move now too
+        if (stateChanged(mlDepsRef.current, incoming)) { refreshMlTrades(); refreshToday(); }
+        setMlDeps(prev => ({ ...prev, deployments: applyBook(prev.deployments, incoming) }));
+        setLastPoll({ at: Date.now(), ok: true });
+    }, [refreshMlTrades, refreshToday]);
+    const streaming = useLiveRoom('multileg', { multileg_marks: onLiveMarks, multileg_book: onLiveBook }, { enabled: mode === 'deploy' });
     useEffect(() => {
         if (mode !== 'deploy') return;
         refreshSaved(); refreshDeployments(); refreshTwins(); refreshToday();
-        const stopCards = pollInterval(refreshDeployCards, 5000);
         const stopToday = pollInterval(refreshToday, 30000);   // the day's story changes at entries and exits, not every tick
         const stopTrades = pollInterval(refreshMlTrades, 15000);   // trades change only when a structure exits
-        return () => { stopCards?.(); stopTrades?.(); stopToday?.(); };
-    }, [mode, refreshSaved, refreshDeployments, refreshDeployCards, refreshMlTrades, refreshTwins, refreshToday]);
+        return () => { stopTrades?.(); stopToday?.(); };
+    }, [mode, refreshSaved, refreshDeployments, refreshMlTrades, refreshTwins, refreshToday]);
+    // the cards: pushed while the stream is connected — a slow poll heals anything missed; 5 s when it is not
+    useEffect(() => {
+        if (mode !== 'deploy') return undefined;
+        const stopCards = pollInterval(refreshDeployList, streaming ? 60000 : 5000);
+        const stopStatus = pollInterval(refreshMlStatus, 5000);
+        return () => { stopCards?.(); stopStatus?.(); };
+    }, [mode, streaming, refreshDeployList, refreshMlStatus]);
 
     // Eligibility as a STABLE primitive — depending on mlDeps.deployments (a
     // fresh array identity every 5s poll) would re-create this effect every
@@ -1232,10 +1258,10 @@ export default function MultiLeg() {
 
     const ChainSourceInputs = (
         <div className="mb-3 text-xs">
-            <label className="text-fg-4" title="broker: candles from the broker + the kernel's synthetic Black-Scholes option prices (any dates; an upper bound for short premium). archive: the real option-chain archive — actual bid/ask every ~60 s, shorts sold at bid, stops and targets on the real path (from Aug 2026). quote tape: every live quote tick, and the live multileg engine itself replayed on them — its own 10-second loop, strike choice, stops and square-off, filling as live paper trades fill (from the day the tape was deployed).">Option prices
+            <label className="text-fg-4" title="broker: candles from the broker + the kernel's synthetic Black-Scholes option prices (any dates; an upper bound for short premium). archive: the real option-chain archive — actual bid/ask every ~60 s, shorts sold at bid, stops and targets on the real path (from 15 Sep 2026). quote tape: every live quote tick, and the live multileg engine itself replayed on them — its own 10-second loop and one-second stop check, strike choice, stops and square-off, filling as live paper trades fill (from the day the tape was deployed).">Option prices
                 <select value={chainSource} onChange={e => setChainSource(e.target.value)} className={inputCls}>
                     <option value="broker">Broker candles + model chain (any dates · synthetic option prices)</option>
-                    <option value="archive">Live option-chain archive (real bid/ask · from Aug 2026)</option>
+                    <option value="archive">Live option-chain archive (real bid/ask · from 15 Sep 2026)</option>
                     <option value="tape">Live engine replay (every tick from the quote tape · archive minutes before it)</option>
                 </select>
             </label>
@@ -1605,8 +1631,9 @@ export default function MultiLeg() {
         setResuming(true);
         try {
             const r = await axios.post(`${API_URL}/engine/resume`, { actor: 'multileg-ui' });
-            pushToast(r.data?.message || 'Engine resumed', 'success', 6000);
-            setHaltInfo(null);
+            // the server says when there was nothing to lift — never report that as a success
+            if (r.data?.changed === false) pushToast(r.data?.message || 'Nothing changed — the engine was not halted', 'info', 8000);
+            else { pushToast(r.data?.message || 'Engine resumed', 'success', 6000); setHaltInfo(null); }
         } catch (e) {
             pushToast(`Resume failed: ${e.response?.data?.error || e.message}`, 'error', 8000);
         } finally { setResuming(false); }
@@ -1639,8 +1666,17 @@ export default function MultiLeg() {
     const engineHealth = useMemo(() => {
         if (!mlStatus) return null;
         const tickAgeS = mlStatus.lastTickAt ? (Date.now() - new Date(mlStatus.lastTickAt).getTime()) / 1000 : null;
-        if (mlStatus.halted) return { level: 'halt', msg: 'ENGINE HALTED — no new multileg entries. Open structures are still managed.' };
-        if (!mlStatus.started) return { level: 'halt', msg: 'ENGINE STOPPED — deployments are not being managed.' };
+        // Off BY CONFIGURATION (DISABLE_TRADING_ENGINES on dev): not a fault, and nothing on this
+        // page can start it — Resume only lifts a halt. Say so instead of offering a dead button.
+        if (mlStatus.enabled === false) {
+            return { level: 'off', msg: `Trading engines are switched off on this server (${mlStatus.disabledBy || 'by configuration'}).`,
+                detail: 'Deployments are listed, but nothing here enters, manages or exits them. Backtests, the optimizer, Auto and charts work as usual. To run the engines, change that setting and restart the server.' };
+        }
+        if (mlStatus.halted) return { level: 'halt', msg: 'ENGINE HALTED — no new multileg entries. Open structures are still managed.', canResume: true };
+        if (!mlStatus.started) {
+            return { level: 'halt', msg: 'ENGINE NOT RUNNING — deployments are not being managed.',
+                detail: 'The engine did not start (see the server log). Resume only lifts a halt, so this needs a server restart.' };
+        }
         if (tickAgeS != null && tickAgeS > 40) return { level: 'stale', msg: `Loop stale — no engine tick for ${Math.round(tickAgeS)}s. Open structures may be UNMANAGED.` };
         if (lastPoll.at && !lastPoll.ok) return { level: 'conn', msg: 'Dashboard can’t reach the server — data may be stale (retrying).' };
         return null;
@@ -2444,10 +2480,12 @@ export default function MultiLeg() {
 
                     {/* Engine-health banner — a halted engine or stale loop means open structures may be unmanaged */}
                     {engineHealth && (
-                        <div className={`rounded-xl border px-4 py-2.5 mb-4 flex items-center gap-2 text-sm font-semibold ${engineHealth.level === 'halt' ? 'border-red-600 bg-red-950/40 text-danger' : engineHealth.level === 'stale' ? 'border-amber-500 bg-amber-950/40 text-warning' : 'border-line-2 bg-slate-900 text-fg-3'}`} role="alert">
-                            <span className="text-lg" aria-hidden="true">{engineHealth.level === 'halt' ? '⛔' : engineHealth.level === 'stale' ? '⚠️' : '📡'}</span>
+                        <div className={`rounded-xl border px-4 py-2.5 mb-4 flex items-center gap-2 text-sm font-semibold ${engineHealth.level === 'halt' ? 'border-red-600 bg-red-950/40 text-danger' : engineHealth.level === 'stale' ? 'border-amber-500 bg-amber-950/40 text-warning' : 'border-line-2 bg-slate-900 text-fg-3'}`}
+                            role={engineHealth.level === 'off' ? 'status' : 'alert'} data-testid="engine-health">
+                            <span className="text-lg" aria-hidden="true">{engineHealth.level === 'halt' ? '⛔' : engineHealth.level === 'stale' ? '⚠️' : engineHealth.level === 'off' ? '⏸️' : '📡'}</span>
                             <span className="flex-1">
                                 {engineHealth.msg}
+                                {engineHealth.detail && <span className="block font-normal text-2xs mt-0.5 opacity-90">{engineHealth.detail}</span>}
                                 {engineHealth.level === 'halt' && haltInfo && (
                                     <span className="block font-normal text-2xs mt-0.5 text-danger/90">
                                         {haltInfo.reason} · by {haltInfo.actor}
@@ -2459,7 +2497,7 @@ export default function MultiLeg() {
                                     </span>
                                 )}
                             </span>
-                            {engineHealth.level === 'halt' && (
+                            {engineHealth.canResume && (
                                 <button onClick={resumeEngine} disabled={resuming}
                                     title="Lift the halt now. Until this existed the only way to clear a halt was restarting the container."
                                     className="shrink-0 px-2.5 py-1 rounded border border-red-500 bg-red-900/50 hover:bg-red-800 text-danger text-xs font-semibold disabled:opacity-50">
@@ -2473,9 +2511,10 @@ export default function MultiLeg() {
                         title={<>Deployments ({visibleDeps.length}{visibleDeps.length !== (mlDeps.deployments || []).length ? `/${(mlDeps.deployments || []).length}` : ''})</>}
                         right={<div className="flex flex-wrap items-center gap-2 text-2xs">
                                 {/* freshness / connection */}
-                                <span className={`flex items-center gap-1 ${!lastPoll.ok ? 'text-danger' : 'text-fg-5'}`} title="Auto-refreshes every 5s">
+                                <span data-testid="deploy-freshness" className={`flex items-center gap-1 ${!lastPoll.ok ? 'text-danger' : 'text-fg-5'}`}
+                                    title={streaming ? 'Live: marks every second and each change as it happens, pushed by the server (checked against a full read every minute)' : 'Live stream not connected: refreshing every 5 s'}>
                                     <span className={`w-1.5 h-1.5 rounded-full ${!lastPoll.ok ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`} />
-                                    {lastPoll.at ? `updated ${istTime(lastPoll.at)}` : '…'}{!lastPoll.ok ? ' (offline)' : ''}
+                                    {streaming ? 'live · ' : ''}{lastPoll.at ? `updated ${istTime(lastPoll.at)}` : '…'}{!lastPoll.ok ? ' (offline)' : ''}
                                 </span>
                                 <select value={depFilter} onChange={e => setDepFilter(e.target.value)} className="bg-slate-800 border border-line rounded p-1 text-fg-3" aria-label="Filter deployments">
                                     <option value="all">All books</option><option value="LIVE">LIVE</option><option value="PAPER">PAPER</option><option value="open">Open only</option>

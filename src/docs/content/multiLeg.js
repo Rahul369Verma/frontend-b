@@ -33,7 +33,7 @@ A typical path: find an idea in **Scan** or **Auto**, check it in **Backtest**, 
 - **🧭 Market read** — reads the index's recent momentum and where option sellers are positioned, and suggests a preset. In testing, its *direction* call did not beat chance; use it as context, not as a signal.
 - **Structure** — the template (iron condor, short strangle, butterfly, …). The **Payoff at expiry** chart beside it shows its shape: profit (above zero) or loss (below) for each index level on expiry day, per unit.
 - **Symbol** — the index. **From / To** — the date range.
-- **Data source** — *Broker candles + model chain* prices options from a volatility model for any dates (estimated prices). *Live option-chain archive* uses real recorded bid/ask prices, but only exists from August 2026. Real prices are more trustworthy; model prices reach further back.
+- **Data source** — *Broker candles + model chain* prices options from a volatility model for any dates (estimated prices). *Live option-chain archive* uses real recorded bid/ask prices, but only exists from 15 Sep 2026 (the August recording was lost when the old server died). Real prices are more trustworthy; model prices reach further back.
 - **Validation (OOS)** — hold out the last 20–40% of the period as an [out-of-sample](glossary#oos) check. Always on in Auto.
 
 ### When to enter
@@ -113,8 +113,8 @@ The **Option prices** setting chooses what the backtest prices options with:
 | Choice | What it is | Dates |
 |---|---|---|
 | **Broker candles + model chain** | Index candles from the broker; option prices worked out with a formula. Read the result as the best case, not a forecast. | Any |
-| **Live option-chain archive** | Real bid/ask from the recorder, one snapshot a minute. Stops are checked at each snapshot. | From Aug 2026 |
-| **Live engine replay** | **The live engine itself**, run on recorded prices: the same 10-second loop, strike choice, stops, rupee stop, square-off and expiry handling. Fills follow the paper rule (last traded price), exactly as live paper trades do, so the result is what a paper deployment with these settings would have done. A second figure shows how much the same fills would have cost as real orders (sell at the bid, buy at the ask). Sessions on the [quote tape](data-manager#quote-tape) use every tick. Sessions before the tape use the archive, one quote a minute: the decisions are the same, but a stop that trips between two snapshots fills at the next one. The result says how many sessions came from each. | Tape: from the day it started recording. Archive: from Aug 2026 |
+| **Live option-chain archive** | Real bid/ask from the recorder, one snapshot a minute, checked by a separate copy of the exit rules: a quick first look, not what the live engine would have done. Stops are checked at each snapshot. | From 15 Sep 2026 |
+| **Live engine replay** | **The live engine itself**, run on recorded prices: the same 10-second loop and one-second stop check, strike choice, stops, rupee stop, square-off and expiry handling. Fills follow the paper rule (last traded price), exactly as live paper trades do, so the result is what a paper deployment with these settings would have done. A second figure shows how much the same fills would have cost as real orders (sell at the bid, buy at the ask). Sessions on the [quote tape](data-manager#quote-tape) use every tick. Sessions before the tape use the archive, one quote a minute: the decisions are the same, but a stop that trips between two snapshots fills at the next one. The result says how many sessions came from each. | Tape: from the day it started recording. Archive: from 15 Sep 2026 |
 
 In a live engine replay, a setting that calls an outside service (the AI zone review) cannot be replayed. It is switched off for the run, and the result says so. Each night the replay is checked against the day's live trades; the result is on the Data Manager page.
 
@@ -322,7 +322,7 @@ Deploying opens a **pre-deploy review** that checks the settings for mistakes. L
 | **Daily Loss Used** | The worse book's loss as a share of its daily cap. |
 | **Engine Status** | RUNNING, HALTED or STOPPED, with what is open. "⚠ loop Ns ago" means the engine's 10-second loop has not run recently. |
 
-A red **halt** banner explains why the engine stopped taking entries (reason, who, when) and whether it clears itself next trading day or needs **Resume engine**. An amber banner means the engine loop is stale — open structures may not be managed.`,
+A red **halt** banner explains why the engine stopped taking entries (reason, who, when) and whether it clears itself next trading day or needs **Resume engine**. An amber banner means the engine loop is stale — open structures may not be managed. A grey **engines switched off** banner means this server is configured not to run the trading engines (for example \`DISABLE_TRADING_ENGINES=true\` on a development copy). It is not a fault, and there is no Resume button for it: only changing that setting and restarting the server starts them. A red **engine not running** banner means the engine failed to start; that also needs a restart, because Resume only lifts a halt.`,
         },
         {
             id: 'deploy-signal-timeline',
@@ -346,7 +346,11 @@ Changes of state are also saved permanently in the journal, so "why didn't it tr
             md: `- **Filter** — all books, LIVE only, PAPER only, **Open only** (deployments holding a structure).
 - **Sort** — by state, MTM, total P&L or name.
 - **Stop all** stops every deployment from entering (open structures are still managed). **Close all** closes every open structure now. Both ask for confirmation; if any LIVE structure is open, Close all also makes you type **CLOSE ALL**.
-- **Book exposure** — the whole book's greeks against the engine's limits: Δ (₹ per index point), V (₹ per volatility point — **short vega** is what the vega cap limits) and Θ (₹ per day).`,
+- **Book exposure** — the whole book's greeks against the engine's limits: Δ (₹ per index point), V (₹ per volatility point — **short vega** is what the vega cap limits) and Θ (₹ per day).
+- **live · updated hh:mm:ss** — the cards are **pushed** by the server. Each open structure's MTM updates every second from live prices, and an entry, exit or leg stop shows the moment it happens. The page also re-reads everything once a minute, so nothing missed stays missed. Without the **live** label the push is not connected, and the cards refresh every 5 seconds as before.
+
+### How often the engine checks
+The engine runs its full check every **10 seconds** (every 4 seconds while a structure is entering or exiting). Between checks, **every second**, it prices each open structure from live prices and asks: would a stop, the profit target, the ₹ stop or a deadline fire on these prices? If so, it runs the full check **at once** instead of waiting up to 10 seconds. A stop therefore acts within about a second, closer to its trigger price. The full check decides exactly as before; the one-second look only decides **when** to check. After waking for a structure, the engine waits 4 seconds before waking for it again, so a failed buy-back is retried at the normal fast pace. Backtests on the quote tape do the same, so they decide when live would.`,
         },
         {
             id: 'deployment-card',
@@ -368,7 +372,7 @@ For time-entry deployments the card says when the next entry arms; a **stood dow
 
 ### Editing a deployment
 **✏️ Edit** loads the deployment's own settings into the builder. Change what you need (and backtest it if you like), then press **Save to deployment**. Before anything is saved you see every change, its old and new value, and when it takes effect:
-- **Exit settings** — stops (leg stop, structure stop, rupee stop), profit target, square-off, hold days, days-to-expiry exit — act on an **open structure at its next check** (about 10 seconds).
+- **Exit settings** — stops (leg stop, structure stop, rupee stop), profit target, square-off, hold days, days-to-expiry exit — act on an **open structure at its next check** (within about 10 seconds; at once if one would fire).
 - **Everything else** — entry time and days, strikes, size, filters — acts from the **next entry**.
 
 Not editable here: the structure, the symbol, the entry trigger (time or signal) and the trading mode — those make it a different strategy (save and deploy it) or belong to the go-live gate. A **LIVE** deployment can be sized **down** but not up (demote it, edit, promote it again). A structure with unlimited loss must keep **both** a leg stop and a structure stop. Every edit is written to the deployment's journal; the saved strategy it came from is not changed.`,
