@@ -4,7 +4,8 @@ import axios from 'axios';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceDot, ReferenceArea, Legend,
 } from 'recharts';
-import { Layers, Play, Pause, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp, Wallet, ChevronDown, ChevronRight, Pencil, History, Copy } from 'lucide-react';
+import { Layers, Play, Pause, SlidersHorizontal, RefreshCw, Radar, Zap, FlaskConical, Rocket, Save, Trash2, Square, StopCircle, Activity, TrendingUp, Wallet, ChevronDown, ChevronRight, Pencil, History, Copy, GitCompareArrows } from 'lucide-react';
+import CompareDeployments from '../components/multileg/compare/CompareDeployments.jsx';
 import StructureAttributionPanel from '../components/viz/StructureAttributionPanel';
 import StrategyBuilder from '../components/multileg/StrategyBuilder';
 import ResultsAnalytics from '../components/multileg/ResultsAnalytics';
@@ -213,7 +214,7 @@ export default function MultiLeg() {
     // real tab list on read, so a renamed or removed tab can never leave the
     // page blank with nothing rendered.
     const [storedTab, setStoredTab] = useLocalStorage('ml.activeTab', 'builder');
-    const TAB_IDS = ['builder', 'backtest', 'sweep', 'scan', 'auto', 'deploy', 'results'];
+    const TAB_IDS = ['builder', 'backtest', 'sweep', 'scan', 'auto', 'deploy', 'results', 'compare'];
     // A link may name the tab — the results hub sends `/multi-leg?tab=results`.
     // The URL wins on arrival, memory wins otherwise; picking another tab
     // clears the URL's say so the new choice sticks across a refresh.
@@ -1647,6 +1648,7 @@ export default function MultiLeg() {
         { id: 'auto', label: 'Auto ⚡', icon: Zap, desc: 'The full race: strategies × params × structures × symbols' },
         { id: 'deploy', label: 'Deploy', icon: Rocket, desc: 'Saved strategies → PAPER or LIVE structure runners on the multileg engine' },
         { id: 'results', label: 'Results', icon: TrendingUp, desc: 'Live/paper deployment results — KPIs, equity curve, every structure round-trip' },
+        { id: 'compare', label: 'Compare', icon: GitCompareArrows, desc: 'Deployed strategies side by side — results, settings, curves and how they behave together' },
     ];
 
     // Deployments filtered + sorted for the panel (LIVE always first — real money on top).
@@ -3193,6 +3195,8 @@ export default function MultiLeg() {
                     </div>
                 </>
             )}
+
+            {mode === 'compare' && <CompareDeployments />}
 
             {mode === 'results' && (
                 <div className="space-y-4">

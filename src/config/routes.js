@@ -14,6 +14,7 @@ export const ROUTES = Object.freeze({
     livePortfolioMulti: '/live-portfolio?view=multi',
     multiLeg: '/multi-leg',
     multiLegResults: '/multi-leg?tab=results',
+    multiLegCompare: '/multi-leg?tab=compare',
     multiLegDeploy: '/multi-leg?tab=deploy',
     backtest: '/backtest',
     risk: '/risk',

@@ -41,6 +41,8 @@ const MAX_COMPARE = 4;
 const DASHES = ['0', '6 3', '2 3', '10 4 2 4'];
 
 const deploymentHref = (id) => `${ROUTES.multiLeg}?tab=results&deployment=${encodeURIComponent(String(id))}`;
+/** The Compare tab with these deployments chosen (the full side-by-side: settings, breakdowns, correlation). */
+const compareHref = (ids) => `${ROUTES.multiLegCompare}&cmp=${ids.map((x) => encodeURIComponent(String(x))).join(',')}`;
 
 const VERDICT = {
     'no-trades': { label: 'No trades yet', tone: 'neutral', help: 'Nothing booked in this window.' },
@@ -178,7 +180,11 @@ function ComparePanel({ rows, onClear }) {
         <div className="mt-3 rounded-lg border border-line bg-slate-900/30 p-3">
             <div className="flex items-center gap-2 mb-2">
                 <h3 className="text-xs font-semibold text-fg-2">Comparing {rows.length} strategies — cumulative net by exit time</h3>
-                <button type="button" onClick={onClear} className="ml-auto text-2xs px-2 py-0.5 rounded border border-line-2 bg-slate-800 text-fg-4 hover:text-fg">Clear</button>
+                {rows.some((r) => r.deploymentId) && (
+                    <Link to={compareHref(rows.filter((r) => r.deploymentId).map((r) => r.deploymentId))} className="ml-auto text-2xs text-primary-ink hover:underline"
+                        title="Open them on the Compare tab: settings side by side, breakdowns, correlation and the combined book">Full comparison →</Link>
+                )}
+                <button type="button" onClick={onClear} className={`${rows.some((r) => r.deploymentId) ? '' : 'ml-auto '}text-2xs px-2 py-0.5 rounded border border-line-2 bg-slate-800 text-fg-4 hover:text-fg`}>Clear</button>
             </div>
             {data.length < 2 ? <div className="text-2xs text-fg-5">Not enough booked trades to draw a line yet.</div> : (
                 <ZoomableChart data={data} height={240}>

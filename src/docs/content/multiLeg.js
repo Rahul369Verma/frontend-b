@@ -533,6 +533,38 @@ A credit structure's target is a **% of the credit** it took in (a debit structu
 - Nothing here changes the deployment: use **Edit** to change its target.`,
         },
         {
+            id: 'compare-tab',
+            title: 'Compare tab',
+            md: `Deployed strategies side by side: up to **six** at a time, running, stopped, or deleted but with trades. Nothing on this tab changes a deployment.
+
+### Choosing
+**Choose deployments** opens a searchable list (name, structure, index, mode), each with its net, trades and win rate in the window. **Quick picks**: the top four by net, every LIVE deployment, every deployment with the same structure as the first chosen, or on the same index. Each one gets a **colour** that it keeps in every table and chart on the tab. The choice is kept in the address (\`?tab=compare&cmp=…\`), so a comparison can be bookmarked or shared, and in this browser across a refresh. On the Results tab's scorecard, pick strategies to compare and press **Full comparison →** to open them here.
+
+The **window** (30 days, 90 days, all time) counts trades by exit date, as on the Results tab. Figures are after charges, and quarantined trades are left out. **CSV** downloads the results and settings of the chosen deployments.
+
+### Cards
+One per deployment: structure, index, mode, status, an open position with its mark, the legs, a small equity curve, net, per trade, trades and win rate, and its verdict against its backtest. **Leads on N of M** counts the rows of the results table where it is the best (a trophy marks the leader). An open position whose last mark is more than 30 minutes old says how old it is (*mark 12d old*), in amber: with the engines off, or a deployment stopped while open, the stored mark can be days old and is not a current price. The list of deployments to choose from flags these as *open · old mark*.
+
+On a narrow screen, or at a large Text Size, the tables below switch to one block per row with a line per deployment, so nothing has to be scrolled sideways.
+
+### Results side by side
+The Results tab's own figures, grouped: returns (net, per trade, versus the backtest, return on margin, profit factor, t-stat), hit rate, risk (max drawdown, recovery, consistency, the typical worst point while open, profit handed back), costs (charges **per trade**, so a deployment that traded less does not win by default; charges as a share of gross profit) and activity. In each row that can be ranked, the **best** is marked ▲ and the **worst** ▼; rows such as trade count or margin are not ranked. The small bars compare sizes within a row. Hover a label for what it measures. With fewer than 20 trades a lead can be luck, and the table says so.
+
+### Equity, drawdown and daily P&L
+The curves overlaid by trading day, in each deployment's colour: **Equity**, **Drawdown**, **Daily P&L** and **P&L distribution** (how many trades fell in each rupee bucket, one set of buckets for all, with each one's percentiles below). **All of them as one book** adds the dashed curve of their sum. Every chart zooms, pans, hides a series from its legend and exports, like every chart in the app.
+
+### Deployed settings
+Every setting as the engine **runs** it: the structure's defaults, then the deployment's own values (the same merge the engine makes). A dot ● marks a value the deployment changed from its structure's default (hover for the default). **Only the differences** (on by default) hides settings that are the same everywhere, and the header counts how many differ. A dash means the setting is not set and the engine's own fallback applies. The top rows show the structure, legs, index, entry trigger (time, or a signal strategy), mode and status, when it was deployed and how often it was edited.
+
+### Where the money came from
+A grid by **exit reason**, **entry hour** (IST) or **weekday**: each cell has the net, the trades and the win rate, shaded by the size of the gain or loss. Hover for per trade.
+
+### Together
+- **As one book**: the net, the worst drawdown of the combined daily P&L, and their drawdowns added up. When the combined drawdown is well below the sum, their bad days did not coincide: running them together smoothed the curve.
+- **Correlation** of daily P&L over the days both traded, for each pair: near +1 they win and lose together (no protection), near 0 or below they offset. A pair needs at least five shared trading days for a number; otherwise the cell shows how many days there were.
+- **Head to head**: on the days both traded, how often each made more, and their net on those days.`,
+        },
+        {
             id: 'history',
             title: 'History and restore (every strategy and deployment)',
             md: `Every saved strategy and every deployment, multileg and single-leg, keeps its **versions**. Each change to its settings is recorded as a version, saying what changed (\`leg_sl_x: 1.4 → 1.5\`) and when. That includes the builder, Edit, the rupee-stop and lots buttons, the go-live gate and the optimizer's *Save as strategy*.
