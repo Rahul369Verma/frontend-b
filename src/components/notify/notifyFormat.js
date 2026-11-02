@@ -83,7 +83,8 @@ export function badgeOf(summary) {
  */
 export const WATCHED = Object.freeze([
     { what: 'AI not answering', when: 'Every 6 h (sample prompt) and whenever a live AI review fails', severity: 'warning', note: 'Urgent if entry confirmation is set to fail closed (entries blocked).' },
-    { what: 'Broker not logged in', when: 'During market hours', severity: 'critical', note: 'No orders, prices may stop.' },
+    { what: 'Broker not logged in', when: 'During market hours', severity: 'critical', note: 'No orders, prices may stop. 🚨 Urgent alerts chat when a LIVE deployment is on.' },
+    { what: 'A LIVE position needs a person', when: 'The moment an engine says so', severity: 'critical', note: '🚨 Urgent alerts chat: a failed or stuck exit/unwind, a LIVE entry failed or refused (e.g. funds), a broker stop rejected or missing, a naked short, recovery blocked. PAPER ones stay in the main chat.' },
     { what: 'Live price feed disconnected', when: 'During market hours, 2 checks in a row', severity: 'warning' },
     { what: 'Single-leg engine halted', when: 'Any time (e.g. the daily-loss stop)', severity: 'critical', note: 'Shows why and who halted it.' },
     { what: 'Multi-leg engine loop stopped', when: 'During market hours, no tick for 3 min', severity: 'critical', note: 'Open structures are not being managed.' },
@@ -91,9 +92,10 @@ export const WATCHED = Object.freeze([
     { what: 'Direction gate blocked a trade', when: 'Each enforced block', severity: 'info', note: 'Platform only unless Notices are sent to Telegram.' },
     { what: 'Exchange contract data out of date / missing', when: 'Every 2 min', severity: 'warning', note: 'Fix: make instruments-calendar.' },
     { what: 'Server disk almost full', when: 'Below 10% free (urgent below 5%)', severity: 'warning' },
-    { what: 'Database unreachable', when: 'Any time', severity: 'critical', note: 'Sent to Telegram directly (it cannot be stored), recorded once back.' },
+    { what: 'Database unreachable', when: 'Any time', severity: 'critical', note: 'Sent to the urgent alerts chat directly (it cannot be stored), recorded once back.' },
     { what: 'AI health check not running', when: 'No check for 12 h', severity: 'warning' },
     { what: 'Telegram not configured', when: 'Any time', severity: 'info' },
+    { what: 'Urgent alerts chat not set / refusing', when: 'Every 2 min', severity: 'warning', note: 'Not set: a notice (urgent alerts go to the main chat). Refusing a message: a warning, and that alert goes to the main chat instead.' },
     { what: 'Nightly audit findings', when: 'Every weekday at 19:30 IST (the server runs it)', severity: 'warning', note: 'Expiry/symbol drift, spreads, charges, open books, go-live gate, multi-leg contracts. Clears when a later run no longer finds it.' },
     { what: 'Nightly audit failed or did not run', when: 'A failed run, or no run an hour after 19:30 on a weekday', severity: 'warning' },
 ]);
