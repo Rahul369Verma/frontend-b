@@ -393,9 +393,10 @@ export default function SavedStrategiesPanel({
                             title={sort.dir === 'asc' ? 'Ascending — click to reverse' : 'Descending — click to reverse'}>
                             {sort.dir === 'asc' ? <ArrowUpNarrowWide className="w-3.5 h-3.5" aria-hidden="true" /> : <ArrowDownWideNarrow className="w-3.5 h-3.5" aria-hidden="true" />}
                         </button>
-                        <label className="flex items-center gap-1.5 text-2xs text-fg-4">
+                        <label className="flex items-center gap-1.5 text-2xs text-fg-4"
+                            title="Lots for the next deployment. At most what one order can carry (the exchange freeze limit, e.g. 27 on NIFTY); more is refused with the reason. Change a running one with 📦 lots on its card.">
                             Deploy lots
-                            <input type="number" min={1} value={deployLots} onChange={e => onDeployLots(Math.max(1, Number(e.target.value) || 1))}
+                            <input type="number" min={1} max={100} value={deployLots} onChange={e => onDeployLots(Math.min(100, Math.max(1, Math.floor(Number(e.target.value)) || 1)))}
                                 className="w-16 h-8 bg-slate-800 border border-line rounded-md px-2 text-xs text-fg-2" />
                         </label>
                     </div>

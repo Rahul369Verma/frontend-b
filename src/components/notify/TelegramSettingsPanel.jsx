@@ -24,8 +24,8 @@ const r0 = (r) => {
 const when = (iso) => (iso ? new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '');
 
 /**
- * The urgent-alerts chat (2-Nov-2026): whether TELEGRAM_ALERTS_CHAT_ID is set, whether the last
- * urgent alert got there, the ids of chats that added the bot (to set it), and a test that says
+ * The alerts chat (2-Nov-2026; every alert since 5-Nov): whether TELEGRAM_ALERTS_CHAT_ID is set,
+ * whether the last alert got there, the ids of chats that added the bot (to set it), and a test that says
  * where the message actually went.
  */
 function AlertsChat({ a, busy, onTest, result, onRefresh }) {
@@ -33,12 +33,12 @@ function AlertsChat({ a, busy, onTest, result, onRefresh }) {
     const failing = a.lastErrorAt && (!a.lastOkAt || a.lastOkAt < a.lastErrorAt);
     return (
         <div className="rounded border border-line p-2 space-y-1.5" data-testid="alerts-chat">
-            <div className="text-fg-2 font-medium">🚨 Urgent alerts chat</div>
-            <p className="text-3xs text-fg-5">A LIVE position that needs you — an exit or unwind that failed or is stuck, a LIVE entry failed or refused (e.g. funds), a broker stop rejected or missing, the broker logged out with LIVE on — is headed &quot;🚨 ACTION NEEDED&quot;, repeated every hour until acknowledged, and sent to its own chat.</p>
+            <div className="text-fg-2 font-medium">🚨 Alerts chat</div>
+            <p className="text-3xs text-fg-5">Every alert goes here: halts, failed or stuck orders, refused entries (LIVE and PAPER), broker logged out, data feed lost, errors, warnings such as AI not answering. When a LIVE position needs you it is headed &quot;🚨 ACTION NEEDED&quot; and repeated every hour until acknowledged. Routine messages — entries, exits, heartbeat, daily logs, slowness — stay in the main chat.</p>
             {a.configured
-                ? <p className="text-success">Set: urgent alerts go to chat <span className="font-mono">{a.chatId}</span>{a.lastOkAt ? ` · last delivered ${when(a.lastOkAt)}` : ' · none sent since the server started'}.</p>
-                : <p className="text-warning">Not set{a.sameAsMain ? ' (TELEGRAM_ALERTS_CHAT_ID is the main chat)' : ''}: urgent alerts go to the main chat, among the routine messages.</p>}
-            {failing && <p className="text-danger">The alerts chat refused the last urgent alert at {when(a.lastErrorAt)}: {a.lastError}. It was sent to the main chat instead.</p>}
+                ? <p className="text-success">Set: alerts go to chat <span className="font-mono">{a.chatId}</span>{a.lastOkAt ? ` · last delivered ${when(a.lastOkAt)}` : ' · none sent since the server started'}.</p>
+                : <p className="text-warning">Not set{a.sameAsMain ? ' (TELEGRAM_ALERTS_CHAT_ID is the main chat)' : ''}: alerts go to the main chat, among the routine messages.</p>}
+            {failing && <p className="text-danger">The alerts chat refused the last alert at {when(a.lastErrorAt)}: {a.lastError}. It was sent to the main chat instead.</p>}
             {a.migratedTo && <p className="text-warning">The group became a supergroup; its id is now <span className="font-mono">{a.migratedTo}</span>. Set TELEGRAM_ALERTS_CHAT_ID={a.migratedTo} on the server.</p>}
             {!a.configured && (
                 <ol className="list-decimal pl-4 text-3xs text-fg-4 space-y-0.5">

@@ -246,6 +246,22 @@ In Results, a round trip that was **unwound** (its entry could not complete) say
 Expiry days need more margin: the exchange charges extra on short options expiring that day. *Unavailable* means the calculator did not answer; no estimate is shown in its place. The panel asks the broker when the tab opens and on **Refresh**, never in the background, and at the lowest priority so it never delays a trading request. PAPER books use no account margin and are not counted.`,
         },
         {
+            id: 'deploy-lots',
+            title: 'Deploy · Lots',
+            where: 'Deployment card → 📦 lots',
+            md: `How many lots a deployment trades. Each leg's quantity is *lot size × lots × the leg's ratio*. Margin, premium, P&L and charges all scale with it. **📦 lots** on a card opens the sizing dialog; the **Deploy lots** box in Saved strategies sets the size of a new deployment.
+
+Before you save, the dialog shows:
+- **Units per leg.** NIFTY's lot is 65, so 3 lots is 195 units in each leg's order.
+- **The most lots.** The exchange rejects an order above its **freeze quantity**, and the app does not split orders. A structure can therefore carry at most *freeze ÷ (lot × largest leg ratio)* lots: 27 for NIFTY (1,755 ÷ 65) and 50 for SENSEX (1,000 ÷ 20). A template with a 2× leg gets half that. The freeze quantity is a market fact, synced from the broker instrument files (see Market rules). Deploying or saving more lots than that is refused, and so is a live entry. A backtest takes no trade at that size and counts it under *skipped*.
+- **Margin** for the new size, from the broker's calculator for the legs it would enter now, against what the account has available (LIVE).
+- **₹ limits** (the rupee stop, the daily loss cap, max vega at entry) apply to the **whole structure**. With the box ticked they scale with the lots, so 3 lots behave as 3 copies of the 1-lot strategy. Unticked, the same rupees act at a smaller loss per lot.
+
+When it acts: from the **next entry**. An open structure keeps the size it entered with.
+
+**LIVE.** A bigger LIVE size needs the deployment's name typed, because more real money is at stake; a smaller one does not. While its **go-live canary** is running, a LIVE deployment trades the canary's size (1 lot) until its live trades pass and you lift the cap on the Go-Live page. After that it trades the size set here. A deployment that sizes by risk (*size mode "risk"*) takes its lots from *risk_per_trade* at each entry, so this number is not used.`,
+        },
+        {
             id: 'deploy-broker-orders',
             title: 'Deploy · Broker orders today',
             where: 'Deploy tab, above the deployments',

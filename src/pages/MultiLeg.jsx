@@ -45,6 +45,7 @@ import { failedLegRows } from '../components/multileg/tradeStoryFormat.js';
 import EngineJournal from '../components/multileg/EngineJournal';
 import RegimePanel from '../components/multileg/RegimePanel';
 import { PromoteDialog } from '../components/golive/goLiveShared.jsx';
+import LotsDialog from '../components/multileg/LotsDialog.jsx';
 import DocLink from '../components/DocLink.jsx';
 import NewTabLink from '../components/NewTabLink.jsx';
 
@@ -295,6 +296,8 @@ export default function MultiLeg() {
     const [saveName, setSaveName] = useState('');
     const [saveMsg, setSaveMsg] = useState(null);
     const [deployLots, setDeployLots] = useState(1);
+    // the Lots dialog for one deployment (4-Nov-2026: multi-lot deployments)
+    const [lotsFor, setLotsFor] = useState(null);
     const [mlDeps, setMlDeps] = useState({ deployments: [], events: [] });
     // { id, n } — focus the engine journal on one deployment (n re-triggers the same id)
     const [journalFocus, setJournalFocus] = useState(null);
@@ -1690,6 +1693,10 @@ export default function MultiLeg() {
             <ConfirmModal open={!!confirmState} {...(confirmState || {})}
                 onConfirm={() => { const c = confirmState; setConfirmState(null); c?.onConfirm?.(); }}
                 onCancel={() => setConfirmState(null)} />
+            {lotsFor && (
+                <LotsDialog dep={lotsFor} onClose={() => setLotsFor(null)}
+                    onSaved={(r, n) => { pushToast(`${lotsFor.name}: ${n} lot${n === 1 ? '' : 's'} from the next entry${r && Array.isArray(r.notes) && r.notes.length ? ` — ${r.notes[0]}` : ''}`, 'success', 9000); setLotsFor(null); refreshDeployments(); }} />
+            )}
             <PreviewModal preview={livePreview} deployLots={deployLots} onCancel={() => setLivePreview(null)}
                 onConfirm={() => { const s = livePreview.strategy; setLivePreview(null); doDeploy(s, 'LIVE'); }} />
             <PromoteDialog open={!!promote} kind="multileg" id={promote?.id} name={promote?.name}
@@ -2726,8 +2733,14 @@ export default function MultiLeg() {
                                                 </div>
                                             </div>
                                             <div className="text-2xs text-fg-4 mb-1 flex flex-wrap items-center gap-x-1">
-                                                <span>{templates.find(t => t.key === d.template)?.name || d.template} · {shortSym(d.symbol)} · {d.lots} lot(s)
-                                                    {d.entry_mode === 'signal' ? ` · signal: ${d.signal_strategy}` : ' · time entry'}</span>
+                                                <span>{templates.find(t => t.key === d.template)?.name || d.template} · {shortSym(d.symbol)} ·{' '}</span>
+                                                <button type="button" onClick={() => setLotsFor(d)}
+                                                    className="text-3xs px-1.5 py-0.5 rounded border border-line-2 text-fg-3 hover:text-fg"
+                                                    aria-label={`Lots for ${d.name}: ${d.lots} — change`}
+                                                    title="How many lots this deployment trades: units per leg, the most one order can carry, margin, and its ₹ limits">
+                                                    📦 {d.lots} lot{Number(d.lots) === 1 ? '' : 's'}
+                                                </button>
+                                                <span>{d.entry_mode === 'signal' ? ` · signal: ${d.signal_strategy}` : ' · time entry'}</span>
                                                 {feed && d.entry_mode === 'signal' && !open && (
                                                     <span className={`ml-1 ${feed.ok ? 'text-success' : 'text-warning'}`} title={`Feed: ${feed.note}${feed.bars != null ? ` · ${feed.bars} bars` : ''} · last check ${istTimeSec(feed.at)} IST`}>
                                                         ● {feed.ok ? 'feed ok' : feed.note}

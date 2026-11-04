@@ -61,16 +61,16 @@ Each urgent finding and warning is also a notification (and goes to Telegram). I
 
 Messages carry the environment tag — **[PRODUCTION]** or **[DEV]**. The development and production servers share one Telegram chat, so on the development server Telegram starts **off**.
 
-**🚨 Urgent alerts chat.** When a LIVE position needs you, the alert is headed **🚨 ACTION NEEDED** and goes to a chat of its own. Examples: an exit or unwind failed or is stuck, a LIVE entry failed or was refused (for example, not enough funds), a broker stop was rejected or is missing, or the broker logged out while a LIVE deployment is on. It repeats every hour until you acknowledge it. The same alarm on a PAPER deployment stays in the main chat.
+**🚨 Alerts chat.** Every alert goes to a chat of its own, so it is never buried among routine messages. That means halts, failed or stuck orders, refused entries (LIVE and PAPER), the broker logged out, a lost data feed, engine errors, and warnings such as the AI not answering. When a LIVE position needs you, the alert is headed **🚨 ACTION NEEDED** and repeats every hour until you acknowledge it. Examples: an exit or unwind failed or is stuck, a LIVE entry failed or was refused (for example, not enough funds), or a broker stop was rejected or is missing. Routine messages stay in the main chat: entries, exits, the heartbeat, daily logs, and slowness warnings.
 
-To set up the urgent alerts chat:
+To set up the alerts chat:
 
 1. Create a Telegram group and add the bot to it.
 2. Open **Telegram** on this page: the group is listed with its id.
 3. Put that id in \`TELEGRAM_ALERTS_CHAT_ID\` on the server. Recreate the container, because a restart does not re-read the env files.
 4. Press **Test the alerts chat**. The answer says which chat the message reached.
 
-Until it is set, urgent alerts go to the main chat. If the alerts chat refuses a message (the bot is not in it, or the id is wrong), that alert goes to the main chat and says why. The platform also raises a warning.`,
+Until it is set, alerts go to the main chat. If the alerts chat refuses a message (the bot is not in it, or the id is wrong), that alert goes to the main chat and says why. The platform also raises a warning.`,
         },
         {
             id: 'watched',
