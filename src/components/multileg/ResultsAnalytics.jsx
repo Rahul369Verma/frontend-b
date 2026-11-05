@@ -66,9 +66,14 @@ function FigureCells({ r }) {
     return (
         <>
             <td className="text-right">{fmt(r.trades)}</td>
+            <td className="text-right text-fg-4" title={num(r.lotsN) != null && num(r.lotsN) < num(r.trades) ? `lots recorded on ${r.lotsN} of ${r.trades} trades` : 'Lots traded across these trades'}>
+                {num(r.lots) == null || num(r.lotsN) === 0 ? '—' : fmt(r.lots)}
+                {num(r.lotsN) != null && num(r.lotsN) > 0 && num(r.lotsN) < num(r.trades) && <span className="text-4xs text-warning"> {r.lotsN}/{r.trades}</span>}
+            </td>
             <td className="text-right text-fg-4">{num(r.winRate) == null ? '—' : `${fmt(r.winRate)}%`}</td>
             <td className={`text-right font-semibold ${num(r.net) > 0 ? 'text-success' : num(r.net) < 0 ? 'text-danger' : 'text-fg-4'}`}>{rup(r.net)}</td>
             <td className={`text-right ${num(r.perTrade) > 0 ? 'text-success' : num(r.perTrade) < 0 ? 'text-danger' : 'text-fg-4'}`}>{rup(r.perTrade)}</td>
+            <td className={`text-right ${tone(r.perLot)}`}>{num(r.perLot) == null ? '—' : rup(r.perLot)}</td>
             <td className="text-right text-fg-4" title={marginCoverage(r)}>
                 {num(r.avgMargin) == null ? '—' : rup(r.avgMargin)}
                 {num(r.marginN) != null && num(r.marginN) < num(r.trades) && <span className="text-4xs text-warning"> {r.marginN}/{r.trades}</span>}
@@ -101,15 +106,28 @@ const DAY_OPTS = [
 const COLS = [
     { k: 'key', label: 'Key', align: 'left', help: 'The bucket this row groups trades by' },
     { k: 'trades', label: 'Trades', align: 'right', help: 'Booked round-trips that fall in this row' },
+    { k: 'lots', label: 'Lots', align: 'right', help: "Lots traded across this row's trades (a 2-lot trade counts 2)" },
     { k: 'winRate', label: 'Win%', align: 'right', help: "Share of this row's trades that made money after charges (net > ₹0). A trade that ended at exactly ₹0 counts as not a win" },
     { k: 'net', label: 'Net ₹', align: 'right', help: "Sum of this row's trades' net P&L, after charges" },
     { k: 'perTrade', label: 'Per trade ₹', align: 'right', help: 'Net ÷ trades — the average result per trade, scratches included' },
+    { k: 'perLot', label: 'Per lot ₹', align: 'right', help: 'Net ÷ lots traded — compares trades of different sizes; a 2-lot trade earns twice a 1-lot one' },
     { k: 'avgMargin', label: 'Avg margin ₹', align: 'right', help: 'Average ₹ blocked per structure at entry' },
     { k: 'romPct', label: 'Per trade ÷ margin', align: 'right', help: 'Σ net ÷ Σ margin over trades that recorded a margin — return on the capital tied up' },
     { k: 'costPct', label: 'Costs ÷ gross', align: 'right', help: 'Charges as a share of gross (pre-cost) profit. Over 100% means costs ate the whole edge; — means the row lost money before costs' },
 ];
 
 const tone = (v) => (num(v) > 0 ? 'text-success' : num(v) < 0 ? 'text-danger' : 'text-fg-4');
+// the size behind the ₹: " · 14 lots (1–2 a trade)" — every ₹ figure is for whole structures
+const lotsSub = (sm) => {
+    if (!num(sm.lotsN)) return '';
+    const range = num(sm.lotsMin) != null && sm.lotsMin !== sm.lotsMax ? ` (${sm.lotsMin}–${sm.lotsMax} a trade)` : num(sm.lotsMin) != null ? ` (${sm.lotsMin} a trade)` : '';
+    return ` · ${fmt(sm.lotsTraded)} lot${num(sm.lotsTraded) === 1 ? '' : 's'}${range}`;
+};
+const lotsTitle = (sm) => [
+    `Lots across these trades${num(sm.lotsMin) != null ? `: ${sm.lotsMin === sm.lotsMax ? `${sm.lotsMin} a trade` : `${sm.lotsMin}–${sm.lotsMax} a trade`}` : ''}.`,
+    num(sm.lotsN) != null && num(sm.lotsN) < num(sm.trades) ? `Recorded on ${sm.lotsN} of ${sm.trades} trades.` : null,
+    num(sm.lotsCanaryN) ? `${sm.lotsCanaryN} trade(s) traded fewer lots than set: the go-live canary capped them.` : null,
+].filter(Boolean).join(' ');
 // Margin can be missing on older trades. A row that is only partly covered
 // says so, instead of passing for a figure over all of its trades.
 const marginCoverage = (r) => (num(r.marginN) != null && num(r.marginN) < num(r.trades)
@@ -307,7 +325,7 @@ export default function ResultsAnalytics({
                         <>
                             {/* the five that answer "is this book working?" */}
                             <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
-                                <HeroTile label="Net P&L" value={rup(summary.netPnl)} tone={num(summary.netPnl)} sub={`${fmt(summary.trades)} trades · ${fmt(summary.tradingDays)} exit days`} />
+                                <HeroTile label="Net P&L" value={rup(summary.netPnl)} tone={num(summary.netPnl)} sub={`${fmt(summary.trades)} trades${lotsSub(summary)} · ${fmt(summary.tradingDays)} exit days`} />
                                 <HeroTile label="Per trade" value={rup(summary.perTrade)} tone={num(summary.perTrade)}
                                     title="Total net ÷ number of trades — the true mean, scratches included. Deliberately NOT winRate×avgWin + (1−winRate)×avgLoss, which counts every ₹0 scratch as an average loss." />
                                 <HeroTile label="Win rate" value={num(summary.winRate) == null ? '—' : `${fmt(summary.winRate)}%`}
@@ -343,6 +361,11 @@ export default function ResultsAnalytics({
                                         <Tile label="Avg hold" value={num(summary.avgHoldHours) != null ? `${fmt(summary.avgHoldHours, 1)} h` : '—'}
                                             title="Mean time a structure stayed open, in hours." />
                                         <Tile label="Trades" value={fmt(summary.trades)} />
+                                        <Tile label="Lots traded" value={num(summary.lotsN) ? fmt(summary.lotsTraded) : '—'}
+                                            title={lotsTitle(summary)} />
+                                        <Tile label="Net per lot" value={num(summary.netPerLot) == null ? '—' : rup(summary.netPerLot)}
+                                            good={num(summary.netPerLot) > 0} bad={num(summary.netPerLot) < 0}
+                                            title="Σ net ÷ Σ lots — what one lot made per trade. Puts a 2-lot trade and a 1-lot trade side by side." />
                                         <Tile label="Best trade" value={rup(summary.bestTrade)} good={num(summary.bestTrade) > 0} />
                                         <Tile label="Worst trade" value={rup(summary.worstTrade)} bad={num(summary.worstTrade) < 0} />
                                         <Tile label="Avg win" value={rup(summary.avgWin)} good />

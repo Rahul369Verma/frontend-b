@@ -36,6 +36,16 @@ import {
     DEFAULT_FILTERS, LIVE_CANDIDATES, NUMBER_FILTERS, SORTS, activeFilterCount, normaliseFilters, passes, sortRows,
 } from './scorecardFilters.js';
 
+
+// A row's size: the lots set, what the go-live canary lets it trade, and the sizes its trades here were.
+const lotsW = (n) => `${n} lot${n === 1 ? '' : 's'}`;
+const scorecardLotsText = (r) => `${lotsW(r.lots)}${r.lotsTrading != null && r.lotsTrading < r.lots ? ` (trading ${r.lotsTrading}, canary)` : ''}`;
+const scorecardLotsTitle = (r) => [
+    `Set to ${lotsW(r.lots)}.`,
+    r.lotsTrading != null && r.lotsTrading < r.lots ? `Its go-live canary caps every entry at ${lotsW(r.lotsTrading)} until you lift it on the Go-Live page.` : null,
+    r.lotsTraded ? `Its ${r.lotsTraded.n} trade(s) here: ${r.lotsTraded.min === r.lotsTraded.max ? lotsW(r.lotsTraded.min) : `${r.lotsTraded.min}–${r.lotsTraded.max} lots`} each, ${r.lotsTraded.sum} in all.` : null,
+].filter(Boolean).join(' ');
+
 const COLLAPSED_ROWS = 15;
 const MAX_COMPARE = 4;
 const DASHES = ['0', '6 3', '2 3', '10 4 2 4'];
@@ -143,7 +153,7 @@ export function OpenNow({ sc, templates = [] }) {
                             {open.sort((a, b) => (a.open.mtmNet ?? 0) - (b.open.mtmNet ?? 0)).map(r => (
                                 <tr key={r.deploymentId} className="border-t border-line-0">
                                     <td className="py-1 pr-3"><Link to={deploymentHref(r.deploymentId)} className="text-primary-ink hover:underline">{r.name}</Link><NewTabLink href={deploymentHref(r.deploymentId)} label={r.name} className="ml-0.5 align-middle" /></td>
-                                    <td className="pr-3 text-fg-4">{templates.find(t => t.key === r.template)?.name || r.template || '—'} · {shortSym(r.symbol)}</td>
+                                    <td className="pr-3 text-fg-4">{templates.find(t => t.key === r.template)?.name || r.template || '—'} · {shortSym(r.symbol)}{r.open.lots ? ` · ${lotsW(r.open.lots)}` : ''}</td>
                                     <td className="pr-3 text-warning">{r.open.state}</td>
                                     <td className="pr-3 text-fg-4 whitespace-nowrap">{r.open.since ? new Date(r.open.since).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '—'}</td>
                                     <td className={`text-right tabular-nums font-semibold ${pnlTone(r.open.mtmNet)}`}>{r.open.mtmNet == null ? 'unmarked' : rup(r.open.mtmNet)}</td>
@@ -583,7 +593,8 @@ export default function StrategyScorecard({ sc, templates = [], single = false }
                                                                 {r.deploymentId ? <><Link to={deploymentHref(r.deploymentId)} className="font-semibold text-fg-2 hover:underline break-words">{r.name}</Link><NewTabLink href={deploymentHref(r.deploymentId)} label={r.name} className="ml-0.5 align-middle" /></>
                                                                     : <span className="font-semibold text-fg-2">{r.name}</span>}
                                                                 <div className="text-2xs text-fg-5">
-                                                                    {tplName(r.template)} · {shortSym(r.symbol)} · {r.tradeMode}{r.lots > 1 ? ` · ${r.lots} lots` : ''}
+                                                                    {tplName(r.template)} · {shortSym(r.symbol)} · {r.tradeMode}
+                                                                    {r.lots != null && <span title={scorecardLotsTitle(r)} className={r.lotsTrading != null && r.lotsTrading < r.lots ? 'text-warning' : undefined}> · {scorecardLotsText(r)}</span>}
                                                                     {r.status !== 'ACTIVE' && <span className="text-warning"> · {r.status.toLowerCase()}</span>}
                                                                 </div>
                                                             </div>

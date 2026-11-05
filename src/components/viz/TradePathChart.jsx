@@ -55,8 +55,9 @@
  * "the trade did nothing".
  *
  * OVERLAYS (optional) — other paths of the SAME trade, e.g. a replay with no stops:
- *   overlays = [{ key, name, points: [{ t, net }], slot?: 1|2, dashed?, dotted?, faint?, muted? }]
- *              (muted = drawn in the muted ink, for a line that is only a cross-check)
+ *   overlays = [{ key, name, points: [{ t, net }], slot?: 1|2, mark?, dashed?, dotted?, dashDot?, faint?, muted? }]
+ *              (muted = drawn in the muted ink, for a line that is only a cross-check;
+ *               mark = a named chart mark, e.g. 'hypothetical', when both slots are taken)
  *   markers  = [{ t, text }]   vertical lines (e.g. where a stop fired)
  *   stopLines = [{ y, label }]  horizontal lines on the ₹ axis where a stop sits (e.g. the
  *              rupee stop at −₹3,000 net) — drawn even when no recorded mark reached them
@@ -312,12 +313,12 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan, o
     const fmtAt = overnight ? fmtDateTime : fmtTime;
     const spotOn = hasSpot && on('spot');
     const vixOn = hasVix && on('vix');
-    const overlayColor = (o) => (o.muted ? ct.text.muted : ct.categorical[o.slot === 2 ? 2 : 1]);
+    const overlayColor = (o) => (o.muted ? ct.text.muted : o.mark && ct.mark[o.mark] ? ct.mark[o.mark] : ct.categorical[o.slot === 2 ? 2 : 1]);
     const legend = [
         booked != null && { key: 'booked', label: bookedName, color: ct.text.primary, style: 'dot' },
         { key: 'net', label: markName, color: ct.categorical[0], style: 'solid' },
         hasGross && { key: 'gross', label: 'gross (pre-cost)', color: ct.mark.equity, style: 'solid', faint: true },
-        ...overlays.map((o) => ({ key: `ov:${o.key}`, label: o.name, color: overlayColor(o), style: o.dashed ? 'dashed' : o.dotted ? 'dotted' : 'solid', faint: o.faint })),
+        ...overlays.map((o) => ({ key: `ov:${o.key}`, label: o.name, color: overlayColor(o), style: o.dashed || o.dashDot ? 'dashed' : o.dotted ? 'dotted' : 'solid', faint: o.faint })),
         hasSpot && { key: 'spot', label: 'spot', color: ct.mark.live, style: 'dashed' },
         hasVix && { key: 'vix', label: 'India VIX', color: ct.categorical[3] || ct.text.muted, style: 'dotted' },
     ].filter(Boolean);
@@ -449,7 +450,7 @@ export default function TradePathChart({ trade, istTime, istDateTime, istSpan, o
                     {overlays.filter((o) => on(`ov:${o.key}`)).map((o) => (
                         <Line key={o.key} yAxisId="pnl" type="monotone" name={o.name} dataKey={`ov_${o.key}`}
                             stroke={overlayColor(o)} strokeOpacity={o.faint ? 0.55 : 1}
-                            strokeDasharray={o.dashed ? '6 3' : o.dotted ? '2 3' : undefined} dot={false} strokeWidth={o.faint ? 1 : 2}
+                            strokeDasharray={o.dashDot ? '9 3 2 3' : o.dashed ? '6 3' : o.dotted ? '2 3' : undefined} dot={false} strokeWidth={o.faint ? 1 : 2}
                             connectNulls isAnimationActive={false} />
                     ))}
                     {markerRows.map((m, i) => (

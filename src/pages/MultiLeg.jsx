@@ -46,6 +46,7 @@ import EngineJournal from '../components/multileg/EngineJournal';
 import RegimePanel from '../components/multileg/RegimePanel';
 import { PromoteDialog } from '../components/golive/goLiveShared.jsx';
 import LotsDialog from '../components/multileg/LotsDialog.jsx';
+import { cardLots, tradeLots } from '../components/multileg/lotsFormat.js';
 import DocLink from '../components/DocLink.jsx';
 import NewTabLink from '../components/NewTabLink.jsx';
 
@@ -1695,7 +1696,7 @@ export default function MultiLeg() {
                 onCancel={() => setConfirmState(null)} />
             {lotsFor && (
                 <LotsDialog dep={lotsFor} onClose={() => setLotsFor(null)}
-                    onSaved={(r, n) => { pushToast(`${lotsFor.name}: ${n} lot${n === 1 ? '' : 's'} from the next entry${r && Array.isArray(r.notes) && r.notes.length ? ` — ${r.notes[0]}` : ''}`, 'success', 9000); setLotsFor(null); refreshDeployments(); }} />
+                    onSaved={(r, n, o) => { pushToast(`${lotsFor.name}: ${n} lot${n === 1 ? '' : 's'} from the next entry${o && o.skippedCanary ? ' — go-live canary skipped' : ''}${r && Array.isArray(r.notes) && r.notes.length ? ` — ${r.notes[0]}` : ''}`, 'success', 9000); setLotsFor(null); refreshDeployments(); }} />
             )}
             <PreviewModal preview={livePreview} deployLots={deployLots} onCancel={() => setLivePreview(null)}
                 onConfirm={() => { const s = livePreview.strategy; setLivePreview(null); doDeploy(s, 'LIVE'); }} />
@@ -2734,12 +2735,17 @@ export default function MultiLeg() {
                                             </div>
                                             <div className="text-2xs text-fg-4 mb-1 flex flex-wrap items-center gap-x-1">
                                                 <span>{templates.find(t => t.key === d.template)?.name || d.template} · {shortSym(d.symbol)} ·{' '}</span>
-                                                <button type="button" onClick={() => setLotsFor(d)}
-                                                    className="text-3xs px-1.5 py-0.5 rounded border border-line-2 text-fg-3 hover:text-fg"
-                                                    aria-label={`Lots for ${d.name}: ${d.lots} — change`}
-                                                    title="How many lots this deployment trades: units per leg, the most one order can carry, margin, and its ₹ limits">
-                                                    📦 {d.lots} lot{Number(d.lots) === 1 ? '' : 's'}
-                                                </button>
+                                                {(() => {
+                                                    const L = cardLots(d);
+                                                    return (
+                                                        <button type="button" onClick={() => setLotsFor(d)}
+                                                            className={`text-3xs px-1.5 py-0.5 rounded border hover:text-fg ${L.capped ? 'border-amber-600 text-warning' : 'border-line-2 text-fg-3'}`}
+                                                            aria-label={`Lots for ${d.name}: ${L.text} — change`}
+                                                            title={L.title}>
+                                                            📦 {L.text}
+                                                        </button>
+                                                    );
+                                                })()}
                                                 <span>{d.entry_mode === 'signal' ? ` · signal: ${d.signal_strategy}` : ' · time entry'}</span>
                                                 {feed && d.entry_mode === 'signal' && !open && (
                                                     <span className={`ml-1 ${feed.ok ? 'text-success' : 'text-warning'}`} title={`Feed: ${feed.note}${feed.bars != null ? ` · ${feed.bars} bars` : ''} · last check ${istTimeSec(feed.at)} IST`}>
@@ -3191,6 +3197,7 @@ export default function MultiLeg() {
                                                 <td className="whitespace-nowrap" title="Exit (IST) — date shown when it differs from entry">{istSmart(t.exitAt, t.entryAt)}<DayGap from={t.entryAt} to={t.exitAt} /></td>
                                                 <td>{t.name}</td>
                                                 <td className={t.trade_mode === 'LIVE' ? 'text-danger' : 'text-sky-300'}>{t.trade_mode}</td>
+                                                {(() => { const L = tradeLots(t); return <td className={`text-right tabular-nums whitespace-nowrap ${t.canaryCapped ? 'text-warning' : ''}`} title={L.title}>{L.text}</td>; })()}
                                                 <td className="text-fg-4">{t.exitReason}</td>
                                                 <td className="text-right">₹{fmt(t.grossPnl)}</td>
                                                 <td className="text-right text-fg-5">₹{fmt(t.charges)}</td>
@@ -3375,7 +3382,9 @@ export default function MultiLeg() {
                                             );
                                             return (
                                                 <>
-                                                    <th></th>{th('exit', 'Entry → Exit')}{th('name', 'Deployment')}<th>Structure</th><th>Sym</th><th>Mode</th><th>Reason</th>
+                                                    <th></th>{th('exit', 'Entry → Exit')}{th('name', 'Deployment')}<th>Structure</th><th>Sym</th><th>Mode</th>
+                                                    {th('lots', 'Lots', { right: true, title: 'Lots traded. "1 of 2" = the go-live canary held it below the lots set. Every ₹ column is for the whole structure at that size.' })}
+                                                    <th>Reason</th>
                                                     {th('credit', 'Credit/u', { right: true })}<th className="text-right">IVP@in</th>
                                                     {th('margin', 'Margin ₹', { right: true, title: "₹ blocked when the structure was opened. ~ = estimated (heuristic), no ~ = the broker's SPAN figure" })}
                                                     {th('gross', 'Gross ₹', { right: true })}{th('chg', 'Chg', { right: true })}{th('net', 'Net ₹', { right: true })}
@@ -3441,18 +3450,18 @@ export default function MultiLeg() {
                                                 </td>
                                             </tr>
                                             {openT && !full && (
-                                                <tr className="bg-slate-900/60"><td colSpan={16} className="p-2 text-3xs text-fg-5">Loading legs and path…</td></tr>
+                                                <tr className="bg-slate-900/60"><td colSpan={17} className="p-2 text-3xs text-fg-5">Loading legs and path…</td></tr>
                                             )}
                                             {openT && full && (
-                                                <tr className="bg-slate-900/60"><td colSpan={16} className="p-2">
-                                                    <div className="text-3xs text-fg-4 mb-1">Held {full.exitAt ? fmtSpan(full.entryAt, full.exitAt) : fmtDur(full.entryAt)} · spot {fmt(full.entrySpot)} → {fmt(full.exitSpot)} · net credit at entry ₹{fmt(full.origCredit, 1)}/u{full.lots ? ` · ${full.lots} lot(s)` : ''}</div>
+                                                <tr className="bg-slate-900/60"><td colSpan={17} className="p-2">
+                                                    <div className="text-3xs text-fg-4 mb-1">Held {full.exitAt ? fmtSpan(full.entryAt, full.exitAt) : fmtDur(full.entryAt)} · spot {fmt(full.entrySpot)} → {fmt(full.exitSpot)} · net credit at entry ₹{fmt(full.origCredit, 1)}/u · {tradeLots(full).lots ? `${tradeLots(full).title}` : 'lots not recorded'}</div>
                                                     {/* What it DID while open — MAE/MFE and the gave-back number.
                                                         Renders its own explanation for pre-feature trades. */}
                                                     <TradeStory trade={full} istTime={istTime} />
                                                     <div className="mb-2"><TradeStopReplay trade={full} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} /></div>
                                                     {allLegs.length > 0 ? (
                                                         <table className="w-full text-3xs font-mono text-fg-3">
-                                                            <thead><tr className="text-fg-5 text-left"><th>Leg</th><th>Strike</th><th className="text-right">Entry ₹</th><th className="text-right" title="the leg stop: a short leg is bought back at leg_sl_x × its entry premium">Stop ₹</th><th className="text-right">Exit ₹</th><th>Close</th></tr></thead>
+                                                            <thead><tr className="text-fg-5 text-left"><th>Leg</th><th>Strike</th><th className="text-right" title="Units in this leg's order: lots × lot size × the leg's ratio">Qty</th><th className="text-right">Entry ₹</th><th className="text-right" title="the leg stop: a short leg is bought back at leg_sl_x × its entry premium">Stop ₹</th><th className="text-right">Exit ₹</th><th>Close</th></tr></thead>
                                                             <tbody>{allLegs.map((l, j) => {
                                                                 const legStop = full.stops?.legStops?.[l.symbol];
                                                                 const legStopHit = l.closeReason === 'LEG_SL';
@@ -3460,6 +3469,7 @@ export default function MultiLeg() {
                                                                 <tr key={j} className="border-t border-line-0/60">
                                                                     <td className={l.action === 'BUY' ? 'text-success' : 'text-danger'}>{l.action} {l.type}</td>
                                                                     <td>{l.strike}{l.ratio > 1 ? ` ×${l.ratio}` : ''}</td>
+                                                                    <td className="text-right">{Number(l.qty) > 0 ? fmt(l.qty) : '—'}</td>
                                                                     <td className="text-right">{fmt(l.entryPrice, 2)}</td>
                                                                     <td className={`text-right ${legStopHit ? 'text-danger font-semibold' : 'text-fg-5'}`}
                                                                         title={legStopHit && l.triggerQuote != null ? `tripped by a quote of ${fmt(l.triggerQuote, 2)}` : undefined}>
@@ -3475,7 +3485,7 @@ export default function MultiLeg() {
                                                                 <tr key={`f${j}`} className="border-t border-line-0/60">
                                                                     <td className={l.action === 'BUY' ? 'text-success' : 'text-danger'}>{l.action} {l.type}</td>
                                                                     <td>{l.strike ?? String(l.symbol || '').replace(/^(NSE|BSE):/, '')}</td>
-                                                                    <td className="text-right text-fg-5">—</td><td className="text-right text-fg-5">—</td><td className="text-right text-fg-5">—</td>
+                                                                    <td className="text-right text-fg-5">—</td><td className="text-right text-fg-5">—</td><td className="text-right text-fg-5">—</td><td className="text-right text-fg-5">—</td>
                                                                     <td className="text-danger font-sans">{l.note}</td>
                                                                 </tr>
                                                             ))}</tbody>

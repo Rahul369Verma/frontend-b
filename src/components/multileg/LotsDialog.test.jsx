@@ -39,7 +39,7 @@ describe('lotsFormat', () => {
         expect(marginLine(size(3))).toMatch(/₹1,60,000 MORE than the ₹4,70,000 available now: the entry would be refused for funds/);
         expect(marginLine(size(2, { mode: 'PAPER' }))).toMatch(/A PAPER book uses no account margin/);
         expect(marginLine(size(2, { margin: null }))).toMatch(/not priced right now/);
-        expect(canaryLine(size(3))).toBe('Its go-live canary is ACTIVE: it trades 1 lot until 10 live trades pass and you lift the size cap on the Go-Live page (4 so far). Then 3.');
+        expect(canaryLine(size(3))).toBe('Its go-live canary is ACTIVE: it trades 1 lot until 10 live trades pass and you lift the size cap on the Go-Live page (4 so far), or until you skip the canary below. Then 3. Until then its ₹ limits act at 1/3 of the figures below, so each lot keeps the same stop.');
         expect(canaryLine(size(3, { canary: { state: 'PASSED', capped: false, lots: 1 } }))).toBeNull();
         expect(sizeNotes(size(2, { open: true, openLots: 1, canary: null }))).toEqual(['A structure is open now at 1 lot: it keeps that size. The new size applies from the next entry.']);
         expect(rupeeRows(size(3), true)).toEqual([{ key: 'max_loss_rupees', label: 'Rupee stop (whole structure)', now: 10000, after: 30000, perLotAfter: 10000 }]);
@@ -48,7 +48,7 @@ describe('lotsFormat', () => {
 });
 
 describe('LotsDialog', () => {
-    beforeEach(() => { SIZE = (want) => size(want); });
+    beforeEach(() => { SIZE = (want) => size(want); vi.clearAllMocks(); });
 
     it('a LIVE size-up: shows units, the limit, margin, the canary, scales the stop, and saves only with the name typed', async () => {
         const axios = (await import('axios')).default;
@@ -68,6 +68,59 @@ describe('LotsDialog', () => {
         fireEvent.click(save);
         await waitFor(() => expect(onSaved).toHaveBeenCalled());
         expect(axios.patch).toHaveBeenCalledWith(expect.stringMatching(/\/multileg\/deployments\/d1$/), { lots: 2, scaleRupees: true, confirm: 'nifty-atm-straddle (LIVE)' });
+        expect(axios.post).not.toHaveBeenCalled();
+        expect(onSaved.mock.calls[0][2]).toEqual({ skippedCanary: false });
+    });
+
+    // 6-Nov-2026: "how can I skip the canary and make it 2 lots now … it should show the check to
+    // skip canary while making changes to lots" — set to 2, the canary trading 1 (8 of 10).
+    it('skip the canary: set to 2 and held at 1 — the check alone saves, needs the name, and lifts the cap (no lots edit)', async () => {
+        const axios = (await import('axios')).default;
+        SIZE = (want) => size(want, { lots: 2, confirmNeeded: false, canary: { state: 'ACTIVE', lots: 1, trades: 10, liveTrades: 8, capped: true, livePnl: 13799.1, lossCapInr: 5000, liftable: true, early: true } });
+        const onSaved = vi.fn();
+        render(<LotsDialog dep={{ _id: 'd1', name: 'nifty-atm-straddle (LIVE)', lots: 2, trade_mode: 'LIVE' }} onClose={() => {}} onSaved={onSaved} />);
+        await waitFor(() => expect(screen.getByTestId('skip-canary')).toBeTruthy());
+        expect(screen.getByRole('button', { name: 'No change' }).disabled).toBe(true);
+        expect(screen.getByTestId('lots-dialog').textContent).toMatch(/or until you skip the canary below/);
+        const box = screen.getByTestId('skip-canary').querySelector('input[type=checkbox]');
+        expect(screen.getByTestId('skip-canary').textContent).toBe('Skip the rest of the go-live canary: trade 2 lots from the next entry (8 of 10 live trades done, net +₹13,799).');
+        fireEvent.click(box);
+        const t = screen.getByTestId('lots-dialog').textContent;
+        expect(t).toMatch(/Real money: 2× the canary's 1-lot size\. The canary stops watching it, so it no longer asks you at its ₹5,000 loss cap, and its ₹ limits act in full at 2 lots\./);
+        expect(t).not.toMatch(/it trades 1 lot until/);
+        const save = screen.getByRole('button', { name: 'Skip canary — trade 2 lots' });
+        expect(save.disabled).toBe(true);
+        fireEvent.change(screen.getByLabelText('Type the deployment name to confirm'), { target: { value: 'nifty-atm-straddle (LIVE)' } });
+        expect(save.disabled).toBe(false);
+        fireEvent.click(save);
+        await waitFor(() => expect(onSaved).toHaveBeenCalled());
+        expect(axios.patch).not.toHaveBeenCalled();
+        expect(axios.post).toHaveBeenCalledWith(expect.stringMatching(/\/golive\/deployments\/multileg\/d1\/canary$/), { decision: 'lift', early: true });
+        expect(onSaved.mock.calls[0]).toEqual([null, 2, { skippedCanary: true }]);
+    });
+
+    it('size up AND skip: lots first, then the lift; a refused lift says the lots saved but the cap did not', async () => {
+        const axios = (await import('axios')).default;
+        axios.post.mockRejectedValueOnce({ response: { data: { error: 'the canary is CAP_HIT, not waiting to lift its size cap' } } });
+        const onSaved = vi.fn();
+        render(<LotsDialog dep={{ _id: 'd1', name: 'nifty-atm-straddle (LIVE)', lots: 1, trade_mode: 'LIVE' }} onClose={() => {}} onSaved={onSaved} />);
+        fireEvent.change(screen.getByLabelText('Lots'), { target: { value: '2' } });
+        await waitFor(() => expect(screen.getByTestId('skip-canary')).toBeTruthy());
+        fireEvent.click(screen.getByTestId('skip-canary').querySelector('input[type=checkbox]'));
+        fireEvent.change(screen.getByLabelText('Type the deployment name to confirm'), { target: { value: 'nifty-atm-straddle (LIVE)' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Trade 2 lots — skip canary' }));
+        await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('2 lots saved, but the canary was NOT skipped: the canary is CAP_HIT, not waiting to lift its size cap. It still trades 1 lot(s).'));
+        expect(axios.patch).toHaveBeenCalledTimes(1);
+        expect(axios.post.mock.calls[0][1]).toEqual({ decision: 'lift', early: true });
+        expect(onSaved).not.toHaveBeenCalled();
+    });
+
+    it('a canary waiting at its loss cap: no check — answer that on the Go-Live page first', async () => {
+        SIZE = (want) => size(want, { canary: { state: 'CAP_HIT', lots: 1, trades: 10, liveTrades: 3, capped: true, lossCapInr: 5000, liftable: false, early: false } });
+        render(<LotsDialog dep={{ _id: 'd1', name: 'x (LIVE)', lots: 1, trade_mode: 'LIVE' }} onClose={() => {}} onSaved={() => {}} />);
+        fireEvent.change(screen.getByLabelText('Lots'), { target: { value: '2' } });
+        await waitFor(() => expect(screen.getByTestId('skip-canary-blocked').textContent).toBe('Its canary is waiting at its ₹5,000 loss cap: answer that on the Go-Live page (keep LIVE or demote) before you skip it.'));
+        expect(screen.queryByTestId('skip-canary')).toBeNull();
     });
 
     it('above the freeze limit: the reason is shown and nothing can be saved; unticking the scale says what the stop then means', async () => {

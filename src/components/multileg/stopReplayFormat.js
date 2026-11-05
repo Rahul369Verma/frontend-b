@@ -108,6 +108,38 @@ export function archiveNotes(d) {
     return out;
 }
 
+const TARGET_UNIT = { tp_pct_credit: (v) => `${v}% of the credit`, tp_pct_max_profit: (v) => `${v}% of the max profit`, tp_x_debit: (v) => `${v}× the debit` };
+/** "35% of the credit, +₹3,075 before costs" — the target a trade ran with. */
+export function targetLevelText(t) {
+    if (!t || !t.set) return null;
+    const f = TARGET_UNIT[t.key] || ((v) => `${t.key} ${v}`);
+    return `${f(t.level)}${t.rupees != null ? `, ${signed(t.rupees)} before costs` : ''}`;
+}
+
+/**
+ * The PROFIT TARGET alone (every stop kept): did it fire, what did the trade do after it when
+ * held, and what did the target add or cost. User, 5-Nov-2026: "what will happen if TP_STRUCT
+ * didn't happen?"
+ */
+export function targetText(d) {
+    const t = d && d.target;
+    if (!t) return null;                                    // an older server
+    if (!t.set) return 'It had no profit target, so there is nothing to switch off.';
+    if (!d.noTarget || d.noTarget.net == null || d.configured?.net == null) return null;
+    const level = targetLevelText(t);
+    if (!t.fired) {
+        const best = t.bestInTargetUnit != null && t.key === 'tp_pct_credit' ? ` Its best point was ${t.bestInTargetUnit}% of the credit.` : '';
+        return `The profit target (${level}) did not fire in the replay — without it, the trade is the same.${best}`;
+    }
+    const eff = t.effect;
+    const what = eff > 0 ? `SAVED ${rup(eff)}` : eff < 0 ? `COST ${rup(-eff)}` : 'made no difference';
+    const a = t.after;
+    const after = !a || a.bestAfter == null
+        ? ' There were no recorded minutes after it.'
+        : ` Held without it (stops kept), from ${hhmm(a.at)} IST it went as high as ${signed(a.bestAfter)} and as low as ${signed(a.worstAfter)}, and would have finished at ${signed(d.noTarget.net)} (${reasonText(d.noTarget.reason)}${a.endedAt ? ` ${hhmm(a.endedAt)}` : ''}).`;
+    return `The profit target (${level}) fired at ${hhmm(t.firedAt)} IST at ${signed(d.configured.net)} in the replay, and ${what} on this trade.${after}`;
+}
+
 /** The sentence that answers "would it have gone positive again?" */
 export function recoveryText(d) {
     if (!d || d.noStops?.net == null) return null;

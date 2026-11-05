@@ -7,13 +7,18 @@
  * the go-live canary, and the ₹ limits — which are for the whole structure, so by default they
  * scale with the lots (N lots = N copies of the 1-lot strategy). Saves through the deployment
  * edit (PATCH, the engine's rule). Sizing a LIVE deployment up needs its name typed.
+ *
+ * "Skip the canary" (6-Nov-2026): when the go-live canary would hold the size back, a check lifts
+ * its size cap with the save (POST /api/golive/.../canary { decision:'lift', early }). Your
+ * explicit choice, so it needs the name typed too; nothing lifts it by itself.
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { Modal, Spinner } from '../viz/primitives';
 import { inr } from '../viz/tokens';
 import { API_URL } from '../../config/api.js';
-import { unitsLine, freezeLine, marginLine, marginShort, sizeNotes, rupeeRows } from './lotsFormat.js';
+import { GOLIVE } from '../golive/goLiveApi.js';
+import { unitsLine, freezeLine, marginLine, marginShort, sizeNotes, rupeeRows, skipCanary } from './lotsFormat.js';
 
 const BTN = 'px-3 py-1.5 rounded border text-xs disabled:opacity-40';
 const STEP = 'w-8 h-8 rounded border border-line-2 bg-card-2 text-fg-2 hover:text-fg disabled:opacity-40';
@@ -22,6 +27,7 @@ export default function LotsDialog({ dep, onClose, onSaved }) {
     const lots0 = Number(dep?.lots) || 1;
     const [text, setText] = useState(String(lots0));
     const [scale, setScale] = useState(true);
+    const [skip, setSkip] = useState(false);
     const [confirm, setConfirm] = useState('');
     const [st, setSt] = useState({ info: null, err: null, busy: true });
     const [saving, setSaving] = useState(false);
@@ -46,18 +52,31 @@ export default function LotsDialog({ dep, onClose, onSaved }) {
     const max = s ? s.maxLots : (st.info ? st.info.maxLots : null);
     const rows = useMemo(() => rupeeRows(s, scale), [s, scale]);
     const changed = valid && want !== lots0;
-    const needName = !!(s && s.confirmNeeded);
+    const sk = useMemo(() => skipCanary(s), [s]);
+    const skipOn = !!(skip && sk && !sk.blocked);
+    const needName = !!(s && s.confirmNeeded) || skipOn;
     const nameOk = !needName || confirm.trim() === String(dep?.name || '').trim();
-    const canSave = changed && s && s.ok && nameOk && !saving;
+    const canSave = (changed || skipOn) && s && s.ok && nameOk && !saving;
+    const lotsW = `${want} lot${want === 1 ? '' : 's'}`;
 
+    // lots first (the engine's edit rule), then the canary — a refused size never lifts the cap
     const save = async () => {
         setSaving(true); setSaveErr(null);
+        let r = null;
         try {
-            const r = await axios.patch(`${API_URL}/multileg/deployments/${id}`, { lots: want, scaleRupees: scale, ...(needName ? { confirm } : {}) });
-            onSaved?.(r.data, want);
+            if (changed) r = await axios.patch(`${API_URL}/multileg/deployments/${id}`, { lots: want, scaleRupees: scale, ...(s?.confirmNeeded ? { confirm } : {}) });
         } catch (e) {
             const d = e.response?.data;
             setSaveErr(Array.isArray(d?.errors) && d.errors.length ? d.errors.join(' · ') : d?.error || e.message);
+            setSaving(false);
+            return;
+        }
+        try {
+            if (skipOn) await axios.post(`${GOLIVE}/deployments/multileg/${id}/canary`, { decision: 'lift', early: !!sk.early });
+            onSaved?.(r ? r.data : null, want, { skippedCanary: skipOn });
+        } catch (e) {
+            const why = e.response?.data?.error || e.message;
+            setSaveErr(changed ? `${lotsW} saved, but the canary was NOT skipped: ${why}. It still trades ${s?.canary?.lots} lot(s).` : `The canary was not skipped: ${why}`);
         } finally { setSaving(false); }
     };
 
@@ -68,7 +87,7 @@ export default function LotsDialog({ dep, onClose, onSaved }) {
                 <button type="button" onClick={onClose} className={`${BTN} border-line-2 text-fg-3`}>Cancel</button>
                 <button type="button" onClick={save} disabled={!canSave}
                     className={`${BTN} ${dep.trade_mode === 'LIVE' ? 'border-danger text-danger' : 'border-primary text-primary-ink'}`}>
-                    {saving ? 'Saving…' : changed ? `Trade ${want} lot${want === 1 ? '' : 's'}` : 'No change'}
+                    {saving ? 'Saving…' : changed && skipOn ? `Trade ${lotsW} — skip canary` : changed ? `Trade ${lotsW}` : skipOn ? `Skip canary — trade ${lotsW}` : 'No change'}
                 </button>
             </>}>
             <div className="space-y-3 text-xs text-fg-3" data-testid="lots-dialog">
@@ -111,15 +130,25 @@ export default function LotsDialog({ dep, onClose, onSaved }) {
                                 {!scale && changed && <p className="text-warning">Unscaled, the same ₹ amounts act at {Math.round((100 * lots0) / want)}% of today&apos;s loss per lot.</p>}
                             </div>
                         )}
-                        {sizeNotes(s).map((t) => <p key={t} className="text-warning">{t}</p>)}
-                        {needName && changed && (
+                        {sizeNotes(s, { skip: skipOn }).map((t) => <p key={t} className="text-warning">{t}</p>)}
+                        {sk && sk.blocked && <p className="text-warning" data-testid="skip-canary-blocked">{sk.blocked}</p>}
+                        {sk && !sk.blocked && (
+                            <div className={`rounded border p-2 space-y-1 ${skipOn ? 'border-danger/60 bg-danger/5' : 'border-amber-600/60'}`} data-testid="skip-canary">
+                                <label className="flex items-start gap-2">
+                                    <input type="checkbox" className="mt-0.5" checked={skip} onChange={(e) => setSkip(e.target.checked)} />
+                                    <span className="text-fg-2">{sk.label}</span>
+                                </label>
+                                {skipOn && <p className="text-danger">{sk.warn}</p>}
+                            </div>
+                        )}
+                        {needName && (changed || skipOn) && (
                             <label className="block space-y-1">
-                                <span className="text-danger">More lots on a LIVE deployment is more real money at stake. Type its name to confirm: <b className="font-mono">{dep.name}</b></span>
+                                <span className="text-danger">{skipOn && !(s.confirmNeeded && changed) ? 'Skipping the canary puts more real money at stake.' : 'More lots on a LIVE deployment is more real money at stake.'} Type its name to confirm: <b className="font-mono">{dep.name}</b></span>
                                 <input value={confirm} onChange={(e) => setConfirm(e.target.value)} aria-label="Type the deployment name to confirm"
                                     className="w-full h-8 bg-slate-800 border border-line rounded-md px-2 text-xs text-fg-2" />
                             </label>
                         )}
-                        <p className="text-3xs text-fg-5">Applies from the next entry. A PAPER twin keeps its own size; compare lots under LIVE vs PAPER twins.</p>
+                        <p className="text-3xs text-fg-5">Applies from the next entry. A PAPER twin keeps its own size; compare lots under LIVE vs PAPER twins.{skipOn ? ' The skip is recorded (Go-Live audit and the deployment journal).' : ''}</p>
                     </>
                 )}
                 {saveErr && <p className="text-danger" role="alert">{saveErr}</p>}

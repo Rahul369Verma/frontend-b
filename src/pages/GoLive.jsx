@@ -126,10 +126,13 @@ const CANARY_WORD = {
     ACTIVE: 'canary watching', CAP_HIT: 'loss cap reached — your decision', DEMOTE_PENDING: 'loss cap reached — your decision',
     PASS_PENDING: 'canary passed — lift the size cap?', PASSED: 'canary passed', DEMOTED: 'demoted',
 };
-function CanaryLine({ c, live, onDemote, onDecide }) {
+function CanaryLine({ c, live, lots, onDemote, onDecide }) {
     if (!c) return null;
     const asking = live && (c.state === 'CAP_HIT' || c.state === 'DEMOTE_PENDING');
     const lifting = live && c.state === 'PASS_PENDING';
+    const back = Number(lots) || c.originalLots;
+    // 6-Nov-2026 "how can I skip the canary": a set size above the canary's can be freed early — your call
+    const skippable = live && c.state === 'ACTIVE' && Number(back) > Number(c.lots);
     const level = c.state === 'PASSED' ? 'good' : asking || c.state === 'DEMOTED' ? 'critical' : lifting ? 'warning' : 'info';
     return (
         <div className={`text-2xs text-fg-4 ${asking ? 'rounded-lg border border-danger/40 bg-danger/5 p-2' : ''}`} data-testid="canary-line">
@@ -147,8 +150,14 @@ function CanaryLine({ c, live, onDemote, onDecide }) {
             )}
             {lifting && (
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                    <span className="text-fg-3">It trades {c.lots} lot(s) until you lift the cap (back to {c.originalLots}).</span>
+                    <span className="text-fg-3">It trades {c.lots} lot(s) until you lift the cap (back to {back}).</span>
                     <button type="button" onClick={() => onDecide('lift')} className="px-2.5 py-1 rounded text-2xs border border-line text-fg-3">Lift size cap</button>
+                </div>
+            )}
+            {skippable && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <span className="text-fg-3">Set to {back} lot(s); it trades {c.lots} until {c.trades} live trades pass.</span>
+                    <button type="button" onClick={() => onDecide('skip')} className="px-2.5 py-1 rounded text-2xs border border-amber-600 text-warning">Skip the canary</button>
                 </div>
             )}
         </div>
@@ -177,7 +186,7 @@ function DeploymentRow({ r, job, onGates, onVerify, onPromote, onDemote, onCanar
                 <div><dt className="inline text-fg-5">Paper: </dt><dd className="inline text-fg-3">{p.n ? `${p.n} trades over ${p.days} days · ${inr(p.mean, { sign: true })}/trade${p.t != null ? ` · t ${p.t.toFixed(2)}` : ''}` : 'no closed trades'}{p.skippedNoPnl ? ` (${p.skippedNoPnl} without P&L not counted)` : ''}</dd></div>
                 <div><dt className="inline text-fg-5">Backtest: </dt><dd className="inline text-fg-3">{evidenceText(r)}</dd></div>
             </dl>
-            {r.canary && <div className="mt-1.5"><CanaryLine c={r.canary} live={live} onDemote={() => onDemote(r)} onDecide={(d) => onCanary(r, d)} /></div>}
+            {r.canary && <div className="mt-1.5"><CanaryLine c={r.canary} live={live} lots={r.lots} onDemote={() => onDemote(r)} onDecide={(d) => onCanary(r, d)} /></div>}
             {job && job.state !== 'none' && (
                 <div className="mt-1.5 text-2xs">
                     {running && <Spinner label={`Backtesting ${job.window ? `${job.window.start} → ${job.window.end}` : ''}…`} />}
@@ -297,18 +306,23 @@ export default function GoLive() {
 
     // your answer to the canary — it never decides by itself
     const decideCanary = async (r, decision) => {
-        const keep = decision === 'keep';
+        const keep = decision === 'keep', skip = decision === 'skip';
+        const c = r.canary || {};
+        const back = Number(r.lots) || c.originalLots;
         const ok = await confirm({
-            title: keep ? `Keep ${r.name} LIVE?` : `Lift the size cap on ${r.name}?`,
+            title: keep ? `Keep ${r.name} LIVE?` : skip ? `Skip the canary on ${r.name}?` : `Lift the size cap on ${r.name}?`,
             body: keep
-                ? `It has lost ${inr(-(r.canary?.livePnl || 0))} live, past its ${inr(r.canary?.lossCapInr || 0)} canary cap. It keeps trading real money at ${r.canary?.lots} lot(s), and asks you again if it loses another ${inr(r.canary?.lossCapInr || 0)}.`
-                : `It goes back to ${r.canary?.originalLots} lot(s) per trade from the next entry.`,
-            confirmLabel: keep ? 'Keep LIVE' : 'Lift size cap',
+                ? `It has lost ${inr(-(c.livePnl || 0))} live, past its ${inr(c.lossCapInr || 0)} canary cap. It keeps trading real money at ${c.lots} lot(s), and asks you again if it loses another ${inr(c.lossCapInr || 0)}.`
+                : skip
+                    ? `It has done ${c.liveTrades || 0} of ${c.trades} live trades (net ${inr(c.livePnl || 0, { sign: true })}). From the next entry it trades all ${back} lot(s) of real money, its ₹ limits act in full, and the canary stops watching: it no longer asks you at its ${inr(c.lossCapInr || 0)} loss cap. An open structure keeps its size.`
+                    : `It goes back to ${back} lot(s) per trade from the next entry.`,
+            confirmLabel: keep ? 'Keep LIVE' : skip ? `Skip — trade ${back} lot(s)` : 'Lift size cap',
+            danger: skip,
         });
         if (!ok) return;
         try {
-            await axios.post(`${GOLIVE}/deployments/${r.kind}/${r.id}/canary`, { decision });
-            toast.success(keep ? `${r.name} stays LIVE` : `${r.name}: size cap lifted`);
+            await axios.post(`${GOLIVE}/deployments/${r.kind}/${r.id}/canary`, skip ? { decision: 'lift', early: true } : { decision });
+            toast.success(keep ? `${r.name} stays LIVE` : skip ? `${r.name}: canary skipped — ${back} lot(s) from the next entry` : `${r.name}: size cap lifted`);
             loadDeps();
         } catch (e) { toast.error(errText(e)); }
     };
@@ -382,7 +396,7 @@ export default function GoLive() {
                         {asking.map((r) => (
                             <div key={`ask:${r.kind}:${r.id}`}>
                                 <div className="text-xs font-medium text-fg mb-1">{r.name}</div>
-                                <CanaryLine c={r.canary} live onDemote={() => demote(r)} onDecide={(d) => decideCanary(r, d)} />
+                                <CanaryLine c={r.canary} live lots={r.lots} onDemote={() => demote(r)} onDecide={(d) => decideCanary(r, d)} />
                             </div>
                         ))}
                     </section>

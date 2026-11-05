@@ -1,9 +1,10 @@
 /**
  * StopReplay — "what did the stops do on these trades?", on the recorded option chain.
  *
- *   TradeStopReplay  one round trip: its path, plus the replay with its stops and the replay
- *                    with NO stops drawn over it; did the stops save or cost money, and did
- *                    the trade come back after the first stop?
+ *   TradeStopReplay  one round trip: its path, plus the replay with its stops, without its
+ *                    stop-loss, with NO stops, and without its profit target drawn over it; did
+ *                    the stops (or the target) save or cost money, and did the trade come back
+ *                    after the first stop?
  *   StopGridPanel    one deployment: leg stop × rupee stop over its recent trades, which
  *                    trades the stops cut, and whether any of those went positive again.
  *
@@ -19,7 +20,7 @@ import TradePathChart from '../viz/TradePathChart';
 import { istDateTime as tokIstDateTime } from '../viz/tokens';
 import useTradeVix from '../../hooks/useTradeVix.js';
 import { vixRangeOver } from '../../utils/vixOverlay.js';
-import { rup, signed, tone, hhmm, reasonText, stopsText, recoveryText, tradeStopsText, firedLines, stopLossText, archiveNotes, vixLine } from './stopReplayFormat.js';
+import { rup, signed, tone, hhmm, reasonText, stopsText, recoveryText, tradeStopsText, firedLines, stopLossText, targetText, targetLevelText, archiveNotes, vixLine } from './stopReplayFormat.js';
 import { Spinner } from '../viz/primitives';
 import useWhatIfJob from './useWhatIfJob.js';
 import { JobStatus, ReplayedLine, GridTable } from './WhatIfGrid.jsx';
@@ -58,6 +59,8 @@ export function TradeStopReplay({ trade, istTime, istDateTime, istSpan }) {
         // the two what-ifs get the two colours; "its stops" is only a check on the replay → muted
         d.noStopLoss?.path?.length ? { key: 'noStopLoss', name: 'replay · no stop-loss (leg stops kept)', points: d.noStopLoss.path, slot: 2, dashed: true } : null,
         d.noStops?.path?.length ? { key: 'noStops', name: 'replay · no stops at all', points: d.noStops.path, slot: 1, dotted: true } : null,
+        // a target that fired: the trade held on past it, every stop kept (one that never fired draws the same line as its stops)
+        d.target?.fired && d.noTarget?.path?.length ? { key: 'noTarget', name: 'replay · no profit target (stops kept)', points: d.noTarget.path, mark: 'hypothetical', dashDot: true } : null,
         d.configured?.path?.length ? { key: 'withStops', name: 'replay · its stops', points: d.configured.path, muted: true, faint: true } : null,
     ].filter(Boolean) : undefined), [d]);
     // what the trade itself ran with and what fired (from the server: exitRules.stopLevels)
@@ -96,10 +99,10 @@ export function TradeStopReplay({ trade, istTime, istDateTime, istSpan }) {
                 {st.status === 'idle' && id && (
                     <div className="flex items-center gap-2 flex-wrap">
                         <button type="button" className={BTN} onClick={run}
-                            title="Replay this exact trade (its strikes, fills and size) on the recorded option chain, once with its stops and once with none">
-                            Replay without stops
+                            title="Replay this exact trade (its strikes, fills and size) on the recorded option chain: with its stops, without its stop-loss, with no stops, and without its profit target">
+                            Replay without stops or target
                         </button>
-                        <span className="text-fg-5">What would it have done without its stop-loss (leg stops kept), and with no stops at all? Follows this trade on the recorded option prices past its exit, to the time it would have closed.</span>
+                        <span className="text-fg-5">What would it have done without its stop-loss (leg stops kept), with no stops at all, and without its profit target (stops kept)? Follows this trade on the recorded option prices past its exit, to the time it would have closed.</span>
                     </div>
                 )}
                 {st.status === 'loading' && <Spinner size="xs" label="Replaying on the recorded option chain…" />}
@@ -119,6 +122,8 @@ function ReplaySummary({ d }) {
     const eff = d.stopEffect;
     const sl = stopLossText(d);
     const slEff = d.stopLossEffect;
+    const tg = targetText(d);
+    const tgEff = d.target?.effect;
     return (
         <div className="space-y-1">
             <div className="flex flex-wrap gap-x-5 gap-y-1">
@@ -128,8 +133,12 @@ function ReplaySummary({ d }) {
                     <span>Without the stop-loss (leg stops kept) <b className={tone(d.noStopLoss.net)}>{signed(d.noStopLoss.net)}</b> <span className="text-fg-5">({reasonText(d.noStopLoss.reason)})</span></span>
                 )}
                 <span>With no stops at all <b className={tone(d.noStops.net)}>{signed(d.noStops.net)}</b> <span className="text-fg-5">({reasonText(d.noStops.reason)})</span></span>
+                {d.target?.set && d.noTarget?.net != null && (
+                    <span title={`Its target: ${targetLevelText(d.target)}`}>Without the profit target (stops kept) <b className={tone(d.noTarget.net)}>{signed(d.noTarget.net)}</b> <span className="text-fg-5">({reasonText(d.noTarget.reason)})</span></span>
+                )}
             </div>
             {sl && <div className={`font-semibold ${!d.stopLossFired ? 'text-fg-3' : slEff > 0 ? 'text-success' : slEff < 0 ? 'text-danger' : 'text-fg-3'}`}>{sl}</div>}
+            {tg && <div data-testid="target-replay-line" className={`font-semibold ${!d.target?.fired ? 'text-fg-3' : tgEff > 0 ? 'text-success' : tgEff < 0 ? 'text-danger' : 'text-fg-3'}`}>{tg}</div>}
             <div className={`font-semibold ${eff > 0 ? 'text-success' : eff < 0 ? 'text-danger' : 'text-fg-3'}`}>
                 {eff > 0 ? `All stops together (leg + stop-loss) SAVED ${rup(eff)} on this trade.` : eff < 0 ? `All stops together (leg + stop-loss) COST ${rup(-eff)} on this trade.` : d.stopped ? 'The stops made no difference.' : 'No stop fired.'}
             </div>

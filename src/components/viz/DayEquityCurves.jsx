@@ -349,6 +349,10 @@ function DayDetail({ day, vixOn = false, vixDay = null, vixIntra = null, onVixRe
     const columns = [
         { key: 'n', header: '#', render: (r) => r._n },
         { key: 'label', header: 'Trade', render: (r) => <span className="font-mono text-fg-3">{r.label || '—'}</span> },
+        ...(trades.some((t) => t.lots != null) ? [{
+            key: 'lots', header: 'Lots', align: 'right',
+            render: (r) => (r.lots != null ? <span className="tabular-nums">{r.lots}</span> : <span className="text-fg-5" title="Lots not recorded on this trade">—</span>),
+        }] : []),
         {
             key: 'span', header: 'Entry → exit (IST)',
             render: (r) => (
@@ -498,6 +502,13 @@ const DayRow = memo(function DayRow({ day, open, onToggle, colors, panelId, vixO
                     ? <span className="text-xs tabular-nums w-24 text-right text-fg-5" title="Unknown: every trade on this day was still open at the close with no marks here.">—</span>
                     : <span className={`text-xs font-semibold tabular-nums w-24 text-right ${pnlTone(day.total)}`}>{inr(day.total, { sign: true })}</span>}
                 <span className="text-2xs text-fg-5 w-16 whitespace-nowrap">{count} trade{count === 1 ? '' : 's'}</span>
+                {(() => {
+                    // the size traded that day, when every trade on it recorded its lots
+                    const ls = Array.isArray(day.trades) ? day.trades.map((t) => t.lots) : [];
+                    if (!ls.length || ls.some((v) => !(Number(v) > 0))) return null;
+                    const lo = Math.min(...ls), hi = Math.max(...ls);
+                    return <span className="text-2xs text-fg-5 whitespace-nowrap" title="Lots per trade on this day">{lo === hi ? `${lo} lot${lo === 1 ? '' : 's'}` : `${lo}–${hi} lots`}</span>;
+                })()}
                 {/* An unknown day draws no line: a flat one would read as "flat day". */}
                 <Sparkline points={unknown ? null : day.points} startMs={day.startMs} endMs={day.endMs} color={color} zeroColor={colors.zero} />
                 <CoverageChip coverage={day.coverage} count={count} unknown={unknown} />

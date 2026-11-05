@@ -343,6 +343,8 @@ export function normalizeMultilegTrade(t) {
         pathReason: pathReasonOf(t, path),
         bookedBasis: bookedNet != null ? 'net' : null,
         quarantined,
+        // the size it traded (whole structure); null when not recorded
+        lots: finite(t.lots) > 0 ? finite(t.lots) : null,
     };
 }
 
@@ -518,6 +520,7 @@ export function buildDayCurves(normTrades, { stepMin = 1 } = {}) {
                 marked: isMarked,
                 pathSource: tr.nt.pathSource ?? null,
                 pathReason: tr.nt.pathReason ?? null,
+                lots: tr.nt.lots ?? null,
             });
         }
 

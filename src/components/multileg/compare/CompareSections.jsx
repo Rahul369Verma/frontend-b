@@ -251,6 +251,15 @@ export function ConfigTable({ deps, colors, groups }) {
         { label: 'Structure', cell: (d) => d.templateName || d.template || '—' },
         { label: 'Legs', cell: (d) => (d.legs?.length ? d.legs.join(' · ') : '—'), mono: true },
         { label: 'Index', cell: (d) => shortSym(d.symbol) },
+        { label: 'Lots', cell: (d) => {
+            if (d.lots == null) return '—';
+            const w = (n) => `${n} lot${n === 1 ? '' : 's'}`;
+            const bits = [w(d.lots)];
+            if (d.lotsTrading != null && d.lotsTrading < d.lots) bits.push(`trading ${d.lotsTrading} (go-live canary)`);
+            const t = d.results && d.results.lotsTraded;
+            if (t) bits.push(`its trades: ${t.min === t.max ? w(t.min) : `${t.min}–${t.max} lots`}`);
+            return bits.join(' · ');
+        } },
         { label: 'Entry trigger', cell: (d) => (d.entryMode === 'signal' ? `signal: ${d.signalStrategy || '—'}` : d.entryMode === 'time' ? 'time' : '—') },
         { label: 'Mode · status', cell: (d) => `${d.tradeMode || '—'} · ${String(d.status || '—').toLowerCase()}` },
         { label: 'Deployed', cell: (d) => (d.createdAt ? istDateTime(d.createdAt) : '—') },

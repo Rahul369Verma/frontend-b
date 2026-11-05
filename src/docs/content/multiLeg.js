@@ -259,7 +259,13 @@ Before you save, the dialog shows:
 
 When it acts: from the **next entry**. An open structure keeps the size it entered with.
 
-**LIVE.** A bigger LIVE size needs the deployment's name typed, because more real money is at stake; a smaller one does not. While its **go-live canary** is running, a LIVE deployment trades the canary's size (1 lot) until its live trades pass and you lift the cap on the Go-Live page. After that it trades the size set here. A deployment that sizes by risk (*size mode "risk"*) takes its lots from *risk_per_trade* at each entry, so this number is not used.`,
+**LIVE.** A bigger LIVE size needs the deployment's name typed, because more real money is at stake; a smaller one does not. A deployment that sizes by risk (*size mode "risk"*) takes its lots from *risk_per_trade* at each entry, so this number is not used.
+
+**The go-live canary comes first.** A LIVE deployment whose canary is still running trades the canary's size (1 lot), whatever is set here. That lasts until its first live trades (10 by default) are done **and** you lift the size cap on the Go-Live page; then it trades the size set here. To go to full size sooner, tick **Skip the rest of the go-live canary** in this dialog (or press **Skip the canary** on the Go-Live page). It needs the deployment's name typed, works even when the lots are not changing, and applies from the next entry. After that the canary no longer asks you at its loss cap. The card says so: **📦 2 lots · trading 1 (canary 8/10)**, in amber. The entry in the journal and on Telegram names the size too (*1 of 2 lots of 65 (go-live canary)*).
+
+**₹ limits follow the size actually held.** The ₹ limits are written for the lots set here. A structure that holds fewer lots gets them in proportion, so each lot keeps the same stop: a ₹20,000 rupee stop set for 2 lots acts at ₹10,000 on the 1 lot the canary allows. This covers the rupee stop, the daily loss cap and max vega at entry. The same applies to a structure that was open when you resized with the ₹ box ticked: it keeps its size and the stop it had. The stop and target replays in Results use the same rule for each past trade's own size.
+
+**Where the size shows.** The **Lots** column of Structure round-trips (*1 of 2* = the canary held it below the size set; sortable), each leg's **Qty** when a row is opened, the lots per day in Day by day, **Lots traded** and **Net per lot** under More figures, a **Size (lots)** breakdown with Lots and Per lot ₹ columns in every breakdown, the size on each Strategies row and in Open now, and a **Lots** row in Compare. Every ₹ figure is for the whole structure, so a 2-lot trade earns or loses twice a 1-lot one. **Per lot ₹** puts trades of different sizes side by side.`,
         },
         {
             id: 'deploy-broker-orders',
@@ -496,6 +502,14 @@ The figures are upper bounds: every trade that touched the level is booked at ex
 
 ### Round-trips table
 Every booked structure: entry → exit, deployment, structure, index, mode, exit reason, credit per unit, IV percentile at entry, **margin** (~ = estimated), gross, charges, net and net ÷ margin. Click a row (or **Expand page**) to see its legs, its MTM path and details — including **India VIX**: its value at entry and at exit, the move, and its low and high while the structure was held, also drawn on the path chart (switch it with the chart's *India VIX* box). Short premium loses when VIX rises even if the index stands still. Search and page through long lists.
+
+**Replay without stops or target** (under an opened trade's path) replays that one trade on the recorded option chain, keeping its strikes, fills and size, and follows it past its real exit:
+- **its stops**: the settings it ran with, a check on the replay;
+- **no stop-loss (leg stops kept)**: the structure stop and the rupee stop off;
+- **no stops at all**: the leg stops off too (the target and the time exits stay);
+- **no profit target (stops kept)**: the target off, every stop and time exit kept. This answers "what if the target had not fired?": when the target did fire, it is drawn as a line that carries on past the target, and one sentence says where the trade went after it (its best, its worst, how it would have finished) and whether the target **saved** or **cost** money on that trade. A target that never fired changes nothing, and the sentence says how close the trade came.
+
+Compare the replays with each other, not with the booked number: the replay marks short legs at the ask once a minute. One trade is an anecdote; *Which target, on these trades* asks the same question over the deployment's recent trades.
 
 Results load **on demand**, so the tab opens fast however long the history: the table fetches only the 50 rows on screen (already filtered, searched and sorted by the server), a row's legs and path are fetched when you open it, and **Day by day** fetches the recorded paths when you scroll to it. A row **struck through** is [quarantined](glossary#quarantined): booked on a price that was not real, shown but excluded from every total.`,
         },

@@ -57,6 +57,7 @@ A **Stopped** badge means the deployment takes no new entries.`,
 - **Trades** — how many of the first live trades are canary trades (default 10).
 - **Loss cap ₹** — if the canary trades lose this much in total, you get an **urgent alert** (the bell, and Telegram's alerts chat) and the deployment's row here shows **loss cap reached — your decision** with two buttons: **Demote to PAPER** or **Keep LIVE**. Nothing changes until you choose — it keeps trading LIVE at the canary size meanwhile. Keep LIVE asks again if it loses another loss cap. Canary trades are sized at 1 lot.
 - After the canary's trades, it asks **lift the size cap?** — it stays at the canary size until you press **Lift size cap**.
+- **Skip the canary** — while the canary is still running and the deployment is set to more lots than the canary's, its row has a **Skip the canary** button (multi-leg: also a check in the 📦 Lots dialog). It lifts the size cap now: the next entry trades every lot set, its ₹ limits act in full, and the canary stops watching — it no longer asks you at its loss cap. It is your decision, recorded in the audit as CANARY_SKIPPED with how far the canary got. It is not offered while the canary waits at its loss cap: answer Keep LIVE or Demote first.
 
 A name that ends in "(LIVE)" or "(PAPER)" follows the mode when you promote or demote.
 

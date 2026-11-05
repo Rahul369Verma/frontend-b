@@ -74,7 +74,7 @@ function replayAnswersOnce(data) {
     });
 }
 const replayCalls = () => axios.get.mock.calls.filter((c) => /stop-whatif$/.test(c[0]));
-import { reasonText, stopsText, recoveryText, firedLines, tradeStopsText, stopLossText, archiveNotes, vixLine } from './stopReplayFormat.js';
+import { reasonText, stopsText, recoveryText, firedLines, tradeStopsText, stopLossText, targetText, targetLevelText, archiveNotes, vixLine } from './stopReplayFormat.js';
 
 const trade = {
     _id: 't1', symbol: 'NSE:NIFTY50-INDEX', entryAt: at(9, 20), exitAt: at(15, 10), netPnl: -1500, maeRupees: -2900, mfeRupees: 300,
@@ -147,18 +147,18 @@ describe('TradeStopReplay', () => {
     it('asks only when clicked, then states saved/cost and the recovery', async () => {
         render(<TradeStopReplay trade={trade} />);
         expect(replayCalls()).toHaveLength(0);                 // only India VIX is fetched on opening
-        fireEvent.click(screen.getByText('Replay without stops'));
+        fireEvent.click(screen.getByText('Replay without stops or target'));
         await waitFor(() => expect(screen.getByText(/All stops together \(leg \+ stop-loss\) COST ₹6,100 on this trade/)).toBeTruthy());
         expect(replayCalls()[0][0]).toMatch(/\/multileg\/trades\/t1\/stop-whatif$/);
         expect(screen.getByText(/With no stops at all/)).toBeTruthy();
         expect(screen.getByText(/it DID come back into profit/)).toBeTruthy();
         expect(screen.getByText(/Stops replayed: leg stop 1.4× entry/)).toBeTruthy();
-        expect(screen.queryByText('Replay without stops')).toBeNull();
+        expect(screen.queryByText('Replay without stops or target')).toBeNull();
     });
     it('says plainly when the archive cannot replay the trade', async () => {
         replayAnswersOnce({ ...REPORT, configured: { net: null }, noStops: { net: null }, archive: { note: 'no archived quotes for the trade\'s days' } });
         render(<TradeStopReplay trade={trade} />);
-        fireEvent.click(screen.getByText('Replay without stops'));
+        fireEvent.click(screen.getByText('Replay without stops or target'));
         await waitFor(() => expect(screen.getByText(/Not enough recorded quotes to replay this trade \(no archived quotes/)).toBeTruthy());
     });
 });
@@ -184,7 +184,7 @@ describe('the stop-loss apart from the leg stops (22-Oct-2026)', () => {
     it('draws both what-ifs, each can be hidden, and states both effects', async () => {
         replayAnswersOnce(WITH_SL);
         render(<TradeStopReplay trade={stoppedTrade} />);
-        fireEvent.click(screen.getByText('Replay without stops'));
+        fireEvent.click(screen.getByText('Replay without stops or target'));
         await waitFor(() => expect(screen.getByText(/The stop-loss COST ₹1,573 on this trade/)).toBeTruthy());
         expect(screen.getByText(/All stops together \(leg \+ stop-loss\) COST ₹4,262/)).toBeTruthy();
         expect(screen.getByText(/Without the stop-loss \(leg stops kept\)/)).toBeTruthy();
@@ -255,5 +255,46 @@ describe('StopGridPanel', () => {
         expect(sum).toMatch(/2 of those touched profit again/);
         expect(sum).toMatch(/only 1 finished better without stops/);
         expect(screen.getByText(/came back to \+₹2,839/)).toBeTruthy();
+    });
+});
+
+// 5-Nov-2026, the 3-Nov LIVE straddle: "what will happen if TP_STRUCT didn't happen?"
+const WITH_TARGET = {
+    ...REPORT,
+    booked: { net: 3053, reason: 'TP_STRUCT' },
+    configured: { net: 3063, reason: 'TP_STRUCT', exitAt: at(12, 56), legStops: [], path: [{ t: at(9, 21), net: -40 }, { t: at(12, 56), net: 3063 }] },
+    noStopLoss: { net: 3063, reason: 'TP_STRUCT', legStops: [], path: [{ t: at(9, 21), net: -40 }, { t: at(12, 56), net: 3063 }] },
+    noStops: { net: 1148, reason: 'EXPIRY_DAY', legStops: [], path: [{ t: at(9, 21), net: -40 }, { t: at(15, 10), net: 1148 }] },
+    noTarget: { net: 4054, reason: 'SQUARE_OFF', exitAt: at(15, 10), legStops: [], path: [{ t: at(9, 21), net: -40 }, { t: at(12, 56), net: 3063 }, { t: at(14, 2), net: 4210 }, { t: at(15, 10), net: 4054 }] },
+    target: { set: true, key: 'tp_pct_credit', level: 35, rupees: 3075, fired: true, firedAt: at(12, 56), bestGross: 3114, bestInTargetUnit: 35.4, effect: -991,
+        after: { at: at(12, 56), bestAfter: 4210, worstAfter: 2890, ended: 4054, endedReason: 'SQUARE_OFF', endedAt: at(15, 10) } },
+    stopped: false, stopEffect: 1915, stopLossFired: false, stopLossEffect: 0, stopLossRecovery: null, recovery: null,
+};
+
+describe('the profit target apart from the stops (5-Nov-2026)', () => {
+    it('says what the target did, and what the trade did after it when held with every stop kept', () => {
+        expect(targetText(WITH_TARGET)).toBe('The profit target (35% of the credit, +₹3,075 before costs) fired at 12:56 IST at +₹3,063 in the replay, and COST ₹991 on this trade. Held without it (stops kept), from 12:56 IST it went as high as +₹4,210 and as low as +₹2,890, and would have finished at +₹4,054 (square-off 15:10).');
+        expect(targetText({ ...WITH_TARGET, target: { ...WITH_TARGET.target, fired: false, effect: 0, after: null } })).toMatch(/did not fire in the replay — without it, the trade is the same\. Its best point was 35.4% of the credit/);
+        expect(targetText({ ...WITH_TARGET, target: { set: false }, noTarget: null })).toBe('It had no profit target, so there is nothing to switch off.');
+        expect(targetText({ ...WITH_TARGET, target: undefined })).toBe(null);   // an older server
+        expect(targetLevelText({ set: true, key: 'tp_x_debit', level: 1.5, rupees: null })).toBe('1.5× the debit');
+    });
+    it('draws the held-on line and states it next to the other replays', async () => {
+        replayAnswersOnce(WITH_TARGET);
+        render(<TradeStopReplay trade={trade} />);
+        fireEvent.click(screen.getByText('Replay without stops or target'));
+        await waitFor(() => expect(screen.getByTestId('target-replay-line').textContent).toMatch(/COST ₹991 on this trade/));
+        expect(screen.getByText(/Without the profit target \(stops kept\)/)).toBeTruthy();
+        const box = screen.getByLabelText('replay · no profit target (stops kept)');
+        expect(box.checked).toBe(true);
+        fireEvent.click(box);
+        expect(screen.getByLabelText('replay · no profit target (stops kept)').checked).toBe(false);
+    });
+    it('a target that never fired draws no extra line (it would be the same as its stops)', async () => {
+        replayAnswersOnce({ ...WITH_TARGET, target: { ...WITH_TARGET.target, fired: false, effect: 0, after: null } });
+        render(<TradeStopReplay trade={trade} />);
+        fireEvent.click(screen.getByText('Replay without stops or target'));
+        await waitFor(() => expect(screen.getByTestId('target-replay-line').textContent).toMatch(/did not fire/));
+        expect(screen.queryByLabelText('replay · no profit target (stops kept)')).toBeNull();
     });
 });
