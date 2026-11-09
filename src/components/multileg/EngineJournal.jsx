@@ -4,6 +4,7 @@ import { API_URL } from '../../config/api.js';
 import { usePolling } from '../../hooks/usePolling.js';
 import { PAGE, buildQuery, journalReducer, JOURNAL_EMPTY } from './journalQuery.js';
 import DocLink from '../DocLink.jsx';
+import JournalDetail from './JournalDetail.jsx';
 import { Panel } from '../viz/primitives';
 import useCollapse from '../../hooks/useCollapse.js';
 
@@ -34,7 +35,9 @@ const nf = (n) => Number(n || 0).toLocaleString('en-IN');
 
 const typeTone = (t) => (t === 'REPEATS' ? 'text-fg-5'
     : /FAIL|ERROR|SKIP|DECLINED|STOOD_ASIDE|BLOCKED|ORPHAN|STALE|UNVERIFIED/.test(t) ? 'text-danger'
-        : /ENTRY|EXIT|SETTLED|LEG_SL/.test(t) ? 'text-success' : 'text-sky-300');
+        : /RETRY|LAG/.test(t) ? 'text-warning'
+            : t === 'ENTRY_ORDER' ? 'text-sky-300'
+                : /ENTRY|EXIT|SETTLED|LEG_SL|LEG_FILLED/.test(t) ? 'text-success' : 'text-sky-300');
 
 export default function EngineJournal({ deployments = [], repeats = {}, focus = null, active = true }) {
     const [filter, setFilter] = useState({ deploymentId: '', type: '', q: '' });
@@ -221,6 +224,7 @@ export default function EngineJournal({ deployments = [], repeats = {}, focus = 
                                     : e.name ? `[${e.name}]` : ''}{' '}
                                 {e.message}
                             </span>
+                            {e.detail && <JournalDetail detail={e.detail} />}
                         </div>
                     ))}
                     <div className="pt-1.5 pb-0.5 flex items-center gap-2">

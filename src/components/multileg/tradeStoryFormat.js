@@ -8,6 +8,7 @@ import { inr } from '../viz/tokens';
 const short = (sym) => String(sym || '').replace(/^(NSE|BSE):/, '');
 const legName = (l) => (l ? `${l.action} ${l.strike != null ? `${l.strike} ${l.type || ''}`.trim() : short(l.symbol)}` : 'a leg');
 const rs = (v) => inr(v, { dp: 0, sign: true });
+const ATTEMPT_WORD = { FILLED: 'filled', UNFILLED: 'not taken by the market', REJECTED: 'rejected', UNKNOWN: 'unclear at the broker', UNVERIFIED: 'accepted, unverified' };
 
 /**
  * An unwound entry in sentences: which leg failed and the broker's words, which legs were bought
@@ -17,8 +18,11 @@ export function failureLines(trade) {
     const f = trade && trade.entryFailure;
     if (!f) return [];
     const out = [];
-    const how = f.kind === 'rejected' ? 'was rejected by the broker' : f.kind === 'partial' ? 'was only partly filled' : 'did not fill';
+    const how = f.kind === 'rejected' ? 'was rejected by the broker' : f.kind === 'partial' ? 'was only partly filled' : f.kind === 'moved' ? 'was not sent — the market had moved too far' : 'did not fill';
     out.push(`The entry could not complete: ${legName(f.leg)} ${how}${f.message ? ` — “${f.message}”` : ''}.`);
+    // every order sent for that leg (9-Nov-2026: an unfilled entry is re-priced and retried)
+    const att = Array.isArray(f.attempts) ? f.attempts : [];
+    if (att.length > 1) out.push(`Orders sent for it: ${att.map((x) => (x.status === 'NOT_SENT' ? `#${x.n} not sent` : `#${x.n} limit ₹${x.limit} ${ATTEMPT_WORD[x.status] || String(x.status || '').toLowerCase()}`)).join('; ')}.`);
     const unwound = (trade.legs || []).concat(trade.closedLegs || []).filter((l) => l.closeReason === 'UNWIND');
     if (unwound.length) {
         const parts = unwound.map((l) => `${legName(l)} ${l.action === 'SELL' ? 'sold' : 'bought'} at ₹${l.entryPrice}, ${l.action === 'SELL' ? 'bought back' : 'sold'} at ₹${l.exitPrice}`);
@@ -37,7 +41,7 @@ export function failureLines(trade) {
 export function failedLegRows(trade) {
     const f = trade && trade.entryFailure;
     if (!f || !f.leg) return [];
-    const why = f.kind === 'rejected' ? `rejected: ${f.message || ''}` : f.kind === 'partial' ? `partly filled: ${f.message || ''}` : `not filled: ${f.message || ''}`;
+    const why = f.kind === 'rejected' ? `rejected: ${f.message || ''}` : f.kind === 'partial' ? `partly filled: ${f.message || ''}` : f.kind === 'moved' ? `not sent: ${f.message || ''}` : `not filled: ${f.message || ''}`;
     return [{ ...f.leg, note: why.trim() }, ...(f.notSent || []).map((l) => ({ ...l, note: 'never sent (the entry stopped before it)' }))];
 }
 

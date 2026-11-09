@@ -553,6 +553,11 @@ export default function StrategyScorecard({ sc, templates = [], single = false }
                         {!ready.ready && <span>Nothing passes every required go-live check yet — open a row's Live check to see what is missing.</span>}
                     </div>
                 )}
+                {data?.deploymentsFrom === 'database' && (
+                    <p className="mb-2 text-2xs text-fg-5" data-testid="scorecard-source">
+                        The trading engine is not running on this server, so the deployments are listed from the database: settings and totals as last saved, no live marks.
+                    </p>
+                )}
                 {err ? <div className="text-xs text-danger">Scorecard failed: {err}</div>
                     : !data ? <div className="text-xs text-fg-5">Loading…</div>
                     : !allRows.length ? <div className="text-xs text-fg-5">No deployments in this filter.</div>

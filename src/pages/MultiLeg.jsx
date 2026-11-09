@@ -1444,6 +1444,14 @@ export default function MultiLeg() {
                     <input type="number" step="0.1" value={params.entry_slippage_cap_pct ?? 1.5} onChange={e => setParams(p => ({ ...p, entry_slippage_cap_pct: Number(e.target.value) }))}
                         className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
                 </label>
+                <label className="text-fg-5" title="LIVE only: an entry order the market did not take (cancelled, nothing filled) is re-priced at the latest quote and sent again this many times before the structure gives up for the day. 0 = no retry. A broker rejection (margin, RMS) is never retried.">entry_retries
+                    <input type="number" min="0" max="2" step="1" value={params.entry_retries ?? 1} onChange={e => setParams(p => ({ ...p, entry_retries: Number(e.target.value) }))}
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
+                </label>
+                <label className="text-fg-5" title="LIVE only: an entry order (first or retry) is not sent when the bid (SELL) or ask (BUY) has moved more than this % against the price the structure was decided at — a retry never chases a market that has run away.">entry_max_drift_pct
+                    <input type="number" min="0" step="1" value={params.entry_max_drift_pct ?? 10} onChange={e => setParams(p => ({ ...p, entry_max_drift_pct: Number(e.target.value) }))}
+                        className="w-full mt-0.5 bg-slate-800 border border-line rounded p-1 text-fg-2" />
+                </label>
             </div>
 
             <div className="text-xs text-fg-4 mt-4 mb-1 font-semibold">Strike placement (how the SHORT strikes are chosen at entry)</div>
@@ -2982,7 +2990,7 @@ export default function MultiLeg() {
                                                     {/* `entered` is the one-per-day SLOT: say what used it — a failed entry
                                                         (27-Oct-2026: PE rejected for margin, CE unwound) is not "entered" */}
                                                     {d.daily?.entryFailure
-                                                        ? <span className="text-danger"> · no structure today: the {istTime(d.daily.entryFailure.at)} entry failed ({d.daily.entryFailure.leg?.action} {String(d.daily.entryFailure.leg?.symbol || '').replace(/^(NSE|BSE):/, '')} {d.daily.entryFailure.kind === 'rejected' ? 'rejected' : 'not filled'}: {d.daily.entryFailure.message}){d.daily.entryFailure.unwound?.length ? ' — the filled leg was bought back' : ''}</span>
+                                                        ? <span className="text-danger"> · no structure today: the {istTime(d.daily.entryFailure.at)} entry failed ({d.daily.entryFailure.leg?.action} {String(d.daily.entryFailure.leg?.symbol || '').replace(/^(NSE|BSE):/, '')} {d.daily.entryFailure.kind === 'rejected' ? 'rejected' : d.daily.entryFailure.kind === 'moved' ? 'not sent, the market moved too far' : 'not filled'}{d.daily.entryFailure.attempts?.length > 1 ? ` after ${d.daily.entryFailure.attempts.length} attempts` : ''}: {d.daily.entryFailure.message}){d.daily.entryFailure.unwound?.length ? ' — the filled leg was bought back' : ''}</span>
                                                         : d.daily?.standDown
                                                             ? <span className="text-warning" title={`Stood down ${istTimeSec(d.daily.standDown.at)} IST — no structure was entered today`}> · no entry today: {d.daily.standDown.reason}</span>
                                                             : d.daily?.entered ? ' · already traded today' : ''}{exitBits.length ? ` · exits: ${exitBits.slice(0, 3).join(' · ')}` : ''}
@@ -3179,11 +3187,11 @@ export default function MultiLeg() {
                         <Panel className="flex flex-col max-h-[40rem]" bodyClassName="flex-1 min-h-0 flex flex-col" title={`Structure trades (${mlTrades.length})`} docs="multi-leg#engine-journal">
                             {mlTrades.length === 0 ? <div className="text-xs text-fg-5">No completed structure round-trips yet.</div> : (
                               <div className="flex-1 min-h-0 overflow-auto">
-                                <table className="w-full text-2xs text-fg-3">
+                                <table className="w-full text-2xs text-fg-3 [&_th]:px-1.5 [&_td]:px-1.5">
                                     {/* The header sticks now that the body scrolls — a
                                         column of bare rupee figures with the labels
                                         scrolled off is unreadable. */}
-                                    <thead className="sticky top-0 z-10 bg-surface"><tr className="text-fg-5 text-left"><th>Entry</th><th>Exit</th><th>Name</th><th>Mode</th><th>Reason</th><th className="text-right">Gross ₹</th><th className="text-right">Charges</th><th className="text-right">Net ₹</th></tr></thead>
+                                    <thead className="sticky top-0 z-10 bg-surface"><tr className="text-fg-5 text-left"><th>Entry</th><th>Exit</th><th>Name</th><th>Mode</th><th className="text-right" title='Lots traded. "1 of 2" = the go-live canary held it below the lots set.'>Lots</th><th>Reason</th><th className="text-right">Gross ₹</th><th className="text-right">Charges</th><th className="text-right">Net ₹</th></tr></thead>
                                     <tbody>
                                         {mlTrades.map((t, i) => (
                                             /* A quarantined trade is shown, struck through, NOT hidden — it was
@@ -3366,7 +3374,7 @@ export default function MultiLeg() {
                                         {resMatched === resTotal ? `${resMatched} round-trips` : `${resMatched} of ${resTotal} match`} · click a column to sort
                                     </span>
                                 </div>
-                                <table className="w-full text-2xs text-fg-3">
+                                <table className="w-full text-2xs text-fg-3 [&_th]:px-1.5 [&_td]:px-1.5">
                                     <thead><tr className="text-fg-5 text-left">
                                         {/* Deployment is the SAME key the Deployment breakdown above
                                             groups on — without it a row here could not be matched to
@@ -3420,6 +3428,7 @@ export default function MultiLeg() {
                                                 <td className="truncate max-w-[7.5rem]" title={t.template}>{templates.find(x => x.key === t.template)?.name || t.template}</td>
                                                 <td>{shortSym(t.symbol)}</td>
                                                 <td className={t.trade_mode === 'LIVE' ? 'text-danger' : 'text-sky-300'}>{t.trade_mode}</td>
+                                                {(() => { const L = tradeLots(t); return <td className={`text-right tabular-nums whitespace-nowrap ${t.canaryCapped ? 'text-warning' : ''}`} title={L.title}>{L.text}</td>; })()}
                                                 <td className="text-fg-4">{t.exitReason}</td>
                                                 <td className="text-right">{t.origCredit != null ? `₹${fmt(t.origCredit, 1)}` : '—'}</td>
                                                 <td className="text-right text-fg-5"
@@ -3460,7 +3469,7 @@ export default function MultiLeg() {
                                                     <TradeStory trade={full} istTime={istTime} />
                                                     <div className="mb-2"><TradeStopReplay trade={full} istTime={istTime} istDateTime={istDateTime} istSpan={istSpan} /></div>
                                                     {allLegs.length > 0 ? (
-                                                        <table className="w-full text-3xs font-mono text-fg-3">
+                                                        <table className="w-full text-3xs font-mono text-fg-3 [&_th]:px-1.5 [&_td]:px-1.5">
                                                             <thead><tr className="text-fg-5 text-left"><th>Leg</th><th>Strike</th><th className="text-right" title="Units in this leg's order: lots × lot size × the leg's ratio">Qty</th><th className="text-right">Entry ₹</th><th className="text-right" title="the leg stop: a short leg is bought back at leg_sl_x × its entry premium">Stop ₹</th><th className="text-right">Exit ₹</th><th>Close</th></tr></thead>
                                                             <tbody>{allLegs.map((l, j) => {
                                                                 const legStop = full.stops?.legStops?.[l.symbol];

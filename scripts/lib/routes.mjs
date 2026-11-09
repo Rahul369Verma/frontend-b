@@ -29,7 +29,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const NAV = path.resolve(HERE, '../../src/config/nav.js');
 
 /** A concrete value for each dynamic segment, so `/strategy/:symbol` is loadable. */
-const PARAM_SAMPLES = { symbol: 'NIFTY' };
+// pageId: an in-app docs page (src/docs/content/*.js `id`); multi-leg is the longest, so it exercises the renderer most
+const PARAM_SAMPLES = { symbol: 'NIFTY', pageId: 'multi-leg' };
 
 /**
  * Routes that are real but are NOT pages, and would poison a cross-route

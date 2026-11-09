@@ -19,6 +19,7 @@
  *   CLIPPED_TEXT   text truncated with no title/aria to recover it
  *   CONTRAST       computed foreground/background below 4.5:1
  *   FLOAT_NOISE    unformatted JS floats (2826.0000000000014) on screen
+ *   TABLE_COLUMNS  table rows whose cells do not add up to the header's columns
  *   (UI_FOCUS=1)   NO_FOCUS_RING / FOCUS_OFFSCREEN / FOCUS_ORDER / POSITIVE_TABINDEX
  *   ZERO_SIZE      rendered-but-invisible interactive elements
  *
@@ -275,6 +276,27 @@ const PROBE = () => {
     if (t && FLOAT_NOISE.test(t)) {
       push('FLOAT_NOISE', el, `renders ${JSON.stringify(t.slice(0, 60))} — an unformatted JS float; `
         + `use the house formatter (viz/tokens.js inr/num/premium)`);
+    }
+  }
+
+  // ── 5c. TABLE COLUMNS that do not line up ─────────────────────────────────
+  // A body row whose cells (colSpan counted) do not add up to the header's
+  // width shifts every value after the gap under the wrong heading. 9-Nov-2026:
+  // the multileg Structure round-trips gained a Lots HEADER while its Lots CELL
+  // went into another table, so every row read "PAPER | HOLD_CAP" under
+  // "Mode | Lots" — and that other table had a cell with no header. No unit
+  // test renders those hand-built tables. A one-cell row (an expanded detail
+  // spanning the table, a "loading…" line) is not a data row and is skipped.
+  // The header's width is its WIDEST row: a two-row header puts a rowSpan=2
+  // corner cell in the first row only.
+  for (const t of document.querySelectorAll('table')) {
+    if (!vis(t) || !t.tHead || !t.tHead.rows.length) continue;
+    const width = (r) => [...r.cells].reduce((a, c) => a + (c.colSpan || 1), 0);
+    const hw = Math.max(...[...t.tHead.rows].map(width));
+    const bad = [...t.tBodies].flatMap((b) => [...b.rows]).filter((r) => r.cells.length > 1 && width(r) !== hw);
+    if (bad.length) {
+      const heads = [...t.tHead.rows[t.tHead.rows.length - 1].cells].map((c) => c.textContent.trim().slice(0, 12)).join(' | ');
+      push('TABLE_COLUMNS', t, `${bad.length} row(s) are ${[...new Set(bad.map(width))].join('/')} cells wide under a ${hw}-column header (${heads}): values sit under the wrong headings`);
     }
   }
 

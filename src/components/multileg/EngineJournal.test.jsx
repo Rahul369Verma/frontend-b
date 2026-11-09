@@ -26,6 +26,15 @@ function route(handler) {
 describe('EngineJournal', () => {
     beforeEach(() => { vi.clearAllMocks(); });
 
+    it('a row with structured detail (9-Nov-2026: an entry order\'s quote, limit, outcome) folds it under the line; others have no toggle', async () => {
+        const attempt = { n: 1, quote: { bid: 108.15, ask: 108.45, src: 'tape', ageMs: 400 }, basis: 'bid', ref: 108.15, limit: 106.53, orderId: 'O1', status: 'UNFILLED' };
+        route(() => ({ events: [ev(0, { type: 'ENTRY_RETRY', message: 'SELL X not filled at ₹106.53', detail: attempt }), ev(1, { message: 'plain row' })], hasMore: false, next: null, total: 2 }));
+        render(<EngineJournal deployments={DEPS} />);
+        expect(await screen.findByText('details — 1 order attempt')).toBeInTheDocument();
+        expect(screen.getAllByText(/^details/)).toHaveLength(1);
+        expect(screen.getByText('ENTRY_RETRY').className).toMatch(/text-warning/);
+    });
+
     it('pages OLDER rows with the cursor and says how many of how many are shown', async () => {
         const all = Array.from({ length: 120 }, (_, i) => ev(i));
         route((qs) => {

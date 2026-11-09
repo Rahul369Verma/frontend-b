@@ -30,12 +30,33 @@ Options are always bought and sold as options; this only changes what the strate
         },
         {
             id: 'fyers',
-            title: 'Fyers API settings (the broker)',
-            md: `**Fyers** is the broker the app trades and reads prices through. It needs an **App ID** and **Redirect URL** from your Fyers developer dashboard (the redirect URL must match exactly).
+            title: 'Fyers broker accounts',
+            where: 'API Configuration tab → Fyers broker accounts',
+            md: `**Fyers** is the broker the app trades and reads prices through. Its logins are set up **here only**. They are saved in the app's database, never in configuration files, and nothing falls back to those files.
 
-Fyers issues a login **token** that expires every day. **Auto Login (TOTP)** creates a fresh one automatically using your authenticator code (takes 10–15 seconds); the app also does this on its own each morning. **Delete Token** logs the app out — use it if the token is stuck or invalid, then log in again.
+You can save several accounts (for example your own and a family member's). **One is active**, and the whole app uses it for prices, option chains and orders.
 
-> **Warning:** Live orders are also refused unless the server's IP address is whitelisted in the Fyers dashboard. A successful [broker drill](go-live#drills) is the proof that everything works.`,
+**What each account needs**
+- **Name**: your own label.
+- **Fyers client ID**: the ID you log in to Fyers with.
+- **App ID** and **Secret key**: from the Fyers API dashboard (myapi.fyers.in) → your app.
+- **Redirect URL**: exactly the one set on that Fyers app. For this app it is the server's own address, which the form shows.
+- **PIN**: the 4-digit Fyers login PIN.
+- **TOTP key**: the text key Fyers shows when you turn on *External 2FA TOTP*. It is not a 6-digit code.
+
+The secret key, PIN and TOTP key are **encrypted on the server** and are never shown again. To change one, type the new value. A field left empty keeps the saved value.
+
+**Steps to add an account**
+1. In the Fyers API dashboard, create an app with this server's address as its redirect URL. Copy the App ID and Secret key.
+2. Turn on External 2FA TOTP in the Fyers account's security settings and copy the text key (add it to your authenticator app too).
+3. Whitelist the server's IP address on the Fyers app. Without that, Fyers refuses every order.
+4. Press **Add Fyers account**, fill every field and save. The first account becomes active and logs in at once. Its card shows whether the login worked, and if not, which step failed.
+
+**Logging in.** A Fyers token lasts one day. The app logs in by itself with the saved PIN and TOTP key whenever the token is missing or expired. **Log in now** does it on demand (10–15 seconds). **Browser login** uses the Fyers website instead.
+
+**Switching accounts.** Press **Make active** on another account. The data feed and every order move to it within seconds. This is **refused while a LIVE position is open**, because that position's orders and stop-loss belong to the account that opened it. Close it first. Deleting the active account has the same rule.
+
+> **Warning:** Use one Fyers account per server. Two servers (production, a dev machine, the optimizer box) logged in with the same account keep logging each other out. Live orders also need the server's IP address whitelisted in the Fyers dashboard. A successful [broker drill](go-live#drills) proves everything works.`,
         },
         {
             id: 'angel',
