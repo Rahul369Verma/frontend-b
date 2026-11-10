@@ -443,8 +443,8 @@ export const HELP = {
     "avg-margin": {
         label: "Avg margin (capital)",
         short: "Average rupees of capital tied up per trade in the backtest.",
-        detail: "Mean of the per-entry margin estimate across all backtest trades. It is the denominator behind 'ROI on margin' and the rough answer to 'how much money do I need to run this'.",
-        gotcha: "The backtest estimates margin with a simpler formula than the live engine uses, so this can be well off what your broker actually blocks.",
+        detail: "Mean of the margin each backtest trade blocked at entry. It is the denominator behind 'ROI on margin' and the answer to 'how much money do I need to run this'. Index options are priced with the exchange's rule, the one the broker applies: SPAN (the worst cost to close over a ~9.5% move of the index) + 2% exposure on every short leg (4% on its expiry day) + the premium of the bought legs. A hedge caps SPAN at the wing width, which is why an iron condor needs a fraction of a naked straddle.",
+        gotcha: "Fitted to 535 margins Fyers' calculator quoted for real structures (Oct–Nov 2026): within about 4% on average. The exchange raises margins in volatile weeks, so a stress month needed more than shown here.",
     },
     "roi-on-margin": {
         label: "ROI on margin",

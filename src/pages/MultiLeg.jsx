@@ -3439,7 +3439,8 @@ export default function MultiLeg() {
                                                 <td className="text-right text-fg-4"
                                                     title={!hasMargin ? 'No margin was recorded for this trade'
                                                         : t.marginBasis === 'span' ? "The broker's SPAN margin when the structure was opened"
-                                                            : "Estimated (heuristic) — the broker's SPAN figure was not available at entry"}>
+                                                            : t.marginBasis === 'exchange-rule' ? "The exchange's margin rule (SPAN + exposure + bought premium): the broker's calculator did not answer at entry"
+                                                                : "Estimated (heuristic) — the broker's SPAN figure was not available at entry"}>
                                                     {hasMargin ? `${t.marginBasis === 'span' ? '' : '~'}₹${fmt(t.marginEst)}` : '—'}
                                                 </td>
                                                 <td className="text-right">₹{fmt(t.grossPnl)}</td>
