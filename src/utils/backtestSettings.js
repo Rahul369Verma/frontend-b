@@ -22,6 +22,19 @@ import { INSTRUMENT_CONFIG } from '../constants';
 
 const isSet = (v) => v !== undefined && v !== null;
 
+// BUY or SELL the option. The Backtester's old key was `trade_mode`, which in the live
+// engine also means PAPER/LIVE — so the setting is `option_side` now (backend
+// src/domain/risk/optionSide). A config saved before the rename keeps its side.
+const OPTION_SIDES = ['BUY', 'SELL', 'HEDGE_SELL'];
+function withOptionSide(s) {
+    const old = String(s.trade_mode == null ? '' : s.trade_mode).trim().toUpperCase();
+    if (!OPTION_SIDES.includes(old)) return s;
+    const out = { ...s };
+    if (!isSet(out.option_side) || out.option_side === '') out.option_side = old;
+    delete out.trade_mode;
+    return out;
+}
+
 /**
  * @param params            the form's state (what you set)
  * @param strategyDefaults  { [strategyId]: defaults } from /engine/defaults (code < saved)
@@ -31,7 +44,7 @@ export function effectiveSettings(params, { strategyDefaults = null, instrumentC
     const strat = (strategyDefaults && p.strategy && strategyDefaults[p.strategy]) || {};
     const merged = { ...strat };
     for (const [k, v] of Object.entries(p)) if (isSet(v)) merged[k] = v;
-    return withCurrentLot(withFormFallbacks(merged), instrumentConfig);
+    return withCurrentLot(withFormFallbacks(withOptionSide(merged)), instrumentConfig);
 }
 
 /** Request shape for /engine/backtest/run: legacy keys dropped, numeric strings → numbers (resolution stays as typed). */

@@ -139,6 +139,8 @@ export function settingsForIndex(result, params, symbol, strategy) {
     capital: shared.capital,
     dataSource: shared.dataSource,
     backtest_mode: shared.backtest_mode,
+    // BUY or SELL the option — the run's side (older runs carry none: BUY)
+    ...(shared.option_side ? { option_side: shared.option_side } : {}),
     slippage_percent: shared.slippage_percent,
     brokerage_per_order: shared.brokerage_per_order,
   });

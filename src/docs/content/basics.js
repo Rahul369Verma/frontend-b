@@ -47,7 +47,27 @@ Profit is **premium change × quantity**. If you buy 1 lot of 75 units and the p
             md: `- **Buying** an option costs the premium up front. The most you can lose is what you paid; the gain can be large if the index moves your way.
 - **Selling** (also called *writing* or *going short*) means you **receive** the premium up front. You keep it if the option ends worthless, but if the index moves against you the loss can be much bigger than what you received.
 
-Single-option strategies in this app mostly **buy** a CE or a PE (a few settings allow selling). Multi-leg structures often **sell** options (to collect premium) and **buy** others further away as protection. The difference between what was received and what was paid is the **net credit** (you received more) or **net debit** (you paid more).`,
+Single-option strategies **buy** a CE or a PE by default, and can **sell** instead (see [Option selling](#option-selling)). Multi-leg structures often **sell** options (to collect premium) and **buy** others further away as protection. The difference between what was received and what was paid is the **net credit** (you received more) or **net debit** (you paid more).`,
+        },
+        {
+            id: 'option-selling',
+            title: 'Option selling with single-option strategies',
+            md: `A single-option strategy gives a **direction** — bullish or bearish. The **Option side** setting decides how that direction is traded:
+
+| Option side | Bullish signal | Bearish signal | Up front | Worst case |
+|---|---|---|---|---|
+| **Buy** (default) | buy the call (CE) | buy the put (PE) | pay the premium | lose the premium |
+| **Sell** | **sell the put** | **sell the call** | receive the premium; the broker blocks margin | much more than the premium |
+
+Selling the *opposite* option keeps the trade on the signal's side: a bullish signal sells the put, whose price falls as the index rises. The stop sits **above** the price sold (you buy it back dearer if wrong), the target below it.
+
+- **The same rule everywhere** — the Backtest page, the Optimizer and live deployments pick the same option, strike and order side from one shared rule, so a selling backtest deploys as a seller.
+- **Margin** — a naked NIFTY lot needs about ₹1.5–2.5 lakh. Backtests compute it for every entry with the exchange's SPAN + exposure rule; live asks the **broker's margin calculator** before every order and refuses an entry the account can't carry.
+- **Broker stop** — a live sell is protected by a *buy* stop-limit order resting at the broker, above the price sold.
+- **Hedged selling** (a sell plus a protective buy further out) is for research on this page: live trades it as a [Multi-Leg](multi-leg) credit spread, not as a single option.
+- **Not for** MCX futures or Delta contracts — those are traded directly (long on a bullish signal, short on a bearish one); there is no option to sell.
+
+> **Warning:** Selling wins small and often, and loses big and rarely. A short backtest can easily contain none of the rare days — look at its worst day, not its win rate, before trusting it.`,
         },
         {
             id: 'pnl',
@@ -69,7 +89,7 @@ Single-option strategies in this app mostly **buy** a CE or a PE (a few settings
 
 The app shows margin so you can judge **return on capital**: a ₹500 profit on ₹5,000 of margin is a 10% return; the same ₹500 on ₹5,00,000 is 0.1%.
 
-> **Note:** Today the app estimates margin with its own formula (marked "~" on screen); it does not yet ask the broker. Treat margin figures as approximate. Details: [Multi-Leg results](multi-leg#results-tab).`,
+> **Note:** Before a live sell, the app asks the **broker's margin calculator**. Backtests can't (the broker prices only contracts listed today), so they use the exchange's SPAN + exposure rule, measured against the broker's answers (typically within a few percent). Figures marked "~" are such estimates. Details: [Multi-Leg results](multi-leg#results-tab).`,
         },
         {
             id: 'sl-tp',

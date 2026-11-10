@@ -57,7 +57,7 @@ const COUNCIL_MEMBER_OPTIONS = [
 // LOT_SIZES moved to Backend API
 
 import { useLocation } from 'react-router-dom';
-import { INSTRUMENT_CONFIG, MARKET_TIMINGS, MCX_MARGIN } from '../constants';
+import { INSTRUMENT_CONFIG, MARKET_TIMINGS } from '../constants';
 import { fetchExpiriesForSymbol } from '../utils/expiryUtils';
 import { API_URL } from '../config/api.js';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
@@ -173,7 +173,7 @@ const TRADE_COLUMNS = ['chart', 'entry_time', 'symbol', 'volume', 'avg_vol', 'ty
 const SYSTEM_KEYS = [
     'symbol', 'start_date', 'end_date', 'capital', 'resolution', 
     'lot_size', 'trade_start_time', 'trade_end_time', 
-    'backtest_mode', 'dataSource', 'broker', 'futures_expiry', 'trade_mode',
+    'backtest_mode', 'dataSource', 'broker', 'futures_expiry', 'option_side', 'trade_mode',
     // Delta Exchange: venue settings survive a strategy change like the symbol does
     'lots', 'holding_enabled', 'delta_leverage', 'delta_mode', 'delta_option_min_hours', 'delta_option_iv', 'delta_slippage_ticks',
 ];
@@ -655,7 +655,7 @@ export default function Backtest() {
   const ASKAI_EXCLUDE_KEYS = new Set([
       // System / runtime
       'symbol', 'strategy', 'start_date', 'end_date', 'capital', 'lots',
-      'lot_size', 'trade_mode', 'dataSource', 'resolution', 'interval',
+      'lot_size', 'trade_mode', 'option_side', 'dataSource', 'resolution', 'interval',
       'startDate', 'endDate', 'period', 'futures_expiry', 'backtest_mode',
       'broker', 'model_file', 'seed_data', 'use_ai_prediction',
       // AI configuration — the AI doesn't tune itself
@@ -1888,99 +1888,62 @@ export default function Backtest() {
                      </div>
                 )}
                 
-                {/* TRADING MODE (BUY v/s SELL) */}
+                {/* OPTION SIDE — BUY or SELL the option (backend src/domain/risk/optionSide; was trade_mode) */}
                 <div>
-                     <label htmlFor="backtest-trading-mode-13" className="block text-sm font-medium text-purple-400 mb-1">Trading Mode</label>
+                     <label htmlFor="backtest-trading-mode-13" className="block text-sm font-medium text-purple-400 mb-1">Option side</label>
                      <select id="backtest-trading-mode-13" 
                         className="w-full bg-slate-900 border border-purple-900 rounded p-2 text-fg"
-                        value={shown.trade_mode}
-                        onChange={e => setParams({...params, trade_mode: e.target.value})}
+                        value={shown.option_side}
+                        onChange={e => { const next = { ...params, option_side: e.target.value }; delete next.trade_mode; setParams(next); }}
                      >
-                         <option value="BUY">Buying (Long Options)</option>
-                         <option value="SELL">Selling (Naked Shorts)</option>
-                         <option value="HEDGE_SELL">Selling (Hedged)</option>
+                         <option value="BUY">Buy options</option>
+                         <option value="SELL">Sell options (naked)</option>
+                         <option value="HEDGE_SELL">Sell options, hedged (research only)</option>
                      </select>
                 </div>
 
-                {/* Selling Parameters — Auto-Derived (read-only) */}
-                {(params.trade_mode === 'SELL' || params.trade_mode === 'HEDGE_SELL') && (() => {
+                {/* What selling does — no invented numbers: margin is computed per trade */}
+                {(shown.option_side === 'SELL' || shown.option_side === 'HEDGE_SELL') && (() => {
                     const cfg = instrumentConfig[params.symbol] || {};
                     const isMcx = cfg.exchange === 'MCX';
-                    const isHedged = params.trade_mode === 'HEDGE_SELL';
+                    const isDelta = String(params.symbol || '').startsWith('DELTA:');
+                    const isHedged = shown.option_side === 'HEDGE_SELL';
                     const hedgeWidth = Math.max(1, parseInt(params.hedge_width) || 2);
-                    // SPAN+Exposure default by exchange if marginPct isn't set
-                    const fallbackPct = cfg.exchange === 'BSE' ? 0.18 : (cfg.exchange === 'MCX' ? null : 0.15);
-                    const pct = typeof cfg.marginPct === 'number' ? cfg.marginPct : fallbackPct;
-                    const HEDGE_RETENTION = 0.25;
-                    let marginPerLot = null;
-                    // MCX: the exchange's margin is a share of the contract value (dated snapshot), shown as a rate.
-                    const mcxRate = isMcx ? (MCX_MARGIN.rates[cfg.underlying] ?? null) : null;
-                    if (isMcx) {
-                        marginPerLot = null;
-                    } else if (cfg.lotSize && pct) {
-                        // Use a representative spot from the symbol family to preview margin.
-                        // The engine will re-derive this from the actual entry spot.
-                        const previewSpot = (cfg.underlying === 'NIFTY') ? 22000
-                            : (cfg.underlying === 'BANKNIFTY') ? 50000
-                            : (cfg.underlying === 'FINNIFTY') ? 24000
-                            : (cfg.underlying === 'MIDCPNIFTY') ? 13000
-                            : (cfg.underlying === 'SENSEX') ? 80000
-                            : (cfg.underlying === 'BANKEX') ? 55000
-                            : 1000;
-                        marginPerLot = Math.max(5000, Math.round(previewSpot * cfg.lotSize * pct * (isHedged ? HEDGE_RETENTION : 1)));
-                    }
-                    const fmtINR = (n) => n == null ? '—' : `₹${n.toLocaleString('en-IN')}`;
-
+                    const tradesOptions = !isDelta && !(isMcx && params.mcx_mode !== 'OPTIONS');
                     return (
-                        <div className="bg-slate-800/50 p-3 rounded border border-purple-500/30">
-                            <div className="flex items-center justify-between mb-2">
-                                <span className="text-xs font-semibold text-purple-300">Auto-Derived Selling Inputs</span>
-                                <span className="text-3xs text-purple-400/70">Live values are recomputed per trade from spot + Black-Scholes</span>
-                            </div>
-                            <div className={`grid gap-2 ${isHedged ? 'grid-cols-4' : 'grid-cols-3'}`}>
-                                <div className="bg-slate-900/60 border border-purple-700/40 rounded p-2">
-                                    <div className="text-3xs uppercase tracking-wide text-purple-400">Lot Size</div>
-                                    <div className="text-sm font-mono text-fg">{cfg.lotSize ?? '—'}</div>
+                        <div className="bg-slate-800/50 p-3 rounded border border-purple-500/30 space-y-2">
+                            <div className="text-xs font-semibold text-purple-300">Selling options</div>
+                            {!tradesOptions ? (
+                                <p className="text-3xs text-warning leading-relaxed">
+                                    This symbol trades the {isDelta ? 'Delta contract' : 'MCX future'} directly — long on a bullish signal, short on a bearish one — so there is no option to sell. The run ignores the side and says so.
+                                </p>
+                            ) : (
+                                <ul className="text-3xs text-fg-4 leading-relaxed list-disc pl-4 space-y-0.5">
+                                    <li>A bullish signal <b>sells the put</b>, a bearish one the call; the stop sits above the premium sold, the target below it.</li>
+                                    <li><b>Margin</b> is worked out for every entry: the exchange&apos;s SPAN + exposure rule for index options (measured against the broker&apos;s calculator), about ₹1.5–2.5 lakh per naked NIFTY lot{isMcx ? '; MCX options use the MCX margin rate' : ''}. An entry the capital can&apos;t margin is skipped and counted — the lots are never quietly cut.</li>
+                                    <li>Time decay is in the Black-Scholes premium (Simulated Premium), or in the recorded prices (Real Option Data).</li>
+                                    {isHedged
+                                        ? <li><b>Research only:</b> live can&apos;t run a hedged short on the single-leg engine (two contracts) — deploy it as a Multi-Leg credit spread. Not available on Real Option Data.</li>
+                                        : <li>Live sells the same way: the broker&apos;s margin calculator is checked before every order, and the broker stop is a buy stop above the premium sold.</li>}
+                                </ul>
+                            )}
+                            {isHedged && tradesOptions && (
+                                <div className="flex items-center gap-2">
+                                    <label htmlFor="backtest-hedge-width-14" className="text-3xs uppercase tracking-wide text-purple-400">Hedge width</label>
+                                    <select id="backtest-hedge-width-14"
+                                        className="bg-slate-900 border border-purple-700/40 rounded px-1 py-0.5 text-xs text-fg"
+                                        value={hedgeWidth}
+                                        onChange={e => setParams({ ...params, hedge_width: parseInt(e.target.value) })}
+                                    >
+                                        <option value={1}>1 step (tight)</option>
+                                        <option value={2}>2 steps (balanced)</option>
+                                        <option value={3}>3 steps (wide)</option>
+                                        <option value={4}>4 steps</option>
+                                        <option value={5}>5 steps</option>
+                                    </select>
+                                    <span className="text-4xs text-fg-5">{cfg.strikeStep ? `long leg ${hedgeWidth * cfg.strikeStep} pts beyond the short` : 'long leg beyond the short'}</span>
                                 </div>
-                                <div className="bg-slate-900/60 border border-purple-700/40 rounded p-2">
-                                    <div className="text-3xs uppercase tracking-wide text-purple-400">Margin / Lot</div>
-                                    <div className="text-sm font-mono text-fg">{isMcx ? (mcxRate != null ? `${(mcxRate * 100).toFixed(2)}%${isHedged ? ' × 0.25' : ''}` : 'unknown') : fmtINR(marginPerLot)}</div>
-                                    <div className="text-4xs text-fg-5">
-                                        {isMcx ? `of the contract value (MCX SPAN+ELM, ${MCX_MARGIN.asOf})` : pct ? `${(pct * 100).toFixed(0)}% × notional` : '—'}
-                                        {isHedged && !isMcx ? ' × 0.25' : ''}
-                                    </div>
-                                </div>
-                                <div className="bg-slate-900/60 border border-purple-700/40 rounded p-2">
-                                    <div className="text-3xs uppercase tracking-wide text-purple-400">Theta</div>
-                                    <div className="text-sm font-mono text-fg">BS</div>
-                                    <div className="text-4xs text-fg-5">Decay baked into BS premium evolution</div>
-                                </div>
-                                {isHedged && (
-                                    <div className="bg-slate-900/60 border border-purple-700/40 rounded p-2">
-                                        <label htmlFor="backtest-hedge-width-14" className="text-3xs uppercase tracking-wide text-purple-400 block mb-1">Hedge Width</label>
-                                        <select id="backtest-hedge-width-14"
-                                            className="w-full bg-slate-900 border border-purple-700/40 rounded px-1 py-0.5 text-xs text-fg"
-                                            value={hedgeWidth}
-                                            onChange={e => setParams({ ...params, hedge_width: parseInt(e.target.value) })}
-                                        >
-                                            <option value={1}>1 step (tight)</option>
-                                            <option value={2}>2 steps (balanced)</option>
-                                            <option value={3}>3 steps (wide)</option>
-                                            <option value={4}>4 steps</option>
-                                            <option value={5}>5 steps</option>
-                                        </select>
-                                        <div className="text-4xs text-fg-5 mt-0.5">
-                                            Long leg = {cfg.strikeStep ? `${hedgeWidth * cfg.strikeStep} pts away` : 'auto'}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                            <div className="text-3xs text-fg-4 mt-2 leading-relaxed">
-                                ⚙️ Margin, theta and hedge cost are now derived from the symbol + Black-Scholes — no
-                                manual inputs needed. The engine recomputes margin at the actual entry spot, prices
-                                the hedge leg via BS at entry, and lets the BS premium curve carry theta decay
-                                exactly as it would in live trading.
-                            </div>
+                            )}
                         </div>
                     );
                 })()}

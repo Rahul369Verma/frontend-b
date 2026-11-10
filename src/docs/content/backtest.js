@@ -22,7 +22,13 @@ export default {
 - **Exchange / Symbol** — the index (or stock) to test on. **Start / End Date** — the period.
 - **Backtest Mode** — *Simulated Premium* estimates the option price from the index move (fast, approximate); *Real Option Data* uses recorded option prices (slow, accurate). For each trade-day it takes the option's prices from, in order: local option files, then the **recorded option-chain archive** (production's real prices for the trade's own contract, from Aug 2026), then the broker. The broker has nothing for a contract that has already expired. The line under the box shows where recorded prices are read from and whether that source answers. The result's notes count how many trade-days came from each source.
 - **Data Source** — where index candles come from: the broker API, the current-month future, or the **local archive** (stored history, fast). *Auto* picks for you.
-- **Trading Mode** — *Buying (long options)*, *Selling (naked shorts)* or *Selling (hedged)*. Selling modes show extra inputs: lot size, margin per lot, theta (time decay is already built into the simulated premium) and hedge width.`,
+- **Option side** — *Buy options*, *Sell options (naked)* or *Sell options, hedged (research only)*.
+  - **Selling** trades the *opposite* option: a bullish signal **sells the put**, a bearish one sells the call, so the premium sold falls as the signal plays out. The stop sits **above** the premium sold, the target below it. Trades record both the option held and the signal's direction.
+  - **Margin** is worked out for every entry, from the contract and premium then: the exchange's SPAN + exposure rule for index options (measured against the broker's own calculator — about ₹1.5–2.5 lakh per naked NIFTY lot). An entry the capital can't margin is **skipped and counted** in the results' notes; the lots are never quietly cut. Set capital to match.
+  - Works with both **Simulated Premium** and **Real Option Data** (the recorded prices of the option sold).
+  - **Hedged** also buys a protective option *Hedge width* strikes further out, which cuts the margin a lot. It is **research only**: the live single-leg engine holds one contract, so deploy a hedged short on [Multi-Leg](multi-leg) instead. Not available on Real Option Data (the protective option has no recorded prices there).
+  - On **MCX futures** and **Delta** contracts there is no option to sell — the side is ignored, and the run says so.
+  - **Deploying** a selling backtest makes a deployment that sells, the same way (see [Option selling](basics#option-selling)).`,
         },
         {
             id: 'strategy-json',

@@ -13,7 +13,7 @@
 
 export const ASSUMPTION_KEYS = [
     'capital', 'lot_size', 'lots', 'slippage_percent', 'brokerage_per_order', 'resolution',
-    'backtest_mode', 'dataSource', 'trade_mode', 'sim_iv_source', 'vix_source',
+    'backtest_mode', 'dataSource', 'option_side', 'sim_iv_source', 'vix_source',
 ];
 
 const TIME = 'time HH:MM (IST), 09:15–15:30';
@@ -42,7 +42,7 @@ export const FORM_FALLBACKS = {
     broker: { value: 'fyers' },
     backtest_mode: { value: 'Simulated Premium' },
     dataSource: { value: 'AUTO' },
-    trade_mode: { value: 'BUY' },
+    option_side: { value: 'BUY' },        // BUY or SELL the option (was trade_mode)
     holding_enabled: { value: false },
     lots: { value: 1 },
     // timing and risk

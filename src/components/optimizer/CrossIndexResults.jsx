@@ -315,6 +315,7 @@ export default function CrossIndexResults({ result, onTest, onSave, onClear, noi
           <h2 className="text-xl font-bold flex items-center gap-2"><TrendingUp className="w-5 h-5 text-success" aria-hidden="true" />Best settings across indexes<DocLink to="optimizer#results" /></h2>
           <p className="text-2xs text-fg-5 mt-1">
             {symbols.map(nameOf).join(', ')} · {rc.start_date} → {rc.end_date} · test window after {rc.oos_split_date} ({Math.round((rc.oos_fraction ?? 0.3) * 100)}%)
+            {rc.option_side && rc.option_side !== 'BUY' && <span className="text-warning"> · {rc.option_side === 'HEDGE_SELL' ? 'selling, hedged (research only)' : 'selling options'}</span>}
             {result.preset ? ` · ${result.preset}` : ''}{result.budget ? ` (${result.budget.d1}${result.budget.s2 ? ` + ${result.budget.d2} for the best ${result.budget.s2}` : ''} settings per index)` : ''} · seed {result.seed}
           </p>
           {Array.isArray(result.runConfig?.warnings) && result.runConfig.warnings.length > 0 && (

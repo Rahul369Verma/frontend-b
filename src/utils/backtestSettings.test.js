@@ -121,3 +121,37 @@ describe('Optimizer hand-offs — an old run that stored the start-date lot', ()
         expect(optimizerSrc).not.toMatch(/as of the start date/);
     });
 });
+
+// BUY or SELL the option (backend src/domain/risk/optionSide). The setting is `option_side`:
+// the old key `trade_mode` also means PAPER/LIVE in the live engine, which never acts on it.
+describe('option side — the setting live reads', () => {
+    it('defaults to buying, and is sent as option_side', () => {
+        const eff = effectiveSettings(FORM, { strategyDefaults: DEFAULTS });
+        expect(eff.option_side).toBe('BUY');
+        expect(eff.trade_mode).toBeUndefined();
+    });
+    it('a config saved before the rename keeps its side (a selling backtest stays a selling one)', () => {
+        const eff = effectiveSettings({ ...FORM, trade_mode: 'SELL' }, { strategyDefaults: DEFAULTS });
+        expect(eff.option_side).toBe('SELL');
+        expect(eff.trade_mode).toBeUndefined();
+        expect(runSettings({ ...FORM, trade_mode: 'HEDGE_SELL' }, { strategyDefaults: DEFAULTS }).option_side).toBe('HEDGE_SELL');
+    });
+    it('the new key wins, and PAPER/LIVE in trade_mode is not a side', () => {
+        expect(effectiveSettings({ ...FORM, trade_mode: 'SELL', option_side: 'BUY' }).option_side).toBe('BUY');
+        const live = effectiveSettings({ ...FORM, trade_mode: 'LIVE' });
+        expect(live.option_side).toBe('BUY');
+        expect(live.trade_mode).toBe('LIVE');
+    });
+    it('the optimizer hands its side to Test and Save (single- and multi-index)', () => {
+        expect(optimizerSrc).toMatch(/option_side: pick\('option_side', 'BUY'\)/);
+        const result = { runConfig: { shared: { resolution: '5', start_date: '2025-06-16', end_date: '2026-02-19', capital: 500000, dataSource: 'ARCHIVE_SPOT', backtest_mode: 'Simulated Premium', option_side: 'SELL' } } };
+        const p = settingsForIndex(result, { ema_short: 9 }, 'NSE:NIFTY50-INDEX', 'mta_ema_crossover');
+        expect(p.option_side).toBe('SELL');
+        const old = settingsForIndex({ runConfig: { shared: { resolution: '5' } } }, {}, 'NSE:NIFTY50-INDEX', 'x');
+        expect(old.option_side).toBeUndefined();   // an older run carried none: the Backtester's default (BUY)
+    });
+    it('the Backtest page binds the select to option_side and shows no invented margin figure', () => {
+        expect(backtestSrc).toMatch(/value=\{shown\.option_side\}/);
+        expect(backtestSrc).not.toMatch(/previewSpot/);
+    });
+});

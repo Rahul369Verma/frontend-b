@@ -64,6 +64,7 @@ const formatDuration = (ms) => {
 const NOISE_PARAM_KEYS = new Set([
   'isOptimizer', 'strategy', 'strategies', 'symbol', 'start_date', 'end_date', 'startDate', 'endDate',
   'capital', 'lots', 'lot_size', 'resolution', 'backtest_mode', 'dataSource', 'futures_expiry',
+  'option_side', 'trade_mode',
   'slippage_percent', 'brokerage_per_order', 'max_slippage_percent',
   'trade_start_time', 'trade_end_time', 'max_daily_loss', 'max_trades_per_day',
   'minTrades', 'minWinRate', 'maxDrawdown', 'minSharpeRatio',
@@ -619,7 +620,7 @@ export default function Optimizer() {
     'rank_metric', 'min_consistency', 'combiner_null_runs',
     // run-context (set explicitly + normalized below)
     'symbol', 'strategy', 'resolution', 'start_date', 'end_date', 'startDate', 'endDate',
-    'capital', 'lot_size', 'lots', 'dataSource', 'backtest_mode', 'futures_expiry',
+    'capital', 'lot_size', 'lots', 'dataSource', 'backtest_mode', 'futures_expiry', 'option_side', 'trade_mode',
     'slippage_percent', 'brokerage_per_order', 'use_ai_prediction',
   ]);
 
@@ -696,6 +697,8 @@ export default function Optimizer() {
       lot_size: pick('lot_size', 35),
       dataSource: pick('dataSource', 'AUTO'),
       backtest_mode: pick('backtest_mode', 'Simulated Premium'),
+      // BUY or SELL the option — the run's side, so Test replays a selling run as one
+      option_side: pick('option_side', 'BUY'),
       futures_expiry: pick('futures_expiry'),
       slippage_percent: pick('slippage_percent', 0.05),
       brokerage_per_order: pick('brokerage_per_order', 20),
@@ -1091,6 +1094,23 @@ export default function Optimizer() {
                 )}
               </div>
               <div>
+                <label htmlFor="optimizer-option-side" className="block text-sm font-medium text-fg-4 mb-1">Option side</label>
+                <select id="optimizer-option-side" className="w-full bg-slate-900 border border-line rounded p-2 text-fg"
+                  value={config.option_side || 'BUY'}
+                  onChange={e => setConfig({ ...config, option_side: e.target.value })}>
+                  <option value="BUY">Buy options</option>
+                  <option value="SELL">Sell options (naked)</option>
+                  <option value="HEDGE_SELL">Sell options, hedged (research only)</option>
+                </select>
+                <p className="text-3xs text-fg-5 mt-1">
+                  {config.option_side === 'SELL'
+                    ? 'A bullish signal sells the put, a bearish one the call. Each entry needs the exchange margin (SPAN + exposure, about ₹1.5–2.5 lakh per NIFTY lot) — set capital to match. Live sells it the same way.'
+                    : config.option_side === 'HEDGE_SELL'
+                      ? "Sells as above and buys a protective option 2 strikes further out (much less margin). Research only: the single-leg live engine holds one contract — deploy a hedged short on Multi-Leg."
+                      : 'A bullish signal buys the call, a bearish one the put.'}
+                </p>
+              </div>
+              <div>
                 <label htmlFor="optimizer-data-source-6" className="block text-sm font-medium text-blue-400 mb-1">Data Source</label>
                 <select id="optimizer-data-source-6" className="w-full bg-slate-900 border border-blue-900 rounded p-2 text-fg"
                   value={config.dataSource || 'AUTO'}
@@ -1451,6 +1471,7 @@ export default function Optimizer() {
                         {rc.start_date && rc.end_date && <span>· {rc.start_date} → {rc.end_date}</span>}
                         {rc.capital != null && <span>· ₹{Number(rc.capital).toLocaleString('en-IN')}</span>}
                         {rc.backtest_mode && <span>· {rc.backtest_mode}</span>}
+                        {rc.option_side && rc.option_side !== 'BUY' && <span className="text-warning">· {rc.option_side === 'HEDGE_SELL' ? 'selling, hedged (research only)' : 'selling options'}</span>}
                         {rc.oos_enabled && rc.oos_split_date && (
                           <span className="text-success">· 🛡️ OOS: train→{rc.oos_split_date}, test after ({Math.round((rc.oos_fraction ?? 0.3) * 100)}%)</span>
                         )}
