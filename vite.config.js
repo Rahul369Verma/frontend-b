@@ -18,6 +18,15 @@ export default defineConfig({
     // tight on a cold first render.
     testTimeout: 20000,
     include: ['src/**/*.test.{js,jsx}'],
+    // `npm run test:coverage` — what the tests actually run, file by file (coverage/index.html).
+    // Every source file counts, including ones no test imports (they show as 0%).
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{js,jsx}'],
+      exclude: ['src/**/*.test.{js,jsx}', 'src/test/**'],
+      reporter: ['text-summary', 'html', 'json-summary'],
+      reportOnFailure: true,
+    },
   },
   build: {
     chunkSizeWarningLimit: 1000, // Increase limit to 1MB

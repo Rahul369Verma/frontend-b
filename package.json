@@ -12,6 +12,7 @@
     "theme:codemod": "node scripts/theme-codemod.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "audit:ui": "node scripts/ui-geometry-audit.mjs",
     "audit:ui:consistency": "node scripts/ui-consistency-audit.mjs",
     "audit:ui:perf": "node scripts/ui-perf-audit.mjs"

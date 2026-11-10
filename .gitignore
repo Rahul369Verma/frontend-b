@@ -35,3 +35,6 @@ graphify-out/
 /probe-*.mjs
 /probe-*-out.json
 /shots-*/
+
+# test coverage report (npm run test:coverage)
+coverage/
