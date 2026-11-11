@@ -290,6 +290,7 @@ export default function MultiLeg() {
     const [editMsg, setEditMsg] = useState(null);
     const [livePreview, setLivePreview] = useState(null);          // pre-deploy risk preview modal { strategy, tradeMode, data, loading }
     const [promote, setPromote] = useState(null);                  // go-live promotion dialog { id, name } for a fresh PAPER deployment
+    const [cloneLive, setCloneLive] = useState(null);              // "Clone as LIVE" dialog { id, name } for a PAPER card (the same go-live checks)
     const [pending, setPending] = useState({});             // per-action pending flags (button spinners)
     const [depSort, setDepSort] = useLocalStorage('ml_dep_sort', 'state');   // state|mtm|pnl|name
     const [depFilter, setDepFilter] = useLocalStorage('ml_dep_filter', 'all'); // all|LIVE|PAPER|open
@@ -1708,6 +1709,9 @@ export default function MultiLeg() {
             )}
             <PreviewModal preview={livePreview} deployLots={deployLots} onCancel={() => setLivePreview(null)}
                 onConfirm={() => { const s = livePreview.strategy; setLivePreview(null); doDeploy(s, 'LIVE'); }} />
+            <PromoteDialog open={!!cloneLive} clone kind="multileg" id={cloneLive?.id} name={cloneLive?.name}
+                onClose={() => setCloneLive(null)}
+                onDone={(res) => { pushToast(`${res.deployment.name} made — LIVE from its next entry, canary: first ${res.canary.trades} trades at ${res.canary.lots} lot(s). ${cloneLive?.name} keeps running on paper as its twin.`, 'success', 10000); setCloneLive(null); Promise.allSettled([refreshDeployments(), refreshTwins()]); }} />
             <PromoteDialog open={!!promote} kind="multileg" id={promote?.id} name={promote?.name}
                 onClose={() => { if (promote) pushToast(`“${promote.name}” stays on PAPER until it is promoted (Go-Live page)`, 'info', 6000); setPromote(null); }}
                 onDone={(res) => { pushToast(`LIVE — canary: first ${res.canary.trades} trades at ${res.canary.lots} lot(s)`, 'success', 8000); setPromote(null); refreshDeployments(); }} />
@@ -2971,6 +2975,11 @@ export default function MultiLeg() {
                                                         {pos.origCredit != null && <> · net {pos.origCredit > 0 ? 'credit' : 'debit'} <span className="text-fg-3">₹{fmt(Math.abs(pos.origCredit), 1)}/u</span></>}
                                                         {Number.isFinite(pos.maxProfit) && pos.maxProfit != null && <> · maxP ₹{fmt(pos.maxProfit, 1)}/u</>}
                                                         {pos.marginEst > 0 && <> · margin ₹{fmt(pos.marginEst)}</>}
+                                                        {pos.marginEst > 0 && (pos.brokerHold ?? pos.stopHoldEst) > 0 && (
+                                                            <span title={`The broker also holds the limit value of the resting safety stop on each short leg${pos.brokerHold == null ? ' (estimated: the stops are not resting yet)' : ''}. Margin + stops = what it takes from the account.`}>
+                                                                {' '}+ ₹{fmt(pos.brokerHold ?? pos.stopHoldEst)} stops{pos.brokerHold == null ? '~' : ''} = ₹{fmt(pos.marginEst + (pos.brokerHold ?? pos.stopHoldEst))}
+                                                            </span>
+                                                        )}
                                                     </div>
                                                     {expiry && <div>expiry {expiry}{dte != null ? ` · ${dte} DTE` : ''} · {pos.lots || d.lots} lot(s){pos.vegaEst != null ? ` · vega@in ₹${fmt(pos.vegaEst, 0)} (all legs, frozen)` : ''}</div>}
                                                     {exitBits.length > 0 && <div className="text-fg-5">manages to: {exitBits.join(' · ')}</div>}
@@ -3045,6 +3054,9 @@ export default function MultiLeg() {
                                                             <div>Net {isCredit ? 'credit' : 'debit'}<Help k="net-credit-debit" /> <span className="text-fg-3">₹{fmt(Math.abs(pos.origCredit), 1)}/u</span>{unitToRupee ? ` (₹${fmt(Math.abs(pos.origCredit) * unitToRupee)})` : ''}</div>
                                                             {Number.isFinite(pos.maxProfit) && <div>Max profit ₹{fmt(pos.maxProfit, 1)}/u{unitToRupee ? ` (₹${fmt(pos.maxProfit * unitToRupee)})` : ''}</div>}
                                                             <div>Margin<Help k="margin" /> <span className="text-fg-3">₹{fmt(pos.marginEst || 0)}</span></div>
+                                                            {(pos.brokerHold ?? pos.stopHoldEst) > 0 && (
+                                                                <div>Held for safety stops<Help k="stop-hold" /> <span className="text-fg-3">₹{fmt(pos.brokerHold ?? pos.stopHoldEst)}</span>{pos.brokerHold == null ? <span className="text-fg-5"> (est.)</span> : null}</div>
+                                                            )}
                                                             <div className="text-success">TP level<Help k="tp-level" /> {rup(tpUnit)}{tpUnit != null && unitToRupee ? ` (${fmt(tpUnit,1)}/u)` : ''}</div>
                                                             <div className="text-danger">SL level<Help k="sl-level" /> {rup(slUnit)}{slUnit != null && unitToRupee ? ` (${fmt(slUnit,1)}/u)` : ''}</div>
                                                             {P.leg_sl_x > 0 && <div className="text-warning">leg-SL<Help k="leg-sl" /> @ entry ×{P.leg_sl_x}</div>}
@@ -3143,6 +3155,9 @@ export default function MultiLeg() {
                                                 {d.trade_mode === 'LIVE' && twins && Array.isArray(twins.pairs) && !twinOf.has(d._id) && (
                                                     <button onClick={() => makePaperTwin(d)} disabled={!!pending[`twin:${d._id}`]} aria-label={`Make a paper twin of ${d.name}`} title="A PAPER copy with the same settings, to compare real and simulated trading" className="px-2 py-0.5 rounded border border-line bg-slate-800 text-fg-3 text-2xs hover:text-fg disabled:opacity-40"><Copy className="w-3 h-3 inline mr-0.5" />Paper twin</button>
                                                 )}
+                                                {d.trade_mode === 'PAPER' && twins && Array.isArray(twins.pairs) && !twinOf.has(d._id) && (
+                                                    <button onClick={() => setCloneLive({ id: d._id, name: d.name })} aria-label={`Clone ${d.name} as LIVE`} title="A LIVE copy with the same settings, through the go-live checks and canary — this PAPER one keeps running as its twin" className="px-2 py-0.5 rounded border border-red-700/50 bg-red-900/20 text-danger text-2xs hover:bg-red-900/40"><Copy className="w-3 h-3 inline mr-0.5" />Clone as LIVE</button>
+                                                )}
                                                 {!open && d.status === 'ACTIVE' && d.daily?.standDown && !(Number(d.daily?.tradesToday) > 0) && (
                                                     <button onClick={() => rearmToday(d)} disabled={!!pending[`rearm:${d._id}`]} aria-label={`Re-arm ${d.name} for today`} title="Lift today's stand-down so it can enter at its next check" className="px-2 py-0.5 rounded border border-amber-700/50 bg-amber-900/20 text-warning text-2xs hover:bg-amber-900/40 disabled:opacity-40"><RefreshCw className="w-3 h-3 inline mr-0.5" />Re-arm today</button>
                                                 )}
@@ -3205,7 +3220,7 @@ export default function MultiLeg() {
                                                 <td className="whitespace-nowrap" title="Exit (IST) — date shown when it differs from entry">{istSmart(t.exitAt, t.entryAt)}<DayGap from={t.entryAt} to={t.exitAt} /></td>
                                                 <td>{t.name}</td>
                                                 <td className={t.trade_mode === 'LIVE' ? 'text-danger' : 'text-sky-300'}>{t.trade_mode}</td>
-                                                {(() => { const L = tradeLots(t); return <td className={`text-right tabular-nums whitespace-nowrap ${t.canaryCapped ? 'text-warning' : ''}`} title={L.title}>{L.text}</td>; })()}
+                                                {(() => { const L = tradeLots(t); return <td className={`text-right tabular-nums whitespace-nowrap ${t.canaryCapped || t.marginCapped ? 'text-warning' : ''}`} title={L.title}>{L.text}</td>; })()}
                                                 <td className="text-fg-4">{t.exitReason}</td>
                                                 <td className="text-right">₹{fmt(t.grossPnl)}</td>
                                                 <td className="text-right text-fg-5">₹{fmt(t.charges)}</td>
@@ -3428,7 +3443,7 @@ export default function MultiLeg() {
                                                 <td className="truncate max-w-[7.5rem]" title={t.template}>{templates.find(x => x.key === t.template)?.name || t.template}</td>
                                                 <td>{shortSym(t.symbol)}</td>
                                                 <td className={t.trade_mode === 'LIVE' ? 'text-danger' : 'text-sky-300'}>{t.trade_mode}</td>
-                                                {(() => { const L = tradeLots(t); return <td className={`text-right tabular-nums whitespace-nowrap ${t.canaryCapped ? 'text-warning' : ''}`} title={L.title}>{L.text}</td>; })()}
+                                                {(() => { const L = tradeLots(t); return <td className={`text-right tabular-nums whitespace-nowrap ${t.canaryCapped || t.marginCapped ? 'text-warning' : ''}`} title={L.title}>{L.text}</td>; })()}
                                                 <td className="text-fg-4">{t.exitReason}</td>
                                                 <td className="text-right">{t.origCredit != null ? `₹${fmt(t.origCredit, 1)}` : '—'}</td>
                                                 <td className="text-right text-fg-5"

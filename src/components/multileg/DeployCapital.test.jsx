@@ -10,12 +10,12 @@ import { stateText, togetherLine, planLine } from './liveCapitalFormat.js';
 const CAP = {
     at: '2026-10-27T03:55:00Z', funds: { total: 474648, available: 288621, utilized: 192725 },
     deployments: [
-        { id: 'w', priority: 1, prioritySet: true, name: 'nifty-wide-tail (LIVE)', structure: 'Short Strangle', lots: 1, open: true, status: 'ACTIVE', legs: [{ symbol: 'x' }], margin: 130000, blockedAtEntry: 258656, note: '1 leg(s) already closed — counted: the legs still open' },
-        { id: 's', priority: 2, prioritySet: true, name: 'nifty-atm-straddle (LIVE)', structure: 'Short Straddle', lots: 1, open: false, status: 'ACTIVE', enteredToday: false, entryTime: '09:20', legs: [{}, {}], margin: 260000, blockedAtEntry: null },
+        { id: 'w', priority: 1, prioritySet: true, name: 'nifty-wide-tail (LIVE)', structure: 'Short Strangle', lots: 1, open: true, status: 'ACTIVE', legs: [{ symbol: 'x' }], margin: 130000, stopHold: 9039, stopHoldSource: 'armed', total: 139039, blockedAtEntry: 258656, heldAtEntry: 9039, note: '1 leg(s) already closed — counted: the legs still open' },
+        { id: 's', priority: 2, prioritySet: true, name: 'nifty-atm-straddle (LIVE)', structure: 'Short Straddle', lots: 1, open: false, status: 'ACTIVE', enteredToday: false, entryTime: '09:20', legs: [{}, {}], margin: 260000, stopHold: 40990, stopHoldSource: 'estimate', total: 300990, blockedAtEntry: null },
         { id: 'l', priority: 3, prioritySet: false, name: 'late-runway (LIVE)', structure: 'Short Straddle', lots: 1, open: false, status: 'ACTIVE', enteredToday: false, entryTime: '11:00', legs: [{}, {}], margin: null, blockedAtEntry: null, note: 'could not price it: no contract' },
     ],
-    allTogether: { margin: 524000, source: 'broker', sumOfEach: null, missing: ['late-runway (LIVE)'] },
-    stillToEnter: { plan: [{ id: 's', name: 'nifty-atm-straddle (LIVE)', entryTime: '09:20', margin: 260000, fits: true, availableBefore: 288621 }, { id: 'l', name: 'late-runway (LIVE)', entryTime: '11:00', margin: 300000, fits: false, availableBefore: 28621 }], margin: 560000, available: 288621, refused: ['late-runway (LIVE)'] },
+    allTogether: { margin: 524000, source: 'broker', sumOfEach: null, stopHold: 90000, total: 614000, missing: ['late-runway (LIVE)'] },
+    stillToEnter: { plan: [{ id: 's', name: 'nifty-atm-straddle (LIVE)', entryTime: '09:20', margin: 300990, marginOnly: 260000, stopHold: 40990, fits: true, availableBefore: 330000 }, { id: 'l', name: 'late-runway (LIVE)', entryTime: '11:00', margin: 300000, fits: false, availableBefore: 28621 }], margin: 560000, available: 288621, refused: ['late-runway (LIVE)'] },
     notes: ['Expiry day for nifty-wide-tail (LIVE): the exchange charges extra margin on short options expiring today, so these figures are higher than on other days.'],
 };
 const ORDERS = {
@@ -50,7 +50,10 @@ describe('liveCapitalFormat', () => {
         expect(stateText(CAP.deployments[0])).toBe('open · 1 leg held');
         expect(stateText(CAP.deployments[1])).toBe('flat · enters 09:20');
         expect(stateText({ ...CAP.deployments[1], enteredToday: true })).toBe('flat · done for today');
-        expect(togetherLine(CAP)).toBe('All 3 LIVE structures on at once need ₹5,24,000 of margin: ₹49,352 MORE than the ₹4,74,648 in the account.');
+        expect(togetherLine(CAP)).toBe('All 3 LIVE structures on at once need ₹6,14,000 at the broker (₹5,24,000 of margin + ₹90,000 held for safety stops): ₹1,39,352 MORE than the ₹4,74,648 in the account.');
+        // an older server's answer (no stops figure): the margin alone, as before
+        expect(togetherLine({ ...CAP, allTogether: { margin: 524000 } })).toBe('All 3 LIVE structures on at once need ₹5,24,000 of margin: ₹49,352 MORE than the ₹4,74,648 in the account.');
+        expect(planLine(CAP.stillToEnter.plan[0])).toBe('09:20 nifty-atm-straddle (LIVE) ₹3,00,990 (₹2,60,000 margin + ₹40,990 stops) — fits (₹3,30,000 available)');
         expect(togetherLine({ ...CAP, allTogether: { margin: 237324 } })).toBe('All 3 LIVE structures on at once need ₹2,37,324 of margin: 50% of the ₹4,74,648 in the account.');
         expect(togetherLine({ deployments: [] })).toBe('No LIVE multi-leg deployment.');
         expect(planLine(CAP.stillToEnter.plan[1])).toBe('11:00 late-runway (LIVE) ₹3,00,000 — would be REFUSED (₹28,621 left)');
@@ -65,7 +68,10 @@ describe('LiveCapitalPanel', () => {
         await waitFor(() => expect(screen.getByTestId('live-capital')).toBeTruthy());
         const t = screen.getByTestId('live-capital').textContent;
         expect(t).toMatch(/total ₹4,74,648 · in use ₹1,92,725 · available ₹2,88,621/);
-        expect(t).toMatch(/₹49,352 MORE than the ₹4,74,648 in the account/);
+        expect(t).toMatch(/₹1,39,352 MORE than the ₹4,74,648 in the account/);
+        expect(t).toMatch(/Safety stops/);
+        expect(t).toMatch(/~₹40,990/);
+        expect(t).toMatch(/₹1,39,039/);
         expect(t).toMatch(/Not in that figure \(could not be priced\): late-runway \(LIVE\)/);
         expect(t).toMatch(/unavailable/);
         expect(t).toMatch(/would be REFUSED/);

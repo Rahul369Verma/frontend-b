@@ -22,7 +22,10 @@ export default function LiveCapitalPanel() {
     const load = (refresh) => { setSt((s) => ({ ...s, busy: true })); fetchIt(refresh); };
     // an answer without its fields (an older server, a proxy page) is no answer — never a crash
     const d = st.data && Array.isArray(st.data.deployments) ? st.data : null;
-    const short = d && d.allTogether && d.allTogether.margin != null && d.funds && d.allTogether.margin > d.funds.total;
+    // margin + what the broker holds for the safety stops (total), else the margin alone (an older answer)
+    const together = d && d.allTogether ? (d.allTogether.total != null ? d.allTogether.total : d.allTogether.margin) : null;
+    const short = together != null && d.funds && together > d.funds.total;
+    const anyStops = !!(d && d.deployments.some((r) => r.stopHold > 0));
     // MARGIN PRIORITY (POST /api/multileg/live-priority): the rows arrive in priority order; ▲/▼ swaps two
     const [saving, setSaving] = useState(null);
     const move = (i, dir) => {
@@ -67,7 +70,10 @@ export default function LiveCapitalPanel() {
                             <table className="w-full text-2xs">
                                 <thead><tr className="text-fg-5 text-left">
                                     <th className="font-normal py-1">Priority</th><th className="font-normal">LIVE deployment</th><th className="font-normal">Now</th>
-                                    <th className="font-normal text-right">Margin now (broker)</th><th className="font-normal text-right">Blocked at entry</th><th className="font-normal pl-2">Note</th>
+                                    <th className="font-normal text-right">Margin now (broker)</th>
+                                    {anyStops && <th className="font-normal text-right" title="What the broker holds for the resting safety stop on each short leg: its limit price × quantity. '~' is an estimate (the stops are not resting yet).">Safety stops</th>}
+                                    {anyStops && <th className="font-normal text-right">Total</th>}
+                                    <th className="font-normal text-right">Blocked at entry</th><th className="font-normal pl-2">Note</th>
                                 </tr></thead>
                                 <tbody>
                                     {d.deployments.map((r, i) => (
@@ -80,7 +86,9 @@ export default function LiveCapitalPanel() {
                                             <td className="py-1 text-fg-2">{r.name} <span className="text-fg-5">· {r.structure} · {r.lots} lot{r.lots === 1 ? '' : 's'}</span></td>
                                             <td className="text-fg-4">{stateText(r)}</td>
                                             <td className="text-right tabular-nums">{r.margin == null ? <span className="text-warning">unavailable</span> : rs(r.margin)}</td>
-                                            <td className="text-right tabular-nums text-fg-5">{r.blockedAtEntry == null ? '—' : rs(r.blockedAtEntry)}</td>
+                                            {anyStops && <td className="text-right tabular-nums text-fg-4">{r.stopHold == null ? '—' : `${r.stopHoldSource === 'estimate' ? '~' : ''}${rs(r.stopHold)}`}</td>}
+                                            {anyStops && <td className="text-right tabular-nums font-semibold text-fg-2">{r.total == null ? '—' : rs(r.total)}</td>}
+                                            <td className="text-right tabular-nums text-fg-5">{r.blockedAtEntry == null ? '—' : <span title={r.heldAtEntry > 0 ? `plus ${rs(r.heldAtEntry)} held for its safety stops` : undefined}>{rs(r.blockedAtEntry)}{r.heldAtEntry > 0 ? ` + ${rs(r.heldAtEntry)}` : ''}</span>}</td>
                                             <td className="pl-2 text-fg-5">{r.note || ''}</td>
                                         </tr>
                                     ))}

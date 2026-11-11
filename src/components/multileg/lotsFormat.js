@@ -36,7 +36,10 @@ export function freezeLine(s) {
 export function marginLine(s) {
     if (!s) return null;
     if (!s.margin) return 'Margin: not priced right now. The broker\'s margin check still runs at every entry.';
-    const head = `Margin ≈ ${inr(s.margin.total)} for ${s.want} lot${s.want === 1 ? '' : 's'} (${inr(s.margin.perLot)} per lot).`;
+    // the total is margin + what the broker holds for the safety stops (brokerHold.js), the entry check's own sum
+    const head = s.margin.stopHold > 0 && s.margin.margin != null
+        ? `Needs ≈ ${inr(s.margin.total)} at the broker for ${s.want} lot${s.want === 1 ? '' : 's'} (${inr(s.margin.perLot)} per lot): ${inr(s.margin.margin)} of margin + ${inr(s.margin.stopHold)} it holds for the safety stops.`
+        : `Margin ≈ ${inr(s.margin.total)} for ${s.want} lot${s.want === 1 ? '' : 's'} (${inr(s.margin.perLot)} per lot).`;
     if (s.mode !== 'LIVE') return `${head} A PAPER book uses no account margin.`;
     if (!s.account || !Number.isFinite(Number(s.account.available))) return `${head} The account balance could not be read.`;
     const gap = s.margin.total - s.account.available;
@@ -123,21 +126,25 @@ export function cardLots(d) {
     const trades = capped ? cl : set;
     const bits = [];
     if (capped) bits.push(`trading ${trades} (canary ${Number(c.liveTrades) || 0}/${Number(c.trades) || 10})`);
-    if (openLots != null && openLots !== trades) bits.push(`open: ${lotsWord(openLots)}`);
+    const marginShort = !!(pos && pos.marginCapped && openLots != null && openLots < trades);
+    if (openLots != null && openLots !== trades) bits.push(`open: ${lotsWord(openLots)}${marginShort ? ' (margin)' : ''}`);
     const title = [
         `Set to ${lotsWord(set)}.`,
         capped ? `Its go-live canary is ${c.state}: every entry trades ${lotsWord(cl)} until ${Number(c.trades) || 10} live trades pass (${Number(c.liveTrades) || 0} so far) and you lift the size cap on the Go-Live page (or skip the canary in this Lots dialog). Its ₹ limits act at ${cl}/${set} meanwhile.` : null,
-        openLots != null ? `The structure open now holds ${lotsWord(openLots)}.` : null,
+        openLots != null ? `The structure open now holds ${lotsWord(openLots)}${marginShort ? `: the account's margin fitted ${lotsWord(openLots)} of ${trades} at entry, so it entered with fewer (the deployment's size is unchanged)` : ''}.` : null,
         'Click to change the size: units per leg, the most one order can carry, margin, and its ₹ limits.',
     ].filter(Boolean).join(' ');
     return { text: `${lotsWord(set)}${bits.length ? ` · ${bits.join(' · ')}` : ''}`, title, capped, lots: set, trades };
 }
 
-/** A booked trade's size: "2", or "1 of 2" when the go-live canary held it below the set lots. */
+/** A booked trade's size: "2", or "1 of 2" when the go-live canary or the account's margin held it below the set lots. */
 export function tradeLots(t) {
     const lots = Number(t && t.lots);
     if (!(lots > 0)) return { text: '—', title: 'Lots not recorded on this trade', lots: null };
     const set = Number(t.configuredLots);
-    if (t.canaryCapped && set > lots) return { text: `${lots} of ${set}`, title: `${lotsWord(lots)} traded of the ${set} set: the go-live canary capped it`, lots };
+    if ((t.canaryCapped || t.marginCapped) && set > lots) {
+        const why = [t.canaryCapped && 'the go-live canary capped it', t.marginCapped && "the account's margin fitted only this many at entry"].filter(Boolean).join('; ');
+        return { text: `${lots} of ${set}`, title: `${lotsWord(lots)} traded of the ${set} set: ${why}`, lots };
+    }
     return { text: String(lots), title: `${lotsWord(lots)}${Number(t.lotSize) > 0 ? ` of ${t.lotSize} (${lots * Number(t.lotSize)} units a leg)` : ''}`, lots };
 }

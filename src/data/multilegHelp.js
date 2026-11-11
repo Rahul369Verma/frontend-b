@@ -53,8 +53,14 @@ export const HELP = {
     "margin": {
         label: "Margin / Margin (est)",
         short: "Cash the broker locks up while this structure is open — not a cost, just blocked.",
-        detail: "The engine first asks the broker for the real margin number for these exact legs; if that call fails it estimates instead — for a defined-risk structure it uses the max loss plus a 15% buffer, otherwise a per-lot short-selling formula. The preview labels which one it used ('SPAN' = the broker's real number). It gates entry: if the account does not have this much free, a LIVE deploy is refused.",
-        gotcha: "The backtest uses a DIFFERENT, cruder margin formula than the live engine, so backtest 'ROI on margin' will not line up with what your broker actually blocks.",
+        detail: "The engine first asks the broker for the real margin number for these exact legs; if that call fails it estimates instead — for a defined-risk structure it uses the max loss plus a 15% buffer, otherwise a per-lot short-selling formula. The preview labels which one it used ('SPAN' = the broker's real number). It gates entry: if the account does not have this much free — margin PLUS what the broker holds for the safety stops (see 'Held for safety stops') — a LIVE entry is refused or sized down.",
+        gotcha: "The backtest uses a DIFFERENT, cruder margin formula than the live engine, so backtest 'ROI on margin' will not line up with what your broker actually blocks. And the margin is not all the broker takes: a LIVE structure's resting safety stops hold more (11-Nov-2026: ₹2.56L on top of ₹7.23L of margin).",
+    },
+    "stop-hold": {
+        label: "Held for safety stops",
+        short: "What the broker holds for the resting stop-loss order on each short leg: its limit price × quantity.",
+        detail: "A LIVE structure keeps a safety stop at the broker on every short leg (an SL-LIMIT buy-back at about 3× the entry premium, inside the option's circuit band), so a catastrophe is stopped even if the app is down. Fyers accepts these without a margin check but holds cash for each one — the order's limit price × quantity, plus about ₹20 — for as long as it rests. That comes on top of the margin. The entry check, the Lots dialog and the LIVE capital panel all count it; '(est.)' means the stops are not resting yet and this is what they will take.",
+        gotcha: "On 11-Nov-2026 two LIVE entries fitted the account on margin alone (₹63K to spare); 13 seconds later their four safety stops held ₹2.56L more and the available balance read −₹1.07L. No order was rejected, so nothing alerted. The stops are worth it — a wider stop holds more; turning them off (disaster_stop) holds nothing but leaves the leg unprotected if the app dies.",
     },
     "tp-level": {
         label: "TP level",

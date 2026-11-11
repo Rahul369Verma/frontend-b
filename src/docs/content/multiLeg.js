@@ -243,6 +243,7 @@ In Results, a round trip that was **unwound** (its entry could not complete) say
 - **All together** — every LIVE structure on at once, priced as one basket. The exchange nets legs that offset each other, so this can be less than the sum of each one alone. If it is more than the account's total, they cannot all trade on the same day.
 - **Each deployment** — an *open* one is priced at the legs it holds now (a leg already stopped out needs nothing). A *flat* one is priced at the legs it would enter **right now** at the live index level. **Blocked at entry** is what it needed when it opened.
 - **Still to enter today** — the flat ones that have not entered today, in entry order, against what is available. The one the account cannot fund is named. At its entry time the engine refuses it before sending any order and stands it down for the day, with a Telegram message.
+- **Safety stops** — margin is not all the broker takes. A LIVE structure keeps a resting stop-loss order at the broker on every short leg (the safety stop, in case the app is down), and Fyers holds cash for each one: its limit price × quantity, about 3× the leg's entry premium. **Total** is margin + that hold, which is what the entry check compares with the balance since 11-Nov-2026. That morning two entries fitted on margin alone with ₹63K to spare; 13 seconds later their four stops held ₹2.56L more and the account read −₹1.07L. A *~* figure is an estimate: the stops are not resting yet (they are placed 10 s after the fills), or the structure is still flat.
 
 **Margin priority.** The table lists the LIVE deployments in their **priority** order; ▲ / ▼ change it, and each LIVE card shows its place. Priority decides who gets the margin:
 - On the same tick (for example everyone at 09:20) the first in priority enters first. The next is then checked against what is left.
@@ -269,9 +270,16 @@ When it acts: from the **next entry**. An open structure keeps the size it enter
 
 **The go-live canary comes first.** A LIVE deployment whose canary is still running trades the canary's size (1 lot), whatever is set here. That lasts until its first live trades (10 by default) are done **and** you lift the size cap on the Go-Live page; then it trades the size set here. To go to full size sooner, tick **Skip the rest of the go-live canary** in this dialog (or press **Skip the canary** on the Go-Live page). It needs the deployment's name typed, works even when the lots are not changing, and applies from the next entry. After that the canary no longer asks you at its loss cap. The card says so: **📦 2 lots · trading 1 (canary 8/10)**, in amber. The entry in the journal and on Telegram names the size too (*1 of 2 lots of 65 (go-live canary)*).
 
+**When the account cannot margin every lot (LIVE).** Before the first order, the broker's calculator is asked what the structure needs and what is free. If all the lots don't fit, the entry goes in with **the most lots that do**, instead of being refused. Each smaller size is asked of the calculator before any order is sent. For example, a straddle set to 2 lots that needs ₹4.1 lakh, with ₹2.5 lakh free, enters 1 lot.
+- The deployment stays at 2 lots. The next entry tries 2 again.
+- The journal shows a **SIZING** line, and an urgent alert says what it wanted, needed and had. The card shows *open: 1 lot (margin)*, and the trade shows *1 of 2*.
+- The ₹ limits act in proportion to the lots held, as below.
+- If not even 1 lot fits, or the calculator stops answering, the entry is refused and the deployment stands down for the day. **Re-arm today** lifts that.
+- PAPER has no funds check, so it always trades its full size.
+
 **₹ limits follow the size actually held.** The ₹ limits are written for the lots set here. A structure that holds fewer lots gets them in proportion, so each lot keeps the same stop: a ₹20,000 rupee stop set for 2 lots acts at ₹10,000 on the 1 lot the canary allows. This covers the rupee stop, the daily loss cap and max vega at entry. The same applies to a structure that was open when you resized with the ₹ box ticked: it keeps its size and the stop it had. The stop and target replays in Results use the same rule for each past trade's own size.
 
-**Where the size shows.** The **Lots** column of Structure round-trips (*1 of 2* = the canary held it below the size set; sortable), each leg's **Qty** when a row is opened, the lots per day in Day by day, **Lots traded** and **Net per lot** under More figures, a **Size (lots)** breakdown with Lots and Per lot ₹ columns in every breakdown, the size on each Strategies row and in Open now, and a **Lots** row in Compare. Every ₹ figure is for the whole structure, so a 2-lot trade earns or loses twice a 1-lot one. **Per lot ₹** puts trades of different sizes side by side.`,
+**Where the size shows.** The **Lots** column of Structure round-trips (*1 of 2* = the canary, or the account's margin, held it below the size set; sortable), each leg's **Qty** when a row is opened, the lots per day in Day by day, **Lots traded** and **Net per lot** under More figures, a **Size (lots)** breakdown with Lots and Per lot ₹ columns in every breakdown, the size on each Strategies row and in Open now, and a **Lots** row in Compare. Every ₹ figure is for the whole structure, so a 2-lot trade earns or loses twice a 1-lot one. **Per lot ₹** puts trades of different sizes side by side.`,
         },
         {
             id: 'deploy-broker-orders',
@@ -296,7 +304,12 @@ The panel lists each pair day by day, from the day both existed: each book's net
 - an entry that had to be unwound;
 - a stop filled at the broker.
 
-The LIVE events that explain a day's difference are listed on that day. Pairs made by hand before twins existed, like nifty-atm-straddle (LIVE / PAPER), are paired by name, structure and index. If their lots differ, the panel says the rupees are not like for like.`,
+The LIVE events that explain a day's difference are listed on that day. Pairs made by hand before twins existed, like nifty-atm-straddle (LIVE / PAPER), are paired by name, structure and index. If their lots differ, the panel says the rupees are not like for like.
+
+**Clone as LIVE** (on a PAPER card) goes the other way: it makes a LIVE copy of a PAPER deployment and keeps the PAPER one running as its twin. For example, *fifth (PAPER)* makes *fifth (LIVE)*: the same structure, settings and entry trigger, placing real orders from its next entry. The PAPER one is not changed, and a structure it holds stays open.
+- The copy goes through the same **go-live checks** as promoting: broker, evidence and risk. It also starts with the **canary**: its first live trades at a capped size. See [Promoting](go-live#promote).
+- **Lots for the LIVE copy** can differ from the paper one's. Its ₹ limits are scaled to that size, so each lot keeps the same stop.
+- One LIVE copy per PAPER deployment. To promote the PAPER deployment itself instead, so that it switches to LIVE, use the Go-Live page.`,
         },
         {
             id: 'deploy-regime',
