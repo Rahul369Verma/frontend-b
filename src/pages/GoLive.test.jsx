@@ -124,6 +124,29 @@ describe('PromoteDialog', () => {
     });
 });
 
+describe('PromoteDialog — clone as LIVE (11-Nov-2026)', () => {
+    it('says what it makes and what stays, then posts clone:true with the copy\'s lots', async () => {
+        const onDone = vi.fn();
+        const ok = [gate('venue.auth', 'hard', 'pass')];
+        axios.get.mockResolvedValueOnce({ data: { ...REPORT, kind: 'multileg', id: 'm9', name: 'fifth (PAPER)', gates: ok, summary: summarize(ok) } });
+        axios.post.mockResolvedValue({ data: { ok: true, clone: true, deployment: { name: 'fifth (LIVE)' }, canary: { trades: 10, lots: 1 } } });
+        render(<PromoteDialog open clone kind="multileg" id="m9" name="fifth (PAPER)" onClose={() => {}} onDone={onDone} />);
+        const btn = await screen.findByRole('button', { name: /Clone as LIVE \(real money\)/ });
+        expect(screen.getByText(/Clone as LIVE — fifth \(PAPER\)/)).toBeTruthy();
+        expect(screen.getByText(/keeps running on paper, unchanged/)).toBeTruthy();
+        fireEvent.change(screen.getByLabelText(/Lots for the LIVE copy/), { target: { value: '0' } });
+        expect(btn.disabled).toBe(true);
+        fireEvent.change(screen.getByLabelText(/Lots for the LIVE copy/), { target: { value: '1' } });
+        expect(btn.disabled).toBe(false);
+        fireEvent.click(btn);
+        await waitFor(() => expect(onDone).toHaveBeenCalled());
+        const [url, body] = axios.post.mock.calls[0];
+        expect(url).toMatch(/\/golive\/deployments\/multileg\/m9\/promote$/);
+        expect(body.clone).toBe(true);
+        expect(body.lots).toBe(1);
+    });
+});
+
 describe('the canary asks — you decide (23-Oct-2026)', () => {
     it('loss cap reached: still LIVE, nothing switched; Keep LIVE posts your answer only after you confirm', async () => {
         const live = { ...REPORT, id: 'm1', kind: 'multileg', name: 'nifty-atm-straddle (LIVE)', mode: 'LIVE',

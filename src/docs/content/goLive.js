@@ -61,6 +61,8 @@ A **Stopped** badge means the deployment takes no new entries.`,
 
 A name that ends in "(LIVE)" or "(PAPER)" follows the mode when you promote or demote.
 
+**Clone as LIVE** (multi-leg). On a PAPER card, *Clone as LIVE* opens this same dialog, with the same gates, canary and override. Instead of switching the PAPER deployment to LIVE, it makes a **new LIVE copy** named "… (LIVE)". The PAPER one keeps running, unchanged, as its twin. You can set the copy's lots, and its ₹ limits are scaled to them. See [LIVE vs PAPER twins](multi-leg#deploy-twins).
+
 If the evidence gates are not met, promotion is still possible only with a recorded **override**: type the exact phrase shown (it says you accept real losses) and a reason of at least 10 characters. Overrides are logged permanently. Hard gates cannot be overridden.
 
 > **Warning:** Once LIVE, the deployment's card shows a red LIVE / REAL MONEY marker. Check its stop loss is placed at the broker (see [Live Positions](dashboard#live-positions)).`,

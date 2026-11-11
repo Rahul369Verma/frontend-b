@@ -84,13 +84,15 @@ const field = 'w-full bg-slate-900 border border-line rounded p-1.5 text-fg text
  * nothing hard does — the override phrase and a reason.
  *
  * @param kind    'single' | 'multileg'
+ * @param clone   multileg only: make a NEW LIVE copy and keep this PAPER deployment running as its
+ *                twin (11-Nov-2026), instead of switching this one to LIVE. Same gates, same canary.
  * @param onClose cancelled (the deployment stays PAPER)
  * @param onDone  promoted — receives { deployment, canary, decision }; the caller closes the dialog
  */
-export function PromoteDialog({ open, kind, id, name, onClose, onDone }) {
+export function PromoteDialog({ open, kind, id, name, clone = false, onClose, onDone }) {
     const [state, setState] = useState({ key: null, report: null, error: null });
     const [showAll, setShowAll] = useState(false);
-    const [form, setForm] = useState({ trades: '', lots: '', lossCapInr: '', phrase: '', reason: '' });
+    const [form, setForm] = useState({ trades: '', lots: '', lossCapInr: '', phrase: '', reason: '', cloneLots: '' });
     const [busy, setBusy] = useState(false);
     const [submitError, setSubmitError] = useState(null);
     const key = open ? `${kind}:${id}` : null;
@@ -112,11 +114,15 @@ export function PromoteDialog({ open, kind, id, name, onClose, onDone }) {
     const blocked = !!(s && s.hard && s.hard.length);
     const phraseOk = form.phrase.trim().toUpperCase() === OVERRIDE_PHRASE;
     const reasonOk = form.reason.trim().length >= 10;
-    const canSubmit = !!report && !blocked && (!needsOverride || (phraseOk && reasonOk)) && !busy;
+    // the LIVE copy's size (clone): empty = the same lots as the paper one
+    const copyLots = clone && form.cloneLots !== '' ? Number(form.cloneLots) : null;
+    const copyLotsOk = copyLots == null || (Number.isInteger(copyLots) && copyLots >= 1);
+    const liveLots = copyLots || report?.lots || 1;
+    const canSubmit = !!report && !blocked && copyLotsOk && (!needsOverride || (phraseOk && reasonOk)) && !busy;
     const shown = useMemo(() => (report ? report.gates : []), [report]);
 
     const reset = () => {
-        setForm({ trades: '', lots: '', lossCapInr: '', phrase: '', reason: '' });
+        setForm({ trades: '', lots: '', lossCapInr: '', phrase: '', reason: '', cloneLots: '' });
         setSubmitError(null); setShowAll(false); setBusy(false);
     };
     // Cancel → onClose. Success → onDone only (the caller closes it): a success is not a cancel.
@@ -128,6 +134,7 @@ export function PromoteDialog({ open, kind, id, name, onClose, onDone }) {
             const body = {
                 canary: { trades: form.trades || undefined, lots: form.lots || undefined, lossCapInr: form.lossCapInr || undefined },
                 ...(needsOverride ? { override: { phrase: form.phrase, reason: form.reason } } : {}),
+                ...(clone ? { clone: true, ...(copyLots ? { lots: copyLots } : {}) } : {}),
             };
             const r = await axios.post(`${GOLIVE}/deployments/${kind}/${id}/promote`, body);
             reset();
@@ -140,14 +147,16 @@ export function PromoteDialog({ open, kind, id, name, onClose, onDone }) {
     };
 
     const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
-    const title = `Promote to LIVE — ${name || report?.name || ''}`;
+    const shownName = name || report?.name || '';
+    const copyName = `${String(shownName).replace(/\s*\((LIVE|PAPER)\)\s*$/i, '')} (LIVE)`;
+    const title = clone ? `Clone as LIVE — ${shownName}` : `Promote to LIVE — ${shownName}`;
     return (
         <Modal open={open} onClose={close} title={title} docs="go-live#promote" width="max-w-2xl" footer={(
             <>
                 <button type="button" onClick={close} className="px-3 py-1.5 rounded text-xs text-fg-3 border border-line">Cancel</button>
                 <button type="button" onClick={submit} disabled={!canSubmit}
                     className="px-3 py-1.5 rounded text-xs font-semibold bg-danger-fill text-white disabled:opacity-40">
-                    {busy ? 'Promoting…' : 'Promote to LIVE (real money)'}
+                    {clone ? (busy ? 'Cloning…' : 'Clone as LIVE (real money)') : (busy ? 'Promoting…' : 'Promote to LIVE (real money)')}
                 </button>
             </>
         )}>
@@ -161,6 +170,14 @@ export function PromoteDialog({ open, kind, id, name, onClose, onDone }) {
                         <Chip tone="info">{report.venue}{report.segment ? ` · ${report.segment}` : ''}</Chip>
                         <ReadinessLine summary={s} />
                     </div>
+                    {clone && (
+                        <p className="text-xs text-fg-3">
+                            Makes <b>{copyName}</b>: a new deployment with this one's structure, settings and entry trigger that places
+                            real orders from its next entry. <b>{shownName}</b> keeps running on paper, unchanged (an open structure
+                            stays open), as its twin: compare the two under <b>LIVE vs PAPER twins</b>. The same go-live checks and canary
+                            apply as for promoting.
+                        </p>
+                    )}
                     {blocked && (
                         <p className="text-xs text-danger">
                             {s.hard.length} gate{s.hard.length === 1 ? '' : 's'} must pass first — these cannot be overridden, because the orders would fail or run unprotected.
@@ -176,6 +193,12 @@ export function PromoteDialog({ open, kind, id, name, onClose, onDone }) {
                         <GateList gates={shown} onlyProblems={!showAll} />
                     </div>
 
+                    {!blocked && clone && (
+                        <label className="block text-2xs text-fg-4">Lots for the LIVE copy (paper: {report.lots})
+                            <input type="number" min="1" step="1" className={field} placeholder={String(report.lots)} value={form.cloneLots} onChange={set('cloneLots')} aria-invalid={copyLotsOk ? undefined : true} />
+                            <span className="block text-fg-5 mt-0.5">Its ₹ limits are scaled to this size, the same stop per lot. A LIVE entry that the account cannot margin at this size enters with the lots that fit.</span>
+                        </label>
+                    )}
                     {!blocked && (
                         <fieldset className="border border-line/60 rounded p-3 space-y-2">
                             <legend className="text-xs font-semibold text-fg-2 px-1">Canary — the first live trades</legend>
@@ -185,11 +208,11 @@ export function PromoteDialog({ open, kind, id, name, onClose, onDone }) {
                             </p>
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                 <label className="text-2xs text-fg-4">Trades<input type="number" min="1" step="1" className={field} placeholder={String(def.trades)} value={form.trades} onChange={set('trades')} /></label>
-                                <label className="text-2xs text-fg-4">Lots (deployment: {report.lots})<input type="number" min="1" max={report.lots} step="1" className={field} placeholder={String(def.lots)} value={form.lots} onChange={set('lots')} /></label>
+                                <label className="text-2xs text-fg-4">Lots (deployment: {liveLots})<input type="number" min="1" max={liveLots} step="1" className={field} placeholder={String(Math.min(def.lots, liveLots))} value={form.lots} onChange={set('lots')} /></label>
                                 <label className="text-2xs text-fg-4">Loss cap ₹<input type="number" min="1" step="100" className={field} placeholder={String(def.lossCapInr)} value={form.lossCapInr} onChange={set('lossCapInr')} /></label>
                             </div>
                             <p className="text-2xs text-fg-5">
-                                Empty fields use the defaults: {def.trades} trades at {def.lots} lot(s), cap {inr(def.lossCapInr)}. Lots can never exceed the deployment's {report.lots}.
+                                Empty fields use the defaults: {def.trades} trades at {def.lots} lot(s), cap {inr(def.lossCapInr)}. Lots can never exceed the deployment's {liveLots}.
                             </p>
                         </fieldset>
                     )}
