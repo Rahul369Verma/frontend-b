@@ -498,12 +498,21 @@ function App() {
                 to `min-width: auto`, so one wide table (MultiLeg and Backtest
                 both have them) would refuse to shrink and squeeze the rail
                 narrower instead of scrolling inside its own box.
+
+                `relative` on <main> (18-Nov-2026): an absolutely positioned
+                element with no positioned ancestor (every chart's screen-reader
+                labels in ZoomControls, `sr-only` anywhere) takes the VIEWPORT as
+                its containing block, so <main>'s overflow neither clips nor
+                scrolls it. Sitting at its place deep in a long page, it made the
+                DOCUMENT that tall: a second scroll bar beside <main>'s, which
+                scrolled the whole shell, rail included. Positioned, <main>
+                contains them.
               */}
               <div className="flex h-screen overflow-hidden bg-bg text-fg font-sans">
                 <Sidebar />
                 <DocumentTitle />
                 <MainScrollManager scrollerRef={mainRef} />
-                <main ref={mainRef} className="flex-1 min-w-0 overflow-auto">
+                <main ref={mainRef} className="relative flex-1 min-w-0 overflow-auto">
                   {/*
                     One <Route> per entry in ALL_ROUTES (= the rail, then the
                     pages reached from inside another page or from the broker
