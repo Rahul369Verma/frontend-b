@@ -412,7 +412,7 @@ Name, mode (PAPER / LIVE), status (ACTIVE / STOPPED) and position state (IDLE, E
 For time-entry deployments the card says when the next entry arms; a **stood down** note explains why no structure was entered today.
 
 ### Editing a deployment
-**✏️ Edit** loads the deployment's own settings into the builder. Change what you need (and backtest it if you like), then press **Save to deployment**. Before anything is saved you see every change, its old and new value, and when it takes effect:
+**✏️ Edit** loads the deployment's own settings into the builder. Change what you need (and backtest it if you like), then press **Save to deployment**. While you edit, the banner lists **Changes from the deployment** (the server's check, kept up to date). **Backtest the deployment's own settings…** backtests what it runs now over the same days, so the banner can set the two side by side. Before anything is saved you see every change, its old and new value, and when it takes effect:
 - **Exit settings** — stops (leg stop, structure stop, rupee stop), profit target, square-off, hold days, days-to-expiry exit — act on an **open structure at its next check** (within about 10 seconds; at once if one would fire).
 - **Everything else** — entry time and days, strikes, size, filters — acts from the **next entry**.
 
@@ -579,7 +579,52 @@ A credit structure's target is a **% of the credit** it took in (a debit structu
 - A target that **never fires** is not protecting anything. That is common for intraday structures on a monthly contract: the credit is large and a day's decay is a few % of it.
 - A **low target** takes small wins early and gives up the rest of the decay into the close. If the strategy earns its money at square-off, low targets show up as worse rows.
 - A target that wins on **one or two trades** is noise. The panel says so when the best target fired that rarely.
-- Nothing here changes the deployment: use **Edit** to change its target.`,
+- Nothing here changes the deployment: use **Edit** to change its target.
+
+Both per-trade tables say what **both** exits did on each trade, under the current settings. The stop table has **Target did**, and the target table has **Stops did**. Under each net is how the trade ended, for example *leg stop 10:45 → square-off 15:10*. A line above each table adds them up over all the trades.`,
+        },
+        {
+            id: 'results-combo-grid',
+            title: 'Results · Stops and target together',
+            md: `The two grids above each change **one** thing: the stops, or the target. But the two depend on each other. A target closes a trade before a stop can hit it, and a stop decides which trades are still open to reach the target. So the best stops plus the best target are not always the best pair. This section replays the same trades with every **leg stop × rupee stop × target** at once. The current value of each is always in the grid.
+
+**What it shows:**
+- **The settings side by side.** The current settings (ringed) next to:
+  - the **★ best net**;
+  - the **best without a worse worst trade** than now (more money without a bigger worst day);
+  - the **smallest worst trade**;
+  - **neither** (every stop and the target off).
+
+  Each row has its net, the difference from the current settings, its worst trade, its winners, and how many trades its stops and target acted on.
+- **Held-out check.** The combination that did best on the first 70% of the trades alone, measured on the last 30%, which it never saw, against the current settings on those same trades. This is the fairer guide. The ★ best is chosen in hindsight on every trade, so it always looks good. If the held-out check says the early best did not hold up, the ★ best is probably fitted to these trades.
+- **What the stops and the target did.** For the current settings and for the best, in total:
+  - how many trades the stops acted on, and what they saved or cost;
+  - how many times the target fired, and what it added or cost;
+  - the result against holding every trade with neither.
+- **Every combination, best net first.** The current one is marked with its rank. Tick *show all* for the full list.
+- **Each trade, current vs best.** For each settings, how the trade ended and what its stops and its target did. **Best − current** is the difference.
+
+**How the per-trade figures are worked out.**
+- **Stops did** is the trade with those settings minus the same trade with every stop off; the target stays on.
+- **Target did** is the trade minus the same trade with the target off; the stops stay on.
+
+The two overlap, so they do not add up to the difference from *neither*.
+
+Every trade keeps its own strikes, fills and size, and the structure stop and time exits stay as set. The replay uses the recorded quotes, about one a minute, with short legs marked at the ask. Several hundred combinations take a few minutes. Nothing here changes the deployment: try a setting on paper before trading it live.
+
+**Settings the live engine would refuse.** A structure with unlimited loss (a short straddle or strangle) must keep both a leg stop and a structure stop. Combinations that turn its leg stop off are still listed, greyed and marked *live refuses*, but they are never picked as best and have no button.
+
+### Backtest & update…
+Every combination other than the current one has a **Backtest & update…** button (*backtest* in the ranked list). It opens the builder's Backtest tab with that deployment loaded for editing (see *Editing a deployment*) and the combination's leg stop, rupee stop and target applied. A target of another kind that the deployment has on is turned off, as in the replay. It then runs two backtests over the days the replay covered, on the same recorded quotes:
+1. the deployment's **own** settings;
+2. the **combination**.
+
+The edit banner shows:
+- the combination and what the replay said about it;
+- the two backtests side by side: net, trades, win rate, average loss, max drawdown and profit factor, each with its change (green better, red worse);
+- **Changes from the deployment**: the server's check of exactly what *Save to deployment* would change, kept up to date as you edit. A setting it would refuse is shown in red.
+
+Nothing is saved until you press **Save to deployment** and confirm. The confirmation lists every change and the two backtests' nets. A LIVE deployment also asks you to type its name. If you change a setting after the backtest ran, the banner says the comparison is out of date. Run the backtest again before saving.`,
         },
         {
             id: 'compare-tab',

@@ -17,9 +17,9 @@ const RESULT = {
         cell(10, 0, 8180, -4325, 4), cell(20, 3000, 12000, -3000, 1), cell(40, 3000, 11000, -3000, 0), cell(0, 3000, 11000, -3000, 0), cell(10, 3000, 7000, -3000, 4),
     ],
     perTrade: [
-        { id: 't1', entryAt: '2026-10-26T05:30:00Z', booked: 2373, withTarget: 2304, withTargetReason: 'SQUARE_OFF', noTarget: 2304, noTargetReason: 'SQUARE_OFF', hit: false, targetRupees: 5461, bestGross: 3187, bestInTargetUnit: 23.3, targetEffect: 0, afterTarget: null },
-        { id: 't2', entryAt: '2026-10-23T05:30:00Z', booked: 2730, withTarget: 2741, noTarget: 2741, hit: false, targetRupees: 7683, bestGross: 2835, bestInTargetUnit: 14.8, targetEffect: 0, afterTarget: null },
-        { id: 't3', entryAt: '2026-10-22T05:30:00Z', booked: -1943, withTarget: 1141, noTarget: 1141, hit: false, targetRupees: 7775, bestGross: 1643, bestInTargetUnit: 8.5, targetEffect: 0, afterTarget: null },
+        { id: 't1', entryAt: '2026-10-26T05:30:00Z', booked: 2373, withTarget: 2304, withTargetReason: 'SQUARE_OFF', withTargetExitAt: '2026-10-26T09:40:00Z', firstStop: { kind: 'LEG_SL', at: '2026-10-26T05:15:00Z' }, stopsDid: -1000, noTarget: 2304, noTargetReason: 'SQUARE_OFF', hit: false, targetRupees: 5461, bestGross: 3187, bestInTargetUnit: 23.3, targetEffect: 0, afterTarget: null },
+        { id: 't2', entryAt: '2026-10-23T05:30:00Z', booked: 2730, withTarget: 2741, firstStop: null, stopsDid: 0, noTarget: 2741, hit: false, targetRupees: 7683, bestGross: 2835, bestInTargetUnit: 14.8, targetEffect: 0, afterTarget: null },
+        { id: 't3', entryAt: '2026-10-22T05:30:00Z', booked: -1943, withTarget: 1141, firstStop: null, stopsDid: 0, noTarget: 1141, hit: false, targetRupees: 7775, bestGross: 1643, bestInTargetUnit: 8.5, targetEffect: 0, afterTarget: null },
     ],
     caveats: ['Each trade keeps its own strikes…'],
 };
@@ -83,5 +83,11 @@ describe('TargetGridPanel', () => {
         expect(reach).toMatch(/0 of 3 reached it/);
         expect(screen.getAllByText('not reached')).toHaveLength(3);
         expect(screen.getByText(/· 23.3% of the credit/)).toBeTruthy();
+        // 17-Nov-2026: the table also says how each trade ended and what the stops did on it
+        expect(screen.getByText('leg stop 10:45 → square-off 15:10')).toBeTruthy();
+        expect(screen.getByText('cost ₹1,000')).toBeTruthy();
+        expect(screen.getAllByText('no stop fired')).toHaveLength(2);
+        expect(screen.getByText(/With the current settings the target never fired/).textContent)
+            .toMatch(/the target never fired, so it changed nothing; the stops acted on 1 of 3 trades and cost ₹1,000 in all \(saved on 0, cost on 1\)\./);
     });
 });

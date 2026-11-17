@@ -21,6 +21,7 @@ import { istDateTime as tokIstDateTime } from '../viz/tokens';
 import useTradeVix from '../../hooks/useTradeVix.js';
 import { vixRangeOver } from '../../utils/vixOverlay.js';
 import { rup, signed, tone, hhmm, reasonText, stopsText, recoveryText, tradeStopsText, firedLines, stopLossText, targetText, targetLevelText, archiveNotes, vixLine } from './stopReplayFormat.js';
+import { didText, endedText, sumEffects, stopsSentence, targetSentence } from './comboReplayFormat.js';
 import { Spinner } from '../viz/primitives';
 import useWhatIfJob from './useWhatIfJob.js';
 import { JobStatus, ReplayedLine, GridTable } from './WhatIfGrid.jsx';
@@ -182,6 +183,9 @@ function GridResult({ res, job, showAll, setShowAll }) {
     const cameBack = stopped.filter((t) => t.recovery?.wentPositiveAfterStop);
     const betterWithout = stopped.filter((t) => t.stopEffect != null && t.stopEffect < 0);
     const list = showAll ? res.perTrade : stopped;
+    // the current settings' stops AND target over every trade (17-Nov-2026: say how each helps)
+    const fx = sumEffects(res.perTrade, { stops: (t) => t.stopEffect, target: (t) => t.targetDid, stopped: (t) => t.stopped, hit: (t) => t.targetHit });
+    const hasTarget = res.perTrade.some((t) => t.targetDid !== undefined);
     return (
         <div className="space-y-2">
             <ReplayedLine res={res} job={job} perTrade={res.perTrade} />
@@ -199,6 +203,7 @@ function GridResult({ res, job, showAll, setShowAll }) {
                 With the current stops, {stopped.length} of {res.perTrade.length} trades were stopped;
                 {' '}<b className={cameBack.length ? 'text-warning' : 'text-fg-3'}>{cameBack.length}</b> of those touched profit again after the stop when held with no stops,
                 {' '}but only <b className={betterWithout.length ? 'text-warning' : 'text-fg-3'}>{betterWithout.length}</b> finished better without stops (touching profit is not keeping it).
+                {hasTarget && <>{' '}With the current settings {stopsSentence(fx)}; {targetSentence(fx, { set: !(res.target && res.target.level === 0) })}. The best of both together is under <b>Stops and target together</b>.</>}
                 <label className="ml-3 inline-flex items-center gap-1 cursor-pointer">
                     <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} className="accent-sky-500" /> show every trade
                 </label>
@@ -210,7 +215,9 @@ function GridResult({ res, job, showAll, setShowAll }) {
                             <tr className="text-fg-5 text-left">
                                 <th className="font-normal">Day</th><th className="text-right font-normal">Booked</th>
                                 <th className="text-right font-normal">With stops</th><th className="text-right font-normal">No stops</th>
-                                <th className="text-right font-normal">Stops did</th><th className="font-normal pl-2">After the first stop</th>
+                                <th className="text-right font-normal">Stops did</th>
+                                {hasTarget && <th className="text-right font-normal" title="The same trade with its profit target off, every stop kept">Target did</th>}
+                                <th className="font-normal pl-2">After the first stop</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -218,9 +225,13 @@ function GridResult({ res, job, showAll, setShowAll }) {
                                 <tr key={t.id} className="border-t border-line-0/60">
                                     <td><DayCell t={t} /></td>
                                     <td className={`text-right ${tone(t.booked)}`}>{signed(t.booked)}</td>
-                                    <td className={`text-right ${tone(t.withStops)}`} title={reasonText(t.withStopsReason)}>{signed(t.withStops)}</td>
+                                    <td className={`text-right ${tone(t.withStops)}`} title={reasonText(t.withStopsReason)}>
+                                        {signed(t.withStops)}
+                                        {t.withStopsExitAt !== undefined && <div className="text-fg-5 text-4xs whitespace-nowrap">{endedText({ reason: t.withStopsReason, exitAt: t.withStopsExitAt, firstStop: t.firstStop })}</div>}
+                                    </td>
                                     <td className={`text-right ${tone(t.noStops)}`} title={reasonText(t.noStopsReason)}>{signed(t.noStops)}</td>
-                                    <td className={`text-right ${tone(t.stopEffect)}`}>{t.stopEffect == null ? '—' : t.stopEffect > 0 ? `saved ${rup(t.stopEffect)}` : t.stopEffect < 0 ? `cost ${rup(-t.stopEffect)}` : 'nothing'}</td>
+                                    <td className={`text-right ${tone(t.stopEffect)}`}>{didText(t.stopEffect, 'saved')}</td>
+                                    {hasTarget && <td className={`text-right ${tone(t.targetDid)}`}>{t.targetHit || t.targetDid ? didText(t.targetDid, 'added') : 'not reached'}</td>}
                                     <td className="pl-2">
                                         {!t.stopped ? <span className="text-fg-5">no stop fired</span>
                                             : t.recovery?.wentPositiveAfterStop

@@ -46,6 +46,7 @@ import StrategyScorecard, { OpenNow } from './StrategyScorecard';
 import ExcursionsPanel from './ExcursionsPanel';
 import { StopGridPanel } from './StopReplay.jsx';
 import TargetGridPanel from './TargetReplay.jsx';
+import ComboGridPanel from './ComboReplay.jsx';
 import useScorecard from './useScorecard';
 import DocLink from '../DocLink.jsx';
 import { Panel } from '../viz/primitives';
@@ -556,6 +557,12 @@ export default function ResultsAnalytics({
                     {deploymentId && deploymentId !== 'all' && (
                         <Panel title="Which target, on these trades" subtitle="The same trades replayed with other profit targets × rupee stops; how close each one came to its target" docs="multi-leg#results-target-grid" storageKey="fold:results|targetgrid">
                             <TargetGridPanel deploymentId={deploymentId} />
+                        </Panel>
+                    )}
+                    {/* 8 ── …and both together: the best stops AND target, with what each did per trade */}
+                    {deploymentId && deploymentId !== 'all' && (
+                        <Panel title="Stops and target together, on these trades" subtitle="Every leg stop × rupee stop × target on the same trades: the current and the best marked, a held-out check, and per trade what the stops and the target each did" docs="multi-leg#results-combo-grid" storageKey="fold:results|combogrid">
+                            <ComboGridPanel deploymentId={deploymentId} />
                         </Panel>
                     )}
                 </>

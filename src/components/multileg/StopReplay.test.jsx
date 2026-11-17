@@ -30,9 +30,9 @@ const GRID = {
     rows: [row(1.3, 2000, 9000, -2200), row(1.4, 3000, 7000, -3500), row(1.3, 3000, 6500, -3600), row(1.4, 2000, 6000, -2100)],
     noStops: { n: 3, net: -5000, wins: 1, worst: -7800, avg: -1667 },
     perTrade: [
-        { id: 'a', entryAt: at(9, 20), booked: 3294, withStops: 3186, noStops: -7803, stopped: true, stopEffect: 10989, recovery: { firstStopAt: at(9, 24), stopKind: 'LEG_SL', bestAfterStop: -377, wentPositiveAfterStop: false } },
-        { id: 'b', entryAt: at(9, 20), booked: -3569, withStops: -3566, noStops: 2839, stopped: true, stopEffect: -6405, recovery: { firstStopAt: at(9, 29), stopKind: 'LEG_SL', bestAfterStop: 2839, wentPositiveAfterStop: true } },
-        { id: 'c', entryAt: at(9, 20), booked: 2360, withStops: 1891, noStops: -6091, stopped: true, stopEffect: 7982, recovery: { firstStopAt: at(9, 39), stopKind: 'LEG_SL', bestAfterStop: 2773, wentPositiveAfterStop: true } },
+        { id: 'a', entryAt: at(9, 20), booked: 3294, withStops: 3186, withStopsReason: 'SQUARE_OFF', withStopsExitAt: at(15, 10), firstStop: { kind: 'LEG_SL', at: at(9, 24) }, targetHit: false, targetDid: 0, noStops: -7803, stopped: true, stopEffect: 10989, recovery: { firstStopAt: at(9, 24), stopKind: 'LEG_SL', bestAfterStop: -377, wentPositiveAfterStop: false } },
+        { id: 'b', entryAt: at(9, 20), booked: -3569, withStops: -3566, targetHit: false, targetDid: 0, noStops: 2839, stopped: true, stopEffect: -6405, recovery: { firstStopAt: at(9, 29), stopKind: 'LEG_SL', bestAfterStop: 2839, wentPositiveAfterStop: true } },
+        { id: 'c', entryAt: at(9, 20), booked: 2360, withStops: 1891, withStopsReason: 'TP_STRUCT', withStopsExitAt: at(12, 56), targetHit: true, targetDid: -1050, noStops: -6091, stopped: true, stopEffect: 7982, recovery: { firstStopAt: at(9, 39), stopKind: 'LEG_SL', bestAfterStop: 2773, wentPositiveAfterStop: true } },
     ],
     caveats: ['Small samples.'],
 };
@@ -255,6 +255,11 @@ describe('StopGridPanel', () => {
         expect(sum).toMatch(/2 of those touched profit again/);
         expect(sum).toMatch(/only 1 finished better without stops/);
         expect(screen.getByText(/came back to \+₹2,839/)).toBeTruthy();
+        // 17-Nov-2026: the table also says how each trade ended and what the target did on it
+        expect(screen.getByText('leg stop 09:24 → square-off 15:10')).toBeTruthy();
+        expect(screen.getByText('cost ₹1,050')).toBeTruthy();
+        expect(screen.getAllByText('not reached')).toHaveLength(2);
+        expect(sum).toMatch(/With the current settings the stops acted on 3 of 3 trades and saved ₹12,566 in all \(saved on 2, cost on 1\); the target fired on 1 and cost ₹1,050\./);
     });
 });
 

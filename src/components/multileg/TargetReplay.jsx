@@ -15,6 +15,7 @@ import { JobStatus, ReplayedLine, GridTable } from './WhatIfGrid.jsx';
 import { DayCell } from './StopReplay.jsx';
 import { rup, signed, tone, hhmm, reasonText } from './stopReplayFormat.js';
 import { tpLabel, tpWords, bestText, reachSummary } from './targetReplayFormat.js';
+import { didText, endedText, sumEffects, stopsSentence, targetSentence } from './comboReplayFormat.js';
 import { istDayLabel } from '../viz/tokens';
 
 const lossLabel = (x) => (x > 0 ? rup(x) : 'off');
@@ -41,6 +42,9 @@ function TargetResult({ res, job }) {
     const none = cell(0, res.current.maxLoss);
     const reach = reachSummary(res.perTrade);
     const thin = best && best.tp > 0 && best.targets <= 2 && none && best.net !== none.net;
+    // the current settings' target AND stops over every trade (17-Nov-2026: say how each helps)
+    const fx = sumEffects(res.perTrade, { stops: (t) => t.stopsDid, target: (t) => t.targetEffect, stopped: (t) => !!t.firstStop, hit: (t) => t.hit });
+    const hasStops = res.perTrade.some((t) => t.stopsDid !== undefined);
     return (
         <div className="space-y-2">
             <ReplayedLine res={res} job={job} perTrade={res.perTrade} />
@@ -73,6 +77,12 @@ function TargetResult({ res, job }) {
                     {' '}A low target takes small wins early and gives up the rest; a high one never fires.
                 </div>
             )}
+            {hasStops && res.perTrade.length > 0 && (
+                <div>
+                    With the current settings {targetSentence(fx, { set: res.current.tp > 0 })}; {stopsSentence(fx)}.
+                    {' '}The best of both together is under <b>Stops and target together</b>.
+                </div>
+            )}
             {res.perTrade.length > 0 && (
                 <div className="overflow-x-auto">
                     <table className="w-full text-3xs font-mono">
@@ -81,6 +91,7 @@ function TargetResult({ res, job }) {
                                 <th className="font-normal">Day</th><th className="text-right font-normal">Booked</th>
                                 <th className="text-right font-normal">With target</th><th className="text-right font-normal">No target</th>
                                 <th className="text-right font-normal">Target did</th>
+                                {hasStops && <th className="text-right font-normal" title="The same trade with every stop off, the target kept">Stops did</th>}
                                 <th className="text-right font-normal">Best point (before costs)</th>
                                 <th className="text-right font-normal">Target level</th>
                                 <th className="font-normal pl-2">After the target</th>
@@ -91,9 +102,13 @@ function TargetResult({ res, job }) {
                                 <tr key={t.id} className="border-t border-line-0/60">
                                     <td><DayCell t={t} /></td>
                                     <td className={`text-right ${tone(t.booked)}`}>{signed(t.booked)}</td>
-                                    <td className={`text-right ${tone(t.withTarget)}`} title={reasonText(t.withTargetReason)}>{signed(t.withTarget)}</td>
+                                    <td className={`text-right ${tone(t.withTarget)}`} title={reasonText(t.withTargetReason)}>
+                                        {signed(t.withTarget)}
+                                        {t.withTargetExitAt !== undefined && <div className="text-fg-5 text-4xs whitespace-nowrap">{endedText({ reason: t.withTargetReason, exitAt: t.withTargetExitAt, firstStop: t.firstStop })}</div>}
+                                    </td>
                                     <td className={`text-right ${tone(t.noTarget)}`} title={reasonText(t.noTargetReason)}>{signed(t.noTarget)}</td>
-                                    <td className={`text-right ${tone(t.targetEffect)}`}>{t.targetEffect == null ? '—' : t.targetEffect > 0 ? `added ${rup(t.targetEffect)}` : t.targetEffect < 0 ? `cost ${rup(-t.targetEffect)}` : 'nothing'}</td>
+                                    <td className={`text-right ${tone(t.targetEffect)}`}>{didText(t.targetEffect, 'added')}</td>
+                                    {hasStops && <td className={`text-right ${tone(t.stopsDid)}`}>{t.firstStop || t.stopsDid ? didText(t.stopsDid, 'saved') : 'no stop fired'}</td>}
                                     <td className="text-right">{signed(t.bestGross)} <span className="text-fg-5">· {bestText(key, t.bestInTargetUnit)}</span></td>
                                     <td className="text-right text-fg-5">{t.targetRupees == null ? 'none' : `+${rup(t.targetRupees)}`}</td>
                                     <td className="pl-2">
