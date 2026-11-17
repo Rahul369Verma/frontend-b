@@ -10,7 +10,9 @@ import StructureAttributionPanel from '../components/viz/StructureAttributionPan
 import StrategyBuilder from '../components/multileg/StrategyBuilder';
 import ResultsAnalytics from '../components/multileg/ResultsAnalytics';
 import { TradeStopReplay } from '../components/multileg/StopReplay.jsx';
-import { deploymentEditBody, editBlocker, changeLine } from '../components/multileg/deploymentEditFormat.js';
+import { deploymentEditBody, editBlocker, changeLine, stableJson, runKeyOf, entryParamsOf, compareLine } from '../components/multileg/deploymentEditFormat.js';
+import { EditSource, EditChanges, BacktestCompare } from '../components/multileg/DeploymentEditPanel.jsx';
+import { comboParams, parseTry } from '../components/multileg/comboReplayFormat.js';
 import AutoRunProgress from '../components/multileg/AutoRunProgress';
 import { estimateStageSizes, sizesForRequest, runSummary, useRunTracker } from '../components/multileg/runProgress';
 import ZoomableChart from '../components/charts/ZoomableChart';
@@ -69,6 +71,23 @@ const DELTA_SYMBOLS = [
 const isDeltaSym = (s) => String(s || '').toUpperCase().startsWith('DELTA:');
 const DELTA_NOTE = 'Delta options are research-only: contracts, fees and margin are Delta\'s own (listing as of each date, ₹85/USD), but option prices are MODELLED from the underlying\'s candles (Black–Scholes, 24/7 clock) — Delta keeps no minute-level option quotes for past contracts; the recorder now stores them going forward. One lot = one contract (0.001 BTC · 0.01 ETH · 0.001 XAUT) — raise lots for a realistic size. Paper/live trading on Delta is not built yet.';
 
+// MCX commodity options (17-Nov-2026) — RESEARCH ONLY, like Delta: backtest, Optimizer, Scan and
+// Auto price options on the commodity's continuous future (Fyers history from ~Mar-2020) with MCX's
+// own series calendar, session and charges; the server refuses to deploy them.
+const MCX_SYMBOLS = [
+    { v: 'MCX:CRUDEOIL', label: 'Crude oil · MCX', spot: 8000, venue: 'MCX' },
+    { v: 'MCX:NATURALGAS', label: 'Natural gas · MCX', spot: 295, venue: 'MCX' },
+    { v: 'MCX:GOLD', label: 'Gold 1 kg · MCX', spot: 134500, venue: 'MCX' },
+    { v: 'MCX:SILVER', label: 'Silver 30 kg · MCX', spot: 168000, venue: 'MCX' },
+    { v: 'MCX:CRUDEOILM', label: 'Crude oil mini · MCX', spot: 8000, venue: 'MCX' },
+    { v: 'MCX:NATGASMINI', label: 'Natural gas mini · MCX', spot: 295, venue: 'MCX' },
+    { v: 'MCX:GOLDM', label: 'Gold mini · MCX', spot: 134700, venue: 'MCX' },
+    { v: 'MCX:SILVERM', label: 'Silver mini · MCX', spot: 169800, venue: 'MCX' },
+];
+const isMcxSym = (s) => String(s || '').toUpperCase().startsWith('MCX:');
+const MCX_NOTE = 'MCX options are research-only: option series and expiries come from MCX\'s own calendar (natural gas options from Feb-2022, the minis from 2024 — earlier days have no options and are skipped), MCX charges and session (to 23:00 for intraday), but option PRICES are MODELLED from the continuous futures candles (Black-76) — the broker keeps no history for expired options; the MCX recorder stores real quotes going forward. Lot and strike step are the configured ones; margin is an estimate. Paper/live trading of MCX structures is not built yet.';
+const researchNoteFor = (s) => (isDeltaSym(s) ? DELTA_NOTE : isMcxSym(s) ? MCX_NOTE : null);
+
 const FALLBACK_SYMBOLS = [
     { v: 'NSE:NIFTY50-INDEX', label: 'NIFTY', spot: 24000 },
     { v: 'NSE:NIFTYBANK-INDEX', label: 'BANKNIFTY', spot: 57000 },
@@ -76,6 +95,7 @@ const FALLBACK_SYMBOLS = [
     { v: 'NSE:MIDCPNIFTY-INDEX', label: 'MIDCPNIFTY', spot: 14700 },
     { v: 'BSE:SENSEX-INDEX', label: 'SENSEX', spot: 82000 },
     ...DELTA_SYMBOLS,
+    ...MCX_SYMBOLS,
 ];
 
 const OUTLOOK_COLORS = {
@@ -288,6 +308,12 @@ export default function MultiLeg() {
     // a RUNNING deployment loaded into the builder for editing (see editDeployment)
     const [editingDep, setEditingDep] = useState(null);   // { id, name, template, symbol, entry_mode, signal_strategy, trade_mode, state }
     const [editMsg, setEditMsg] = useState(null);
+    // while editing: the server's dry run of the builder's settings, kept current (DeploymentEditPanel EditChanges)
+    const [editPlan, setEditPlan] = useState(null);       // { json, ok, changes, errors, notes, open }
+    // the deployment's OWN settings backtested, to set next to the builder's: { key (runKeyOf), metrics } | { key, state }
+    const [editBase, setEditBase] = useState(null);
+    // what the shown backtest ran over (runKeyOf) and with which settings (stableJson) — a comparison needs the same run
+    const [resultRun, setResultRun] = useState(null);     // { key, params }
     const [livePreview, setLivePreview] = useState(null);          // pre-deploy risk preview modal { strategy, tradeMode, data, loading }
     const [promote, setPromote] = useState(null);                  // go-live promotion dialog { id, name } for a fresh PAPER deployment
     const [cloneLive, setCloneLive] = useState(null);              // "Clone as LIVE" dialog { id, name } for a PAPER card (the same go-live checks)
@@ -410,7 +436,7 @@ export default function MultiLeg() {
             const list = Object.keys(cfg).filter(s => s.includes('-INDEX')).map(v => ({
                 v, label: shortSym(v), spot: FALLBACK_SYMBOLS.find(f => f.v === v)?.spot || 20000,
             }));
-            if (list.length) setInstruments([...list, ...DELTA_SYMBOLS]);
+            if (list.length) setInstruments([...list, ...DELTA_SYMBOLS, ...MCX_SYMBOLS]);
         }).catch(() => {});
         // Single-leg strategies as SIGNAL SOURCES (same registry as Backtest).
         axios.get(`${API_URL}/strategies/registry`).then(r => {
@@ -452,14 +478,27 @@ export default function MultiLeg() {
     }, [chainSource, symbol]);
     const sourceCov = archiveCov && archiveCov.src === chainSource && archiveCov.sym === symbol ? archiveCov : null;
 
-    const runBacktest = async (overrideParams = null) => {
-        setRunning(true); setError(null); setResult(null);
+    // `spec` = every input named (a caller that has just set state cannot rely on it having landed)
+    const runBacktestWith = async (spec) => {
+        setRunning(true); setError(null); setResult(null); setResultRun(null);
         try {
-            const p = overrideParams || { ...params, ...entryParams };
-            const r = await axios.post(`${API_URL}/multileg/backtest`, { template: tplKey, symbol, from, to, resolution, params: p, chain_source: chainSource });
+            const r = await axios.post(`${API_URL}/multileg/backtest`, { template: spec.template, symbol: spec.symbol, from: spec.from, to: spec.to, resolution: spec.resolution, params: spec.params, chain_source: spec.chainSource });
             setResult(r.data);
+            setResultRun({ key: runKeyOf(spec), params: stableJson(spec.params) });
         } catch (e) { setError(e.response?.data?.error || e.message); }
         setRunning(false);
+    };
+    const runBacktest = (overrideParams = null) => runBacktestWith({
+        template: tplKey, symbol, from, to, resolution, chainSource, params: overrideParams || { ...params, ...entryParams },
+    });
+    // the deployment being edited, with its OWN settings, over `spec`'s days and prices
+    const runEditBase = async (spec) => {
+        const key = runKeyOf(spec);
+        setEditBase({ key, state: 'running' });
+        try {
+            const r = await axios.post(`${API_URL}/multileg/backtest`, { template: spec.template, symbol: spec.symbol, from: spec.from, to: spec.to, resolution: spec.resolution, params: spec.params, chain_source: spec.chainSource });
+            setEditBase(r.data?.metrics ? { key, metrics: r.data.metrics } : { key, state: r.data?.error || 'no result' });
+        } catch (e) { setEditBase({ key, state: e.response?.data?.error || e.message }); }
     };
 
     // One-click full backtest for a SCAN row (explicit args — state updates are
@@ -954,17 +993,85 @@ export default function MultiLeg() {
 
     // EDIT A DEPLOYMENT: its own settings into the builder (where it can be backtested first),
     // then "Save to deployment" — the server says what changed and when each change acts.
-    const editDeployment = (d) => {
-        loadSaved({ ...d, params: { ...(d.params || {}), lots: d.lots }, backtest: null });
+    // `opts.patch` = settings over the deployment's own (a combination from Results); `opts.source` = where they came from
+    const editDeployment = (d, { patch = null, source = null, backtest = null } = {}) => {
+        loadSaved({ ...d, params: { ...(d.params || {}), lots: d.lots, ...(patch || {}) }, backtest });
+        const t = templates.find((x) => x.key === d.template);
         setEditingDep({ id: d._id, name: d.name, template: d.template, symbol: d.symbol, entry_mode: d.entry_mode || 'time',
-            signal_strategy: d.signal_strategy || null, trade_mode: d.trade_mode, state: d.position?.state || 'IDLE' });
-        setEditMsg(null);
+            signal_strategy: d.signal_strategy || null, trade_mode: d.trade_mode, state: d.position?.state || 'IDLE',
+            // what the deployment runs now, as backtest params (the builder's params after loading it, unchanged)
+            baseParams: { ...(t?.defaults || {}), ...(d.params || {}), lots: d.lots, ...entryParamsOf(d) },
+            source });
+        setEditMsg(null); setEditPlan(null); setEditBase(null);
     };
+    const stopEditing = () => { setEditingDep(null); setEditMsg(null); setEditPlan(null); setEditBase(null); };
+    // "Backtest & update…" from Results (/multi-leg?tab=backtest&edit=<deployment>&try=<combination>):
+    // the deployment's CURRENT settings (read fresh) with the combination over them, backtested next to
+    // its own settings over the days the replay covered, on the same prices. Nothing is saved here.
+    const openEditFromLink = async (id, tryInfo) => {
+        try {
+            const r = await axios.get(`${API_URL}/multileg/deployments`, { timeout: 20000 });
+            const d = (r.data?.deployments || []).find((x) => String(x._id) === String(id));
+            if (!d) { setError(`Deployment ${id} is not running any more, so there is nothing to update.`); return; }
+            const t = templates.find((x) => x.key === d.template);
+            const eff = { ...(t?.defaults || {}), ...(d.params || {}) };
+            const patch = tryInfo ? comboParams(tryInfo.key, tryInfo.combo, eff) : null;
+            const span = { from: tryInfo?.from || from, to: isoDaysAgo(0) };
+            editDeployment(d, { patch, source: tryInfo, backtest: span });
+            if (!tryInfo) return;
+            const src = tryInfo.source || chainSource;
+            setChainSource(src);
+            const spec = { template: d.template, symbol: d.symbol, ...span, resolution, chainSource: src };
+            const ep = entryParamsOf(d);
+            await runEditBase({ ...spec, params: { ...eff, lots: d.lots, ...ep } });
+            await runBacktestWith({ ...spec, params: { ...eff, lots: d.lots, ...patch, ...ep } });
+        } catch (e) { setError(e.response?.data?.error || e.message); }
+    };
+    const urlEdit = searchParams.get('edit');
+    const urlTry = searchParams.get('try');
+    const editArrival = useRef(null);
+    useEffect(() => {
+        if (!urlEdit || !templates.length) return;
+        const tag = `${urlEdit}|${urlTry || ''}`;
+        if (editArrival.current === tag) return;
+        editArrival.current = tag;
+        // consumed once: the URL stops naming it, so a refresh never reloads it over your edits
+        setStoredTab('backtest');
+        setSearchParams((p) => { const q = new URLSearchParams(p); for (const k of ['edit', 'try', 'tab', 'deployment']) q.delete(k); return q; }, { replace: true });
+        openEditFromLink(urlEdit, parseTry(urlTry));
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per link; openEditFromLink reads the page's state at that moment
+    }, [urlEdit, urlTry, templates.length]);
     const editBlock = editBlocker(editingDep, { tplKey, symbol, entryMode, signalStrategy });
+    // the dry run of "Save to deployment", kept current while editing: every change, when it acts, what would refuse it
+    const editBodyJson = editingDep ? JSON.stringify(deploymentEditBody({ params, entryMode, useSignalExit, signalParams, name: saveName })) : null;
+    useEffect(() => {
+        if (!editingDep || !editBodyJson || editBlock) return undefined;
+        let dead = false;
+        const t = setTimeout(() => {
+            axios.patch(`${API_URL}/multileg/deployments/${editingDep.id}`, { ...JSON.parse(editBodyJson), dryRun: true })
+                .then((r) => { if (!dead) setEditPlan({ json: editBodyJson, ...r.data }); })
+                .catch((e) => {
+                    if (dead) return;
+                    const d = e.response?.data || {};
+                    setEditPlan({ json: editBodyJson, ok: false, changes: d.changes || [], notes: d.notes || [], errors: d.errors?.length ? d.errors : [d.error || e.message] });
+                });
+        }, 500);
+        return () => { dead = true; clearTimeout(t); };
+    }, [editingDep, editBodyJson, editBlock]);
+    // the two backtests compare only over the same days and prices; `stale` = the settings changed since the shown one ran
+    const runNowKey = runKeyOf({ template: tplKey, symbol, from, to, resolution, chainSource });
+    const editCompare = editingDep ? {
+        base: editBase?.metrics && editBase.key === runNowKey ? editBase.metrics : null,
+        next: result?.metrics && resultRun?.key === runNowKey ? result.metrics : null,
+        period: { from, to, chainSource },
+        stale: !!(resultRun && resultRun.key === runNowKey && resultRun.params !== stableJson({ ...params, ...entryParams })),
+        baseState: editBase && editBase.key === runNowKey ? (editBase.state || null) : null,
+    } : null;
     const saveToDeployment = async () => {
         if (!editingDep || editBlock) return;
         const dep = editingDep;
         const body = deploymentEditBody({ params, entryMode, useSignalExit, signalParams, name: saveName });
+        const cmp = editCompare;
         setEditMsg(null);
         try {
             const plan = (await axios.patch(`${API_URL}/multileg/deployments/${dep.id}`, { ...body, dryRun: true })).data;
@@ -977,13 +1084,15 @@ export default function MultiLeg() {
                     <div className="space-y-1 text-xs">
                         {isLive && <div className="text-danger font-semibold">This is a LIVE deployment: the changes govern real orders.</div>}
                         <ul className="list-disc pl-4 space-y-0.5 font-mono text-2xs">{plan.changes.map((c) => <li key={c.key}>{changeLine(c)}</li>)}</ul>
+                        {(plan.notes || []).map((n, i) => <div key={i} className="text-fg-5">{n}</div>)}
+                        <div className={cmp?.base && cmp?.next ? 'text-fg-3' : 'text-fg-5'} data-testid="confirm-compare">{compareLine(cmp || {})}</div>
                         <div className="text-fg-5">{plan.open ? 'It has an OPEN structure: exit settings act on it at its next check (~10 s).' : 'It is flat: every change acts from its next entry.'} The saved strategy it came from is not changed.</div>
                     </div>
                 ),
                 onConfirm: () => withPending(`edit:${dep.id}`, async () => {
                     const r = await axios.patch(`${API_URL}/multileg/deployments/${dep.id}`, body);
                     if (!r.data?.ok) throw new Error((r.data?.errors || [r.data?.error || 'not saved']).join('; '));
-                    setEditingDep(null);
+                    stopEditing();
                     setMode('deploy');
                     refreshDeployments();
                 }, `Saved ${plan.changes.length} change(s) to “${dep.name}”`),
@@ -1348,8 +1457,8 @@ export default function MultiLeg() {
 
     const SetupCard = (
         <Panel icon={SlidersHorizontal} title={<>Setup — {tpl?.name || tplKey}</>} storageKey="fold:multi-leg|setup">
-            {isDeltaSym(symbol)
-                ? <div className="mb-2 text-2xs text-warning border border-amber-800/60 bg-amber-950/10 rounded p-2" data-testid="delta-note">{DELTA_NOTE}</div>
+            {researchNoteFor(symbol)
+                ? <div className="mb-2 text-2xs text-warning border border-amber-800/60 bg-amber-950/10 rounded p-2" data-testid={isMcxSym(symbol) ? 'mcx-note' : 'delta-note'}>{researchNoteFor(symbol)}</div>
                 : <><MarketRead symbol={symbol} presets={presets} onApplyPreset={applyPreset} /><BookCost symbol={symbol} /></>}
             <div className="grid grid-cols-2 gap-2 text-xs">
                 <label className="text-fg-4">Symbol
@@ -1618,6 +1727,7 @@ export default function MultiLeg() {
                 ))}
             </div>
             {scanSymbols.some(isDeltaSym) && <div className="mt-1.5 text-2xs text-warning" data-testid="delta-note">{DELTA_NOTE}</div>}
+            {scanSymbols.some(isMcxSym) && <div className="mt-1.5 text-2xs text-warning" data-testid="mcx-note">{MCX_NOTE}</div>}
         </div>
     );
 
@@ -1767,14 +1877,21 @@ export default function MultiLeg() {
                                 <div className="mt-3 rounded border border-amber-700/50 bg-amber-950/20 p-2 text-2xs text-fg-3 space-y-1.5" data-testid="editing-deployment">
                                     <div className="font-semibold text-warning flex items-center gap-1"><Pencil className="w-3.5 h-3.5" /> Editing deployment “{editingDep.name}” ({editingDep.trade_mode} · {editingDep.state === 'IDLE' ? 'flat' : 'structure OPEN'})</div>
                                     <div className="text-fg-4">Change any setting, backtest it if you like, then save it to the deployment. Exit settings (stops, target, square-off, hold) act on an open structure at its next check; the rest from its next entry. The structure, symbol, entry trigger and trading mode cannot change here.</div>
+                                    <EditSource source={editingDep.source} />
                                     {editBlock && <div className="text-danger">{editBlock}</div>}
+                                    {!editBlock && <EditChanges plan={editPlan} checking={!editPlan || editPlan.json !== editBodyJson} />}
+                                    {!editBlock && (
+                                        <BacktestCompare base={editCompare.base} next={editCompare.next} period={editCompare.period} stale={editCompare.stale}
+                                            baseState={editCompare.baseState}
+                                            onRunBase={running ? null : () => runEditBase({ template: tplKey, symbol, from, to, resolution, chainSource, params: editingDep.baseParams })} />
+                                    )}
                                     {editMsg && <div className={editMsg.startsWith('Not saved') ? 'text-danger' : 'text-fg-4'}>{editMsg}</div>}
                                     <div className="flex gap-2">
                                         <button onClick={saveToDeployment} disabled={!!editBlock || !!pending[`edit:${editingDep.id}`]}
                                             className="px-3 py-1.5 bg-amber-900/30 hover:bg-amber-900/50 border border-amber-700/50 text-warning rounded text-xs font-semibold disabled:opacity-40">
                                             Save to deployment
                                         </button>
-                                        <button onClick={() => { setEditingDep(null); setEditMsg(null); }}
+                                        <button onClick={stopEditing}
                                             className="px-3 py-1.5 border border-line rounded text-xs text-fg-4 hover:text-fg">Stop editing</button>
                                     </div>
                                 </div>
