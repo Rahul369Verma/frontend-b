@@ -21,7 +21,7 @@ import { istDateTime as tokIstDateTime } from '../viz/tokens';
 import useTradeVix from '../../hooks/useTradeVix.js';
 import { vixRangeOver } from '../../utils/vixOverlay.js';
 import { rup, signed, tone, hhmm, reasonText, stopsText, recoveryText, tradeStopsText, firedLines, stopLossText, targetText, targetLevelText, archiveNotes, vixLine } from './stopReplayFormat.js';
-import { didText, endedText, sumEffects, stopsSentence, targetSentence } from './comboReplayFormat.js';
+import { didText, endedText, sumEffects, stopsSentence, targetSentence, currentText, REPLAY_NOTE } from './comboReplayFormat.js';
 import { Spinner } from '../viz/primitives';
 import useWhatIfJob from './useWhatIfJob.js';
 import { JobStatus, ReplayedLine, GridTable } from './WhatIfGrid.jsx';
@@ -42,6 +42,9 @@ function useRoundTripVix(trade) {
     return { ...vix, range };
 }
 
+/** Two replays that ended the same way, at the same moment, on the same net. */
+const sameRun = (a, b) => !!a && !!b && a.net === b.net && a.reason === b.reason && a.exitAt === b.exitAt;
+
 export function TradeStopReplay({ trade, istTime, istDateTime, istSpan }) {
     const id = trade?._id;
     const vix = useRoundTripVix(trade);
@@ -58,7 +61,9 @@ export function TradeStopReplay({ trade, istTime, istDateTime, istSpan }) {
     // every replay is drawn; the chart's legend checkboxes switch each one off and on
     const overlays = useMemo(() => (d ? [
         // the two what-ifs get the two colours; "its stops" is only a check on the replay → muted
-        d.noStopLoss?.path?.length ? { key: 'noStopLoss', name: 'replay · no stop-loss (leg stops kept)', points: d.noStopLoss.path, slot: 2, dashed: true } : null,
+        // the leg stops can close every leg before the stop-loss could fire: then the two replays are one
+        // line, and the legend says so rather than leaving two identical lines unexplained
+        d.noStopLoss?.path?.length ? { key: 'noStopLoss', name: sameRun(d.noStopLoss, d.configured) ? 'replay · no stop-loss (leg stops kept) — same as its stops: the stop-loss never fired' : 'replay · no stop-loss (leg stops kept)', points: d.noStopLoss.path, slot: 2, dashed: true } : null,
         d.noStops?.path?.length ? { key: 'noStops', name: 'replay · no stops at all', points: d.noStops.path, slot: 1, dotted: true } : null,
         // a target that fired: the trade held on past it, every stop kept (one that never fired draws the same line as its stops)
         d.target?.fired && d.noTarget?.path?.length ? { key: 'noTarget', name: 'replay · no profit target (stops kept)', points: d.noTarget.path, mark: 'hypothetical', dashDot: true } : null,
@@ -210,14 +215,22 @@ function GridResult({ res, job, showAll, setShowAll }) {
             </div>
             {list.length > 0 && (
                 <div className="overflow-x-auto">
-                    <table className="w-full text-3xs font-mono">
+                    <div className="text-fg-5 mb-1">{REPLAY_NOTE}</div>
+                    <table className="w-full text-3xs font-mono [&_th]:px-2 [&_td]:px-2 [&_td]:py-0.5 [&_td]:align-top" aria-label="Each trade with and without the current stops">
                         <thead>
-                            <tr className="text-fg-5 text-left">
-                                <th className="font-normal">Day</th><th className="text-right font-normal">Booked</th>
-                                <th className="text-right font-normal">With stops</th><th className="text-right font-normal">No stops</th>
-                                <th className="text-right font-normal">Stops did</th>
-                                {hasTarget && <th className="text-right font-normal" title="The same trade with its profit target off, every stop kept">Target did</th>}
-                                <th className="font-normal pl-2">After the first stop</th>
+                            <tr className="text-fg-5">
+                                <th colSpan={2} />
+                                <th colSpan={hasTarget ? 4 : 3} className="font-normal text-center border-b border-line-0">Replayed with the current settings · {currentText(res.target?.key || 'tp_pct_credit', { legSlX: res.current.legSlX, maxLoss: res.current.maxLoss, tp: res.target?.level })}</th>
+                                <th />
+                            </tr>
+                            <tr className="text-fg-5 border-b border-line-0">
+                                <th className="font-normal text-left">Day</th>
+                                <th className="text-right font-normal" title="What really happened: the engine's own fills and charges">Booked (real)</th>
+                                <th className="text-right font-normal" title="The replay with every current setting: its net, and how it ended">Net · ended</th>
+                                <th className="text-right font-normal" title="The same replay with every stop off, the target kept">Stops off</th>
+                                <th className="text-right font-normal" title="Net minus Stops off: what the stops saved or cost on this trade">Stops did</th>
+                                {hasTarget && <th className="text-right font-normal" title="Net minus the same replay with the profit target off, every stop kept">Target did</th>}
+                                <th className="font-normal text-left">After the first stop</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -232,7 +245,7 @@ function GridResult({ res, job, showAll, setShowAll }) {
                                     <td className={`text-right ${tone(t.noStops)}`} title={reasonText(t.noStopsReason)}>{signed(t.noStops)}</td>
                                     <td className={`text-right ${tone(t.stopEffect)}`}>{didText(t.stopEffect, 'saved')}</td>
                                     {hasTarget && <td className={`text-right ${tone(t.targetDid)}`}>{t.targetHit || t.targetDid ? didText(t.targetDid, 'added') : 'not reached'}</td>}
-                                    <td className="pl-2">
+                                    <td>
                                         {!t.stopped ? <span className="text-fg-5">no stop fired</span>
                                             : t.recovery?.wentPositiveAfterStop
                                                 ? <span className="text-warning">{reasonText(t.recovery.stopKind)} {hhmm(t.recovery.firstStopAt)} → came back to {signed(t.recovery.bestAfterStop)}</span>

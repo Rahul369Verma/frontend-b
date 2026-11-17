@@ -144,3 +144,16 @@ export function tryText(t) {
     }
     return s;
 }
+
+/** "leg 1.4× · rupee ₹20,000 · target 35%" — the settings a replay ran with; a part the server did not send is left out. */
+export function currentText(key, cur) {
+    if (!cur) return '—';
+    const parts = [];
+    if (cur.legSlX != null) parts.push(`leg ${legLabel(cur.legSlX)}`);
+    if (cur.maxLoss != null) parts.push(`rupee ${lossLabel(cur.maxLoss)}`);
+    if (cur.tp != null) parts.push(`target ${tpLabel(key, cur.tp)}`);
+    return parts.join(' · ') || '—';
+}
+
+/** Above every per-trade what-if table: why a replay is not the booked number (18-Nov-2026: −₹7,668 replayed vs −₹7,035 booked). */
+export const REPLAY_NOTE = 'Booked (real) is what happened, with the engine\'s own fills. Every other figure is a replay on the recorded quotes, about one a minute with short legs bought back at the ask, so a stop fills a little later and at a worse price than the engine, which checks every few seconds. Compare the replays with each other, not with Booked. Each trade under the best stops and target together is under Stops and target together.';

@@ -15,7 +15,7 @@ import { JobStatus, ReplayedLine, GridTable } from './WhatIfGrid.jsx';
 import { DayCell } from './StopReplay.jsx';
 import { rup, signed, tone, hhmm, reasonText } from './stopReplayFormat.js';
 import { tpLabel, tpWords, bestText, reachSummary } from './targetReplayFormat.js';
-import { didText, endedText, sumEffects, stopsSentence, targetSentence } from './comboReplayFormat.js';
+import { didText, endedText, sumEffects, stopsSentence, targetSentence, currentText, REPLAY_NOTE } from './comboReplayFormat.js';
 import { istDayLabel } from '../viz/tokens';
 
 const lossLabel = (x) => (x > 0 ? rup(x) : 'off');
@@ -85,16 +85,24 @@ function TargetResult({ res, job }) {
             )}
             {res.perTrade.length > 0 && (
                 <div className="overflow-x-auto">
-                    <table className="w-full text-3xs font-mono">
+                    <div className="text-fg-5 mb-1">{REPLAY_NOTE}</div>
+                    <table className="w-full text-3xs font-mono [&_th]:px-2 [&_td]:px-2 [&_td]:py-0.5 [&_td]:align-top" aria-label="Each trade with and without the current target">
                         <thead>
-                            <tr className="text-fg-5 text-left">
-                                <th className="font-normal">Day</th><th className="text-right font-normal">Booked</th>
-                                <th className="text-right font-normal">With target</th><th className="text-right font-normal">No target</th>
-                                <th className="text-right font-normal">Target did</th>
-                                {hasStops && <th className="text-right font-normal" title="The same trade with every stop off, the target kept">Stops did</th>}
-                                <th className="text-right font-normal">Best point (before costs)</th>
-                                <th className="text-right font-normal">Target level</th>
-                                <th className="font-normal pl-2">After the target</th>
+                            <tr className="text-fg-5">
+                                <th colSpan={2} />
+                                <th colSpan={hasStops ? 4 : 3} className="font-normal text-center border-b border-line-0">Replayed with the current settings · {currentText(key, { legSlX: res.legStop, ...res.current })}</th>
+                                <th colSpan={3} className="font-normal text-center border-b border-line-0">How far the trade got</th>
+                            </tr>
+                            <tr className="text-fg-5 border-b border-line-0">
+                                <th className="font-normal text-left">Day</th>
+                                <th className="text-right font-normal" title="What really happened: the engine's own fills and charges">Booked (real)</th>
+                                <th className="text-right font-normal" title="The replay with every current setting: its net, and how it ended">Net · ended</th>
+                                <th className="text-right font-normal" title="The same replay with the profit target off, every stop kept">Target off</th>
+                                <th className="text-right font-normal" title="Net minus Target off: what the target added or cost on this trade">Target did</th>
+                                {hasStops && <th className="text-right font-normal" title="Net minus the same replay with every stop off, the target kept">Stops did</th>}
+                                <th className="text-right font-normal" title="The replay's best mark before costs (the basis a target is checked on), and what share of the target unit it was">Best point (before costs)</th>
+                                <th className="text-right font-normal" title="The current target for this trade, in rupees before costs">Target at</th>
+                                <th className="text-left font-normal" title="Whether the target was reached, and what the trade did after it">After the target</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -111,7 +119,7 @@ function TargetResult({ res, job }) {
                                     {hasStops && <td className={`text-right ${tone(t.stopsDid)}`}>{t.firstStop || t.stopsDid ? didText(t.stopsDid, 'saved') : 'no stop fired'}</td>}
                                     <td className="text-right">{signed(t.bestGross)} <span className="text-fg-5">· {bestText(key, t.bestInTargetUnit)}</span></td>
                                     <td className="text-right text-fg-5">{t.targetRupees == null ? 'none' : `+${rup(t.targetRupees)}`}</td>
-                                    <td className="pl-2">
+                                    <td>
                                         {!t.hit ? <span className="text-fg-5">{t.targetRupees == null ? '—' : 'not reached'}</span>
                                             : t.afterTarget?.wentHigher
                                                 ? <span className="text-warning">took it {hhmm(t.afterTarget.at)} → held, it went to {signed(t.afterTarget.bestAfter)} and ended {signed(t.afterTarget.ended)}</span>

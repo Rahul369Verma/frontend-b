@@ -42,6 +42,7 @@ import LiveCapitalPanel from '../components/multileg/LiveCapitalPanel.jsx';
 import TwinsPanel from '../components/multileg/TwinsPanel.jsx';
 import BrokerOrdersPanel from '../components/BrokerOrdersPanel.jsx';
 import TradeStory from '../components/multileg/TradeStory.jsx';
+import FitVisibleWidth from '../components/viz/FitVisibleWidth.jsx';
 import TodayStory from '../components/multileg/TodayStory.jsx';
 import { failedLegRows } from '../components/multileg/tradeStoryFormat.js';
 import EngineJournal from '../components/multileg/EngineJournal';
@@ -3595,7 +3596,7 @@ export default function MultiLeg() {
                                                 <tr className="bg-slate-900/60"><td colSpan={17} className="p-2 text-3xs text-fg-5">Loading legs and path…</td></tr>
                                             )}
                                             {openT && full && (
-                                                <tr className="bg-slate-900/60"><td colSpan={17} className="p-2">
+                                                <tr className="bg-slate-900/60"><td colSpan={17} className="p-2"><FitVisibleWidth>
                                                     <div className="text-3xs text-fg-4 mb-1">Held {full.exitAt ? fmtSpan(full.entryAt, full.exitAt) : fmtDur(full.entryAt)} · spot {fmt(full.entrySpot)} → {fmt(full.exitSpot)} · net credit at entry ₹{fmt(full.origCredit, 1)}/u · {tradeLots(full).lots ? `${tradeLots(full).title}` : 'lots not recorded'}</div>
                                                     {/* What it DID while open — MAE/MFE and the gave-back number.
                                                         Renders its own explanation for pre-feature trades. */}
@@ -3633,7 +3634,7 @@ export default function MultiLeg() {
                                                             ))}</tbody>
                                                         </table>
                                                     ) : <div className="text-3xs text-fg-5">No leg detail stored for this trade.</div>}
-                                                </td></tr>
+                                                </FitVisibleWidth></td></tr>
                                             )}
                                             </React.Fragment>
                                             );

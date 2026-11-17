@@ -6,7 +6,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 const at = (hh, mm) => new Date(Date.UTC(2026, 9, 12, hh, mm) - 5.5 * 3600e3).toISOString();
 
@@ -257,6 +257,11 @@ describe('StopGridPanel', () => {
         expect(screen.getByText(/came back to \+₹2,839/)).toBeTruthy();
         // 17-Nov-2026: the table also says how each trade ended and what the target did on it
         expect(screen.getByText('leg stop 09:24 → square-off 15:10')).toBeTruthy();
+        // 18-Nov-2026: grouped headers name the settings the replay used; Booked is the real one
+        const per = screen.getByRole('table', { name: 'Each trade with and without the current stops' });
+        const [groups, heads] = within(per).getAllByRole('row');
+        expect(groups.textContent).toBe('Replayed with the current settings · leg 1.4× · rupee ₹3,000');   // this answer names no target level
+        expect([...heads.cells].map((c) => c.textContent)).toEqual(['Day', 'Booked (real)', 'Net · ended', 'Stops off', 'Stops did', 'Target did', 'After the first stop']);
         expect(screen.getByText('cost ₹1,050')).toBeTruthy();
         expect(screen.getAllByText('not reached')).toHaveLength(2);
         expect(sum).toMatch(/With the current settings the stops acted on 3 of 3 trades and saved ₹12,566 in all \(saved on 2, cost on 1\); the target fired on 1 and cost ₹1,050\./);
@@ -294,6 +299,12 @@ describe('the profit target apart from the stops (5-Nov-2026)', () => {
         expect(box.checked).toBe(true);
         fireEvent.click(box);
         expect(screen.getByLabelText('replay · no profit target (stops kept)').checked).toBe(false);
+    });
+    it('a stop-loss that never fired: its line is the same as "its stops", and the legend says so (18-Nov-2026)', async () => {
+        replayAnswersOnce({ ...WITH_TARGET, noStopLoss: { ...WITH_TARGET.configured } });
+        render(<TradeStopReplay trade={stoppedTrade} />);
+        fireEvent.click(screen.getByText('Replay without stops or target'));
+        expect(await screen.findByLabelText('replay · no stop-loss (leg stops kept) — same as its stops: the stop-loss never fired')).toBeTruthy();
     });
     it('a target that never fired draws no extra line (it would be the same as its stops)', async () => {
         replayAnswersOnce({ ...WITH_TARGET, target: { ...WITH_TARGET.target, fired: false, effect: 0, after: null } });

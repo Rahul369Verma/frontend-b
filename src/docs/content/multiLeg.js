@@ -581,7 +581,9 @@ A credit structure's target is a **% of the credit** it took in (a debit structu
 - A target that wins on **one or two trades** is noise. The panel says so when the best target fired that rarely.
 - Nothing here changes the deployment: use **Edit** to change its target.
 
-Both per-trade tables say what **both** exits did on each trade, under the current settings. The stop table has **Target did**, and the target table has **Stops did**. Under each net is how the trade ended, for example *leg stop 10:45 → square-off 15:10*. A line above each table adds them up over all the trades.`,
+Both per-trade tables say what **both** exits did on each trade, under the current settings. The stop table has **Target did**, and the target table has **Stops did**. Under each net is how the trade ended, for example *leg stop 10:45 → square-off 15:10*. A line above each table adds them up over all the trades.
+
+**Booked (real) is not a replay.** It is what happened, with the engine's own fills. Every other column replays the current settings (named above the columns) on the recorded quotes: about one a minute, with short legs bought back at the ask. So a replayed stop fills a little later and at a worse price than the engine, which checks every few seconds. On the 17-Nov LIVE straddle, the replayed CE leg stop filled at ₹96.55 against the real ₹92.38: −₹7,668 replayed against −₹7,035 booked. Compare the replays with each other, not with Booked. To see each trade under the **best** stops and target, use *Stops and target together*.`,
         },
         {
             id: 'results-combo-grid',

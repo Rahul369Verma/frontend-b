@@ -5,7 +5,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { tpLabel, tpWords, bestText, reachSummary } from './targetReplayFormat.js';
 
 const cell = (tp, maxLoss, net, worst, targets) => ({ tp, maxLoss, n: 3, wins: 2, net, worst, avg: Math.round(net / 3), targets });
@@ -81,6 +81,12 @@ describe('TargetGridPanel', () => {
         expect(reach).toMatch(/median 14.8% of the credit/);
         expect(reach).toMatch(/highest 23.3% of the credit \(Mon 26 Oct\)/);
         expect(reach).toMatch(/0 of 3 reached it/);
+        // 18-Nov-2026: the per-trade table says which settings the replay used, and that Booked is the real one
+        const per = screen.getByRole('table', { name: 'Each trade with and without the current target' });
+        const [groups, heads] = within(per).getAllByRole('row');
+        expect(groups.textContent).toBe('Replayed with the current settings · leg 1.5× · rupee off · target 40%How far the trade got');
+        expect([...heads.cells].map((c) => c.textContent)).toEqual(['Day', 'Booked (real)', 'Net · ended', 'Target off', 'Target did', 'Stops did', 'Best point (before costs)', 'Target at', 'After the target']);
+        expect(screen.getByText(/^Booked \(real\) is what happened, with the engine's own fills\. Every other figure is a replay on the recorded quotes/)).toBeTruthy();
         expect(screen.getAllByText('not reached')).toHaveLength(3);
         expect(screen.getByText(/· 23.3% of the credit/)).toBeTruthy();
         // 17-Nov-2026: the table also says how each trade ended and what the stops did on it

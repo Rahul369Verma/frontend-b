@@ -212,6 +212,16 @@ describe('TradePathChart overlays', () => {
         // before the first overlay point nothing is invented
         expect(out[0].netHeld).toBeNull();
     });
+    it('a replay that closed early is not read out after its own exit (17-Nov-2026)', () => {
+        // 'ws' (its stops) closed at 200; 'ns' (no stops) ran on to 500
+        const out = mergeOverlayRows({ rows, points: [{ ms: 50, key: 'ws', v: 0 }, { ms: 200, key: 'ws', v: -300 }, { ms: 50, key: 'ns', v: 0 }, { ms: 500, key: 'ns', v: 900 }], keys: ['ws', 'ns'], lastMarkMs: 300, label: lab });
+        const at = (ms) => out.filter((r) => r.ms === ms).at(-1);
+        expect(at(200).ovHeld_ws).toBe(-300);
+        expect(at(300).ovHeld_ws).toBeNull();
+        expect(at(500).ovHeld_ws).toBeNull();
+        expect(at(300).ovHeld_ns).toBe(0);
+        expect(at(500).ovHeld_ns).toBe(900);
+    });
     it('without overlays the rows are untouched', () => {
         expect(mergeOverlayRows({ rows, points: [], keys: [], lastMarkMs: 300, label: lab })).toBe(rows);
     });
