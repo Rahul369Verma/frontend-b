@@ -1000,6 +1000,7 @@ export default function MultiLeg() {
         const t = templates.find((x) => x.key === d.template);
         setEditingDep({ id: d._id, name: d.name, template: d.template, symbol: d.symbol, entry_mode: d.entry_mode || 'time',
             signal_strategy: d.signal_strategy || null, trade_mode: d.trade_mode, state: d.position?.state || 'IDLE',
+            status: d.status || 'ACTIVE',
             // what the deployment runs now, as backtest params (the builder's params after loading it, unchanged)
             baseParams: { ...(t?.defaults || {}), ...(d.params || {}), lots: d.lots, ...entryParamsOf(d) },
             source });
@@ -1009,11 +1010,22 @@ export default function MultiLeg() {
     // "Backtest & update…" from Results (/multi-leg?tab=backtest&edit=<deployment>&try=<combination>):
     // the deployment's CURRENT settings (read fresh) with the combination over them, backtested next to
     // its own settings over the days the replay covered, on the same prices. Nothing is saved here.
+    // A STOPPED deployment opens too, and where no engine runs (dev) it is read from the database
+    // (18-Nov-2026: this read the engine's list, empty with dev's engines off, and refused every one).
     const openEditFromLink = async (id, tryInfo) => {
         try {
-            const r = await axios.get(`${API_URL}/multileg/deployments`, { timeout: 20000 });
-            const d = (r.data?.deployments || []).find((x) => String(x._id) === String(id));
-            if (!d) { setError(`Deployment ${id} is not running any more, so there is nothing to update.`); return; }
+            let d;
+            try {
+                d = (await axios.get(`${API_URL}/multileg/deployments/${encodeURIComponent(id)}`, { timeout: 20000 })).data?.deployment;
+            } catch (e) {
+                if (e.response?.status !== 404) throw e;
+                if (e.response.data?.error === 'deployment not found') { setError(`Deployment ${id} has been deleted, so there are no settings to backtest or update. Its trades are still in Results.`); return; }
+                // a backend older than this page has no one-deployment read: the list of what its engine holds
+                const r = await axios.get(`${API_URL}/multileg/deployments`, { timeout: 20000 });
+                d = (r.data?.deployments || []).find((x) => String(x._id) === String(id));
+                if (!d) { setError(`Deployment ${id} is not loaded on this server, and this server's backend is too old to read a stopped deployment from the database. Update the backend, then try again.`); return; }
+            }
+            if (!d) { setError(`Deployment ${id} could not be read.`); return; }
             const t = templates.find((x) => x.key === d.template);
             const eff = { ...(t?.defaults || {}), ...(d.params || {}) };
             const patch = tryInfo ? comboParams(tryInfo.key, tryInfo.combo, eff) : null;
@@ -1087,15 +1099,15 @@ export default function MultiLeg() {
                         <ul className="list-disc pl-4 space-y-0.5 font-mono text-2xs">{plan.changes.map((c) => <li key={c.key}>{changeLine(c)}</li>)}</ul>
                         {(plan.notes || []).map((n, i) => <div key={i} className="text-fg-5">{n}</div>)}
                         <div className={cmp?.base && cmp?.next ? 'text-fg-3' : 'text-fg-5'} data-testid="confirm-compare">{compareLine(cmp || {})}</div>
-                        <div className="text-fg-5">{plan.open ? 'It has an OPEN structure: exit settings act on it at its next check (~10 s).' : 'It is flat: every change acts from its next entry.'} The saved strategy it came from is not changed.</div>
+                        <div className="text-fg-5">{plan.open ? 'It has an OPEN structure: exit settings act on it at its next check (~10 s).' : 'It is flat: every change acts from its next entry.'}{dep.status === 'STOPPED' ? ' It is stopped: nothing acts until you start it again.' : ''} The saved strategy it came from is not changed.</div>
                     </div>
                 ),
                 onConfirm: () => withPending(`edit:${dep.id}`, async () => {
                     const r = await axios.patch(`${API_URL}/multileg/deployments/${dep.id}`, body);
                     if (!r.data?.ok) throw new Error((r.data?.errors || [r.data?.error || 'not saved']).join('; '));
                     stopEditing();
-                    setMode('deploy');
-                    refreshDeployments();
+                    // saved to the database where no engine runs: the Deploy tab lists only the engine's, so stay here
+                    if (!r.data.stored) { setMode('deploy'); refreshDeployments(); }
                 }, `Saved ${plan.changes.length} change(s) to “${dep.name}”`),
             });
         } catch (e) {
@@ -1876,7 +1888,8 @@ export default function MultiLeg() {
                             </button>
                             {editingDep && (
                                 <div className="mt-3 rounded border border-amber-700/50 bg-amber-950/20 p-2 text-2xs text-fg-3 space-y-1.5" data-testid="editing-deployment">
-                                    <div className="font-semibold text-warning flex items-center gap-1"><Pencil className="w-3.5 h-3.5" /> Editing deployment “{editingDep.name}” ({editingDep.trade_mode} · {editingDep.state === 'IDLE' ? 'flat' : 'structure OPEN'})</div>
+                                    <div className="font-semibold text-warning flex items-center gap-1"><Pencil className="w-3.5 h-3.5" /> Editing deployment “{editingDep.name}” ({editingDep.trade_mode} · {editingDep.status === 'STOPPED' ? 'stopped · ' : ''}{editingDep.state === 'IDLE' ? 'flat' : 'structure OPEN'})</div>
+                                    {editingDep.status === 'STOPPED' && <div className="text-fg-4" data-testid="editing-stopped">It is stopped, so it is not trading. You can still backtest and save changes: they act once you start it again.</div>}
                                     <div className="text-fg-4">Change any setting, backtest it if you like, then save it to the deployment. Exit settings (stops, target, square-off, hold) act on an open structure at its next check; the rest from its next entry. The structure, symbol, entry trigger and trading mode cannot change here.</div>
                                     <EditSource source={editingDep.source} />
                                     {editBlock && <div className="text-danger">{editBlock}</div>}

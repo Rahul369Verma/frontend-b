@@ -626,7 +626,9 @@ The edit banner shows:
 - the two backtests side by side: net, trades, win rate, average loss, max drawdown and profit factor, each with its change (green better, red worse);
 - **Changes from the deployment**: the server's check of exactly what *Save to deployment* would change, kept up to date as you edit. A setting it would refuse is shown in red.
 
-Nothing is saved until you press **Save to deployment** and confirm. The confirmation lists every change and the two backtests' nets. A LIVE deployment also asks you to type its name. If you change a setting after the backtest ran, the banner says the comparison is out of date. Run the backtest again before saving.`,
+Nothing is saved until you press **Save to deployment** and confirm. The confirmation lists every change and the two backtests' nets. A LIVE deployment also asks you to type its name. If you change a setting after the backtest ran, the banner says the comparison is out of date. Run the backtest again before saving.
+
+**A stopped deployment** opens the same way: it is backtested with all its settings and can be updated. The banner and the confirmation say it is stopped; the changes act once you start it again. On a server where the trading engines are off (dev), the deployment is read from the database and a saved change is written there; the engine reads it when it starts. A deleted deployment has no settings left to open, and the page says so; its trades stay in Results.`,
         },
         {
             id: 'compare-tab',

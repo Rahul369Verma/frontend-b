@@ -20,15 +20,31 @@ const DEP = {
     trade_mode: 'PAPER', status: 'ACTIVE', lots: 1, params: { entry_time: '09:20', square_off: '15:10', leg_sl_x: 1.4, sl_x_credit: 1.5, max_loss_rupees: 3000 },
     position: { state: 'IDLE', legs: [], closedLegs: [] }, daily: {}, totals: {},
 };
+// 18-Nov-2026: a STOPPED deployment, read from the database where no engine runs (dev) — the real
+// nifty-atm-straddle (LIVE) as dev holds it: 2 lots, leg 1.4×, rupee ₹20,000, target 35%
+const STOPPED = {
+    _id: '6ad54e26321a45ac642d5012', name: 'nifty-atm-straddle (LIVE)', template: 'short_straddle', symbol: 'NSE:NIFTY50-INDEX', entry_mode: 'time',
+    trade_mode: 'PAPER', status: 'STOPPED', lots: 2,
+    params: { entry_time: '09:20', square_off: '15:10', tp_pct_credit: 35, sl_x_credit: 1.5, leg_sl_x: 1.4, max_loss_rupees: 20000, lots: 2 },
+    position: { state: 'IDLE', legs: [] },
+};
 const PLAN = { ok: true, dryRun: true, open: false, changes: [{ key: 'max_loss_rupees', before: 3000, after: 3000, appliesTo: 'the next entry' }, { key: 'leg_sl_x', before: 1.4, after: 1.3, appliesTo: 'the next entry' }] };
 
 vi.mock('axios', () => {
     const answer = (url) => {
         if (/\/multileg\/templates$/.test(url)) return [TEMPLATE];
         if (/\/multileg\/deployments$/.test(url)) return { deployments: [DEP], events: [] };
+        if (/\/multileg\/deployments\/dep1$/.test(url)) return { deployment: DEP, source: 'engine' };
+        if (/\/multileg\/deployments\/6ad54e26321a45ac642d5012$/.test(url)) return { deployment: STOPPED, source: 'database' };
         return [];
     };
-    const get = vi.fn((url) => Promise.resolve({ data: answer(url) }));
+    const get = vi.fn((url) => {
+        // a deleted deployment: the one-deployment read answers 404
+        if (/\/multileg\/deployments\/6af000000000000000000000$/.test(url)) return Promise.reject(Object.assign(new Error('Request failed with status code 404'), { response: { status: 404, data: { error: 'deployment not found' } } }));
+        // a backend older than the page: no one-deployment route, Express's own 404 page
+        if (globalThis.__oldBackend && /\/multileg\/deployments\/[^/]+$/.test(url)) return Promise.reject(Object.assign(new Error('Request failed with status code 404'), { response: { status: 404, data: '<pre>Cannot GET</pre>' } }));
+        return Promise.resolve({ data: answer(url) });
+    });
     const patch = vi.fn((url, body) => Promise.resolve({ data: body.dryRun ? PLAN : { ok: true, changes: PLAN.changes } }));
     const empty = () => Promise.resolve({ data: [] });
     // a backtest: the deployment's own settings (leg 1.4×) make less than the combination from Results (leg 1.5×)
@@ -160,5 +176,58 @@ describe('Backtest & update… from Results (a stop and target combination)', ()
         expect(input.value).toBe('1.5');
         fireEvent.change(input, { target: { value: '1.6' } });
         await waitFor(() => expect(within(banner).getByTestId('edit-compare').textContent).toMatch(/The settings changed after this backtest ran/));
+    });
+});
+
+describe('Backtest & update… on a STOPPED deployment (18-Nov-2026: "we should be able to update and backtest")', () => {
+    beforeEach(() => { axios.patch.mockClear(); axios.post.mockClear(); });
+    const TRY = JSON.stringify({ key: 'tp_pct_credit', combo: { legSlX: 1.5, maxLoss: 20000, tp: 20 }, label: '★ Best net', from: '2026-10-23', source: 'archive',
+        whatIf: { trades: 18, net: 36062, worst: -5527, currentNet: 15738, currentWorst: -7668 } });
+    const linkTo = (id) => `/multi-leg?${new URLSearchParams({ tab: 'backtest', edit: id, try: TRY })}`;
+    const backtests = () => axios.post.mock.calls.filter(([u]) => /\/multileg\/backtest$/.test(u)).map(([, b]) => b);
+
+    it('opens it from the database with ALL its settings, backtests both, says it is stopped, and can still save', async () => {
+        render(<MemoryRouter initialEntries={[linkTo('6ad54e26321a45ac642d5012')]}><MultiLeg /></MemoryRouter>);
+        const banner = await screen.findByTestId('editing-deployment', {}, { timeout: 5000 });
+        expect(banner.textContent).toMatch(/Editing deployment “nifty-atm-straddle \(LIVE\)” \(PAPER · stopped · flat\)/);
+        expect(within(banner).getByTestId('editing-stopped').textContent).toMatch(/You can still backtest and save changes: they act once you start it again/);
+        expect(axios.get.mock.calls.some(([u]) => /\/multileg\/deployments\/6ad54e26321a45ac642d5012$/.test(u))).toBe(true);
+        await waitFor(() => expect(backtests()).toHaveLength(2), { timeout: 5000 });
+        const [mine, these] = backtests();
+        // every setting the deployment runs, its size included — then only the combination's three differ
+        const own = { entry_time: '09:20', square_off: '15:10', tp_pct_credit: 35, sl_x_credit: 1.5, leg_sl_x: 1.4, max_loss_rupees: 20000, lots: 2 };
+        expect(mine).toMatchObject({ template: 'short_straddle', symbol: 'NSE:NIFTY50-INDEX', from: '2026-10-23', chain_source: 'archive' });
+        expect(mine.params).toEqual({ ...TEMPLATE.defaults, ...own });
+        expect(these.params).toEqual({ ...TEMPLATE.defaults, ...own, leg_sl_x: 1.5, tp_pct_credit: 20 });
+        expect([these.template, these.symbol, these.from, these.to, these.resolution, these.chain_source]).toEqual([mine.template, mine.symbol, mine.from, mine.to, mine.resolution, mine.chain_source]);
+        // the dry run goes to this deployment; saving needs the confirmation
+        await waitFor(() => expect(axios.patch.mock.calls.length).toBeGreaterThan(0));
+        const [url, dry] = axios.patch.mock.calls.at(-1);
+        expect(url).toMatch(/\/multileg\/deployments\/6ad54e26321a45ac642d5012$/);
+        expect(dry).toMatchObject({ dryRun: true, lots: 2, params: { leg_sl_x: 1.5, tp_pct_credit: 20, max_loss_rupees: 20000, sl_x_credit: 1.5, square_off: '15:10' } });
+        fireEvent.click(within(banner).getByRole('button', { name: 'Save to deployment' }));
+        await waitFor(() => expect(screen.getAllByRole('button', { name: 'Save to deployment' }).length).toBe(2));
+        expect(screen.getByText(/It is stopped: nothing acts until you start it again\./)).toBeTruthy();
+        fireEvent.click(screen.getAllByRole('button', { name: 'Save to deployment' }).find((b) => !banner.contains(b)));
+        await waitFor(() => expect(axios.patch.mock.calls.filter(([, b]) => !b.dryRun)).toHaveLength(1));
+    });
+
+    it('a deleted deployment says so, instead of "not running any more"', async () => {
+        render(<MemoryRouter initialEntries={[linkTo('6af000000000000000000000')]}><MultiLeg /></MemoryRouter>);
+        expect(await screen.findByText(/Deployment 6af000000000000000000000 has been deleted, so there are no settings to backtest or update/, {}, { timeout: 5000 })).toBeTruthy();
+        expect(screen.queryByTestId('editing-deployment')).toBeNull();
+        expect(axios.post.mock.calls.filter(([u]) => /\/multileg\/backtest$/.test(u))).toHaveLength(0);
+    });
+
+    it('a backend older than the page: falls back to what its engine lists, and says when that is not enough', async () => {
+        globalThis.__oldBackend = true;
+        try {
+            const { unmount } = render(<MemoryRouter initialEntries={[`/multi-leg?${new URLSearchParams({ tab: 'backtest', edit: 'dep1', try: TRY })}`]}><MultiLeg /></MemoryRouter>);
+            const banner = await screen.findByTestId('editing-deployment', {}, { timeout: 5000 });
+            expect(banner.textContent).toMatch(/Editing deployment “nifty-atm-straddle” \(PAPER · flat\)/);
+            unmount();
+            render(<MemoryRouter initialEntries={[linkTo('6ad54e26321a45ac642d5012')]}><MultiLeg /></MemoryRouter>);
+            expect(await screen.findByText(/is not loaded on this server, and this server's backend is too old to read a stopped deployment from the database\. Update the backend/, {}, { timeout: 5000 })).toBeTruthy();
+        } finally { delete globalThis.__oldBackend; }
     });
 });
