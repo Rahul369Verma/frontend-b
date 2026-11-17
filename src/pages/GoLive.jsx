@@ -11,7 +11,8 @@
  *                            23-Oct-2026). After N trades it asks you to lift the size cap.
  *
  * Every rule is evaluated by the backend (/api/golive); this page shows the gates,
- * runs drills only when asked, and collects the promotion decision.
+ * runs drills when asked (and shows the daily automatic drills and their issues), and
+ * collects the promotion decision.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
@@ -29,6 +30,16 @@ const SEGMENTS_OF = { FYERS: ['NSE-OPT', 'BSE-OPT', 'MCX-FUT'], DELTA: ['DELTA']
 const SEGMENT_NAME = { 'NSE-OPT': 'NSE options', 'BSE-OPT': 'BSE options', 'MCX-FUT': 'MCX futures', DELTA: 'Delta perpetuals' };
 
 const when = (iso) => (iso ? istDateTime(iso) : '—');
+
+/** The daily automatic drill's line for one segment (backend: logic/services/golive/autoDrill.js). */
+function autoLine(auto, seg) {
+    if (!auto || !auto.enabled || !auto.segments) return null;
+    const x = auto.segments[seg] || {};
+    const parts = [];
+    if (x.state && x.state.note) parts.push(x.state.note);
+    if (x.last) parts.push(`last automatic drill ${when(x.last.at)}: ${x.last.ok ? 'passed' : `failed${x.last.step ? ` at ${x.last.step}` : ''}`}`);
+    return parts.length ? parts.join(' · ') : null;
+}
 
 // ── broker drill: confirm, run, show the steps ───────────────────────────
 function DrillDialog({ plan, running, result, onRun, onClose }) {
@@ -80,7 +91,32 @@ function DrillDialog({ plan, running, result, onRun, onClose }) {
     );
 }
 
-function VenueCard({ v, plans, lastDrill, drillRunning, onDrill }) {
+/** Drill failures of the last 30 days, grouped — the list to work through (autoDrill.report().issues). */
+function DrillIssues({ auto }) {
+    const issues = auto.issues || [];
+    return (
+        <Card docs="go-live#drills" title="Drill issues" subtitle="Every broker drill that failed in the last 30 days (by the button or automatically), grouped by segment and error — what to fix so the drills pass.">
+            {!issues.length ? <p className="text-xs text-fg-4">None in the last 30 days.</p> : (
+                <ul className="space-y-1.5">
+                    {issues.map((i, k) => (
+                        <li key={k} className="border border-line/50 rounded px-2.5 py-1.5">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                                <StatusBadge level="critical">{i.count}×</StatusBadge>
+                                <span className="text-xs text-fg-2">{SEGMENT_NAME[i.segment] || i.segment}</span>
+                                {i.step && <span className="text-2xs text-fg-4">failed at “{i.step}”</span>}
+                                <span className="text-2xs text-fg-5">{i.triggers.join(' + ')} · last {when(i.lastAt)}{i.count > 1 ? ` · first ${when(i.firstAt)}` : ''}</span>
+                                {!i.recorded && <StatusBadge level="warning">not on the gate</StatusBadge>}
+                            </div>
+                            <div className="text-2xs text-fg-3 mt-0.5 break-words">{i.error}</div>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </Card>
+    );
+}
+
+function VenueCard({ v, plans, lastDrill, drillRunning, onDrill, auto }) {
     const venueGates = v.gates.filter((g) => g.group !== 'drill');
     const drillGates = v.gates.filter((g) => g.group === 'drill');
     return (
@@ -89,6 +125,13 @@ function VenueCard({ v, plans, lastDrill, drillRunning, onDrill }) {
             right={<ReadinessLine summary={v.summary} />}>
             <GateList gates={venueGates} />
             <h3 className="text-2xs uppercase tracking-wide text-fg-5 mt-4 mb-1">Broker drills <DocLink to="go-live#drills" /></h3>
+            {auto && (
+                <p className="text-2xs text-fg-4 mb-1.5">
+                    {auto.enabled
+                        ? `Run automatically every trading day while the exchange is open, when a drill failed or its pass is over ${auto.refreshDays} days old (${SEGMENTS_OF[v.venue].map((seg) => (auto.plan || []).find((p) => p.segment === seg)).filter(Boolean).map((p) => `${SEGMENT_NAME[p.segment]} from ${p.from}`).join(', ')} IST).`
+                        : `Automatic drills: ${auto.off}`}
+                </p>
+            )}
             <ul className="space-y-1.5">
                 {SEGMENTS_OF[v.venue].map((seg) => {
                     const g = drillGates.find((x) => x.id === `drill.${seg}`);
@@ -104,6 +147,7 @@ function VenueCard({ v, plans, lastDrill, drillRunning, onDrill }) {
                                     <span className="text-xs text-fg-2">{SEGMENT_NAME[seg]}</span>
                                 </div>
                                 <div className="text-2xs text-fg-5 mt-0.5">{g ? g.have : 'never run'}</div>
+                                {autoLine(auto, seg) && <div className="text-2xs text-fg-4 mt-0.5">Automatic: {autoLine(auto, seg)}</div>}
                             </div>
                             <button type="button" disabled={!plan || !!drillRunning} onClick={() => onDrill(plan)}
                                 className="px-2.5 py-1 rounded text-2xs font-semibold border border-primary/40 bg-primary/15 text-primary-ink disabled:opacity-40">
@@ -374,11 +418,13 @@ export default function GoLive() {
 
             <section aria-label="Venues" className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {s && s.venues.map((v) => (
-                    <VenueCard key={v.venue} v={v} plans={s.drillPlans || []} lastDrill={v.raw.lastDrill || {}}
+                    <VenueCard key={v.venue} v={v} plans={s.drillPlans || []} lastDrill={v.raw.lastDrill || {}} auto={s.autoDrill}
                         drillRunning={s.drillRunning || (drillRun.running ? drillAsk?.segment : null)}
                         onDrill={(plan) => { setDrillRun({ running: false, result: null }); setDrillAsk(plan); }} />
                 ))}
             </section>
+
+            {s && s.autoDrill && <DrillIssues auto={s.autoDrill} />}
 
             <Card docs="go-live#deployments" title="Deployments" subtitle="Every single-leg and multi-leg deployment, checked against every gate. Promotion asks for the canary settings and, if the evidence is missing, a recorded override."
                 right={<Segmented value={filter} onChange={setFilter} options={[

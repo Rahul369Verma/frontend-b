@@ -36,7 +36,18 @@ Moving back to PAPER (**Demote to PAPER**) is always allowed. A multi-leg deploy
 
 Choose the account, the instrument and the order; the window explains what will be sent and what happens next. If the order fills anyway, it is closed immediately at market and the page tells you to check the broker book.
 
-**Drill history** lists every drill, newest first: when, segment, instrument, order, result and detail.`,
+**Drill history** lists every drill, newest first: when, segment, instrument, order, result and detail.
+
+A pass counts for **14 days**. Fyers accepts orders through the API only while the exchange is open (NSE and BSE 09:15–15:30, MCX 09:00–23:30 IST), so a drill can't run in the evening or at the weekend.
+
+**Automatic drills.** Every trading day the server checks each segment while its exchange is open. It runs the same drill by itself when the segment was never drilled, its newest drill failed, or its last pass is more than 7 days old — so a pass never lapses and a promotion is never blocked by an old drill. Each line under a segment says what the automatic drill is doing ("passed at 09:40", "retries after 10:15", "no Delta API keys").
+
+- **When:** MCX futures from 09:05, NSE options from 09:40, BSE options from 09:45, Delta from 09:50 IST. One drill at a time, never in the minutes around a LIVE strategy's entry time or while one is entering or exiting, and never while Fyers is pausing requests.
+- **How often:** at most twice a day per segment, 30 minutes apart. After that it tries again the next trading day.
+- **What it records:** a pass, or a failure once an order reached the broker. A failure before any order was sent (no quote, no listed contract) proves nothing about the order path, so the gate keeps its earlier pass; it is still listed as an issue.
+- **Where it runs:** only on the server that trades (engines on). Any other server shows "Automatic drills: off" and why.
+
+**Drill issues** lists every drill that failed in the last 30 days — by the button or automatically — grouped by segment and error, with the step that failed and how often. Each failure also raises a notification (the bell and Telegram) that clears when the segment next passes. Fix what it names; the next automatic drill confirms the fix.`,
         },
         {
             id: 'deployments',

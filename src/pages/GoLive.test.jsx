@@ -172,3 +172,53 @@ describe('the canary asks — you decide (23-Oct-2026)', () => {
         spy.mockRestore();
     });
 });
+
+describe('automatic broker drills (17-Nov-2026)', () => {
+    const AUTO = {
+        enabled: true, off: null, refreshDays: 7, attemptsPerDay: 2,
+        plan: [{ segment: 'MCX-FUT', from: '09:05', until: '22:30' }, { segment: 'NSE-OPT', from: '09:40', until: '15:00' }, { segment: 'BSE-OPT', from: '09:45', until: '15:00' }, { segment: 'DELTA', from: '09:50', until: '23:00' }],
+        segments: {
+            'NSE-OPT': { state: { action: 'passed', note: 'passed at 09:40 IST' }, last: { at: '2026-11-17T04:10:00Z', ok: true } },
+            'BSE-OPT': { state: { action: 'retry-later', note: 'retries after 10:15 IST' }, last: { at: '2026-11-17T04:15:00Z', ok: false, step: 'cancel' } },
+            'MCX-FUT': { state: null, last: null },
+            DELTA: { state: { action: 'not-configured', note: 'no Delta API keys' }, last: null },
+        },
+        issues: [
+            { segment: 'BSE-OPT', name: 'BSE options', error: 'not confirmed cancelled (status 6)', step: 'cancel', count: 2, firstAt: '2026-11-16T04:15:00Z', lastAt: '2026-11-17T04:15:00Z', recorded: true, triggers: ['auto'] },
+            { segment: 'MCX-FUT', name: 'MCX futures', error: 'no price for MCX:GOLDM26DECFUT', step: 'pick instrument + quote', count: 1, firstAt: '2026-11-17T03:35:00Z', lastAt: '2026-11-17T03:35:00Z', recorded: false, triggers: ['auto'] },
+        ],
+    };
+    const withAuto = (auto) => axios.get.mockImplementation((url) => {
+        if (url.endsWith('/golive/status')) return Promise.resolve({ data: { ...STATUS, autoDrill: auto } });
+        if (url.endsWith('/golive/deployments')) return Promise.resolve({ data: { reports: [], failed: [], total: 0 } });
+        return Promise.resolve({ data: {} });
+    });
+
+    it('says when drills run by themselves and what each segment is doing', async () => {
+        withAuto(AUTO);
+        render(<GoLive />);
+        await waitFor(() => expect(screen.getByText(/Run automatically every trading day while the exchange is open, when a drill failed or its pass is over 7 days old \(NSE options from 09:40, BSE options from 09:45, MCX futures from 09:05 IST\)/)).toBeTruthy());
+        expect(screen.getByText(/Automatic: passed at 09:40 IST · last automatic drill .*: passed/)).toBeTruthy();
+        expect(screen.getByText(/Automatic: retries after 10:15 IST · last automatic drill .*: failed at cancel/)).toBeTruthy();
+        expect(screen.getByText(/Automatic: no Delta API keys/)).toBeTruthy();
+    });
+
+    it('lists the drill issues to fix — count, failing step, error — and marks one that is not on the gate', async () => {
+        withAuto(AUTO);
+        render(<GoLive />);
+        await waitFor(() => expect(screen.getByText('Drill issues')).toBeTruthy());
+        expect(screen.getByText('not confirmed cancelled (status 6)')).toBeTruthy();
+        expect(screen.getByText('2×')).toBeTruthy();
+        expect(screen.getByText(/failed at “cancel”/)).toBeTruthy();
+        expect(screen.getByText('no price for MCX:GOLDM26DECFUT')).toBeTruthy();
+        expect(screen.getAllByText('not on the gate').length).toBe(1);
+    });
+
+    it('a server that does not trade says the automatic drills are off, and why', async () => {
+        withAuto({ ...AUTO, enabled: false, off: 'off on this server: its engines are off (trading role, DISABLE_TRADING_ENGINES=true)', issues: [] });
+        render(<GoLive />);
+        await waitFor(() => expect(screen.getAllByText(/Automatic drills: off on this server: its engines are off/).length).toBe(2));
+        expect(screen.getByText('None in the last 30 days.')).toBeTruthy();
+        expect(screen.queryByText(/^Automatic: /)).toBeNull();
+    });
+});
