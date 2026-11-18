@@ -38,6 +38,8 @@ const GRID = {
 };
 
 let gridCalls = 0;
+/** The next replay that computes answers this (replayAnswersOnce); then REPORT again. */
+let NEXT_REPLAY = null;
 // India VIX for 12-Oct-2026 (the fixture trade's day): 1-minute closes, stamped when each bar ENDED
 let VIX_BODY = { days: { '2026-10-12': { intraday: [
     { ms: Date.parse('2026-10-12T09:20:00+05:30'), v: 12.84 },
@@ -46,8 +48,10 @@ let VIX_BODY = { days: { '2026-10-12': { intraday: [
     { ms: Date.parse('2026-10-12T15:10:00+05:30'), v: 13.1 },
 ] } } };
 vi.mock('axios', () => {
-    const get = vi.fn((url) => {
-        if (/stop-whatif$/.test(url)) return Promise.resolve({ data: REPORT });
+    const get = vi.fn((url, cfg) => {
+        // opening a row or a panel only peeks for a saved replay: none saved here
+        if (cfg?.params?.peek && /stop-whatif$|stop-grid$/.test(url)) return Promise.resolve({ data: { status: 'none', saved: null } });
+        if (/stop-whatif$/.test(url)) { const data = NEXT_REPLAY || REPORT; NEXT_REPLAY = null; return Promise.resolve({ data }); }
         if (/stop-grid$/.test(url)) {
             gridCalls++;
             return Promise.resolve({ data: gridCalls === 1
@@ -66,14 +70,9 @@ import axios from 'axios';
 import { TradeStopReplay, StopGridPanel } from './StopReplay.jsx';
 
 /** The NEXT replay request answers `data` (the card also asks for India VIX as it opens). */
-function replayAnswersOnce(data) {
-    const orig = axios.get.getMockImplementation();
-    axios.get.mockImplementation((url, cfg) => {
-        if (/stop-whatif$/.test(url)) { axios.get.mockImplementation(orig); return Promise.resolve({ data }); }
-        return orig(url, cfg);
-    });
-}
-const replayCalls = () => axios.get.mock.calls.filter((c) => /stop-whatif$/.test(c[0]));
+function replayAnswersOnce(data) { NEXT_REPLAY = data; }
+/** Replays that COMPUTE (a peek for the saved one is not one). */
+const replayCalls = () => axios.get.mock.calls.filter((c) => /stop-whatif$/.test(c[0]) && !c[1]?.params?.peek);
 import { reasonText, stopsText, recoveryText, firedLines, tradeStopsText, stopLossText, targetText, targetLevelText, archiveNotes, vixLine } from './stopReplayFormat.js';
 
 const trade = {
@@ -134,7 +133,7 @@ describe('a trade shows its own stops and what fired them (22-Oct-2026)', () => 
         const { container } = render(<TradeStopReplay trade={stoppedTrade} />);
         expect(screen.getByTestId('trade-stops').textContent).toMatch(/Its stops \(at exit\).*Rupee stop fired 11:47/s);
         expect(container.textContent).toMatch(/Follows this trade on the recorded option prices past its exit/);
-        expect(axios.get).not.toHaveBeenCalledWith(expect.stringMatching(/stop-whatif/), expect.anything());
+        expect(replayCalls()).toHaveLength(0);   // only a peek for a saved replay: nothing computed
     });
     it('a trade that recorded no settings says so', () => {
         render(<TradeStopReplay trade={{ ...stoppedTrade, stops: null }} />);

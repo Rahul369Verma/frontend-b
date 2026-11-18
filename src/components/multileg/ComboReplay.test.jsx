@@ -42,8 +42,10 @@ const RESULT = {
 };
 let calls = 0;
 vi.mock('axios', () => {
-    const get = vi.fn((url) => {
+    const get = vi.fn((url, cfg) => {
         if (/combo-grid$/.test(url)) {
+            // opening the panel only peeks for a saved replay: none saved here
+            if (cfg?.params?.peek) return Promise.resolve({ data: { status: 'none', result: null, saved: null } });
             calls++;
             return Promise.resolve({ data: calls === 1
                 ? { status: 'running', done: 100, total: 900, limit: 30 }

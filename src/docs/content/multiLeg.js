@@ -522,7 +522,7 @@ The figures are upper bounds: every trade that touched the level is booked at ex
 ### Round-trips table
 Every booked structure: entry → exit, deployment, structure, index, mode, exit reason, credit per unit, IV percentile at entry, **margin** (~ = estimated), gross, charges, net and net ÷ margin. Click a row (or **Expand page**) to see its legs, its MTM path and details — including **India VIX**: its value at entry and at exit, the move, and its low and high while the structure was held, also drawn on the path chart (switch it with the chart's *India VIX* box). Short premium loses when VIX rises even if the index stands still. Search and page through long lists.
 
-**Replay without stops or target** (under an opened trade's path) replays that one trade on the recorded option chain, keeping its strikes, fills and size, and follows it past its real exit:
+**Replay without stops or target** (under an opened trade's path) replays that one trade on the recorded prices (the quote tape from 2 Nov, the archive before), keeping its strikes, fills and size, and follows it past its real exit. Once calculated it is saved: opening the row again shows it at once, and **Recalculate** replaces it:
 - **its stops**: the settings it ran with, a check on the replay;
 - **no stop-loss (leg stops kept)**: the structure stop and the rupee stop off;
 - **no stops at all**: the leg stops off too (the target and the time exits stay);
@@ -547,7 +547,11 @@ The chart has the payoff **at expiry** and **today** (each leg at its own implie
         {
             id: 'results-stop-grid',
             title: 'Results · Which stops, on these trades',
-            md: `With ONE deployment picked, this replays its most recent closed trades (up to 30) on the **recorded option chain**, about one price a minute, through the same exit rules the engine uses. Each trade keeps its own strikes, fills and size. Only the stops change.
+            md: `With ONE deployment picked, this replays its most recent closed trades (up to 30) on the **recorded prices**, through the same exit rules the engine uses. Each trade keeps its own strikes, fills and size. Only the stops change.
+
+**Which prices.** From 2 Nov 2026 the replay runs on the **quote tape**, which recorded every tick. For each minute it takes the moments a stop or a target could have been crossed: each short leg's running highs and the position's highs and lows, within 1%. Like the engine, it decides the stops and the target on the **last traded price**, and it buys a leg back at the ask. Trades before 2 Nov run on the option-chain archive, about one quote a minute, which can miss a stop crossed between two minutes. The line above the grid says how many trades ran on each.
+
+**Saved replays.** A replay is saved once calculated. Opening the section shows the saved one at once, with when it was calculated and how long it took; nothing is recalculated on its own. It says when newer trades exist, when the deployment's settings were edited since, or when it came from an older method. **Recalculate** runs it again on the current settings and the latest trades and replaces the saved one; the old one stays on screen until the new one is ready. The same holds for each round trip's own replay and for the target and the combination sections.
 
 **The grid.** Rows are the **leg stop** (a short leg is bought back when its premium reaches that multiple of its entry; *off* = no leg stop). Columns are the **rupee stop** (the whole structure closes when its net mark reaches −that; *off* = none). Each cell is the **total net P&L** over those trades with that pair of settings, and *worst* is its worst single trade. The **★** cell made the most; the **ringed** cell is what the deployment runs now. The structure stop (× credit) stays on in every cell.
 
@@ -560,7 +564,7 @@ The chart has the payoff **at expiry** and **today** (each leg at its own implie
 **The table under it** lists the trades the current stops closed early. *With stops* and *No stops* are the two replays. *Stops did* is the difference: *saved* means the stop cut a loss that grew afterwards, *cost* means the trade would have ended better held. *After the first stop* says whether the held trade went back above ₹0. Touching profit is not keeping it, so the count of trades that "finished better" is the one that matters.
 
 **How to read it.**
-- Compare the cells with each other, not with *Booked*. The replay marks short legs at the ask once a minute; the engine marks every 10 s, so booked and replayed numbers differ a little.
+- Compare the cells with each other first. From 2 Nov the replay of the current settings stays close to *Booked* (on nifty-wide-tail's 30 trades: +₹26,070 replayed, +₹25,714 booked); it buys a leg back the second its stop is crossed, where the engine takes a few seconds. Before 2 Nov, minute quotes can miss a stop.
 - Look at the **neighbourhood**, not only the ★. A setting whose neighbours are also good is robust; a lone ★ surrounded by much worse cells is probably luck.
 - A cell that is ₹1,000 better over 20 trades is about ₹50 a trade: inside the noise of a small sample. A cheaper **worst trade** for the same net is a more solid reason to change.
 - *No stops* winning on a few weeks of trades does not make stops useless: stops are insurance against the day that is not in the sample (a gap, a trend day). Judge it on the worst-trade column too.
@@ -583,7 +587,7 @@ A credit structure's target is a **% of the credit** it took in (a debit structu
 
 Both per-trade tables say what **both** exits did on each trade, under the current settings. The stop table has **Target did**, and the target table has **Stops did**. Under each net is how the trade ended, for example *leg stop 10:45 → square-off 15:10*. A line above each table adds them up over all the trades.
 
-**Booked (real) is not a replay.** It is what happened, with the engine's own fills. Every other column replays the current settings (named above the columns) on the recorded quotes: about one a minute, with short legs bought back at the ask. So a replayed stop fills a little later and at a worse price than the engine, which checks every few seconds. On the 17-Nov LIVE straddle, the replayed CE leg stop filled at ₹96.55 against the real ₹92.38: −₹7,668 replayed against −₹7,035 booked. Compare the replays with each other, not with Booked. To see each trade under the **best** stops and target, use *Stops and target together*.`,
+**Booked (real) is not a replay.** It is what happened, with the engine's own fills. Every other column replays the current settings (named above the columns) on the recorded prices: from 2 Nov the quote tape, every tick, deciding on the last traded price as the engine does; before that the archive's minute quotes. On nifty-wide-tail's 17-Nov trade the minute quotes missed the PE's spike past its stop at 09:37 and showed +₹595; on the tape the replay takes that stop at 09:37:04 and shows −₹1,798 against −₹1,964 booked. To see each trade under the **best** stops and target, use *Stops and target together*.`,
         },
         {
             id: 'results-combo-grid',
@@ -612,7 +616,7 @@ Both per-trade tables say what **both** exits did on each trade, under the curre
 
 The two overlap, so they do not add up to the difference from *neither*.
 
-Every trade keeps its own strikes, fills and size, and the structure stop and time exits stay as set. The replay uses the recorded quotes, about one a minute, with short legs marked at the ask. Several hundred combinations take a few minutes. Nothing here changes the deployment: try a setting on paper before trading it live.
+Every trade keeps its own strikes, fills and size, and the structure stop and time exits stay as set. The replay uses the quote tape from 2 Nov (every tick, deciding on the last traded price) and the archive's minute quotes before that. Several hundred combinations take a few minutes the first time; the result is saved and shown again until you press **Recalculate**. Nothing here changes the deployment: try a setting on paper before trading it live.
 
 **Settings the live engine would refuse.** A structure with unlimited loss (a short straddle or strangle) must keep both a leg stop and a structure stop. Combinations that turn its leg stop off are still listed, greyed and marked *live refuses*, but they are never picked as best and have no button.
 

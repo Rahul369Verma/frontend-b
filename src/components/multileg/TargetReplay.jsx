@@ -21,13 +21,13 @@ import { istDayLabel } from '../viz/tokens';
 const lossLabel = (x) => (x > 0 ? rup(x) : 'off');
 
 export default function TargetGridPanel({ deploymentId, limit = 30 }) {
-    const { st, job, res, start } = useWhatIfJob('target-grid', deploymentId, limit);
+    const { st, job, res, start, recalc } = useWhatIfJob('target-grid', deploymentId, limit);
     if (!deploymentId || deploymentId === 'all') {
         return <div className="text-3xs text-fg-5">Pick one deployment in the filter bar to replay its trades with other profit targets.</div>;
     }
     return (
         <div className="space-y-2 text-3xs text-fg-4" data-testid="target-grid">
-            <JobStatus st={st} job={job} start={start} label={`Replay its last ${limit} trades with other profit targets`}
+            <JobStatus st={st} job={job} start={start} recalc={recalc} label={`Replay its last ${limit} trades with other profit targets`}
                 hint="Each trade keeps its strikes, fills, size and stops; only the target and the rupee stop change. Takes ~10–60 s." />
             {res && <TargetResult res={res} job={job} />}
         </div>

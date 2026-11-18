@@ -13,7 +13,7 @@
  * The replays mark short legs at the ask once a minute, so they are compared with EACH
  * OTHER — never with the booked number, which the engine marked at LTP every 10 s.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { API_URL } from '../../config/api.js';
 import TradePathChart from '../viz/TradePathChart';
@@ -25,6 +25,7 @@ import { didText, endedText, sumEffects, stopsSentence, targetSentence, currentT
 import { Spinner } from '../viz/primitives';
 import useWhatIfJob from './useWhatIfJob.js';
 import { JobStatus, ReplayedLine, GridTable } from './WhatIfGrid.jsx';
+import { savedLine, savedWarnings } from './savedReplayFormat.js';
 
 const BTN = 'inline-flex items-center gap-1 px-2 py-1 rounded border border-line-2 bg-card-2 text-2xs text-fg-3 hover:text-fg disabled:opacity-50';
 
@@ -51,9 +52,18 @@ export function TradeStopReplay({ trade, istTime, istDateTime, istSpan }) {
     // keyed by trade: another trade opened in the same row starts idle
     const [state, setSt] = useState({ id: null, status: 'idle' });
     const st = state.id === id ? state : { status: 'idle' };
-    const run = () => {
-        setSt({ id, status: 'loading' });
-        axios.get(`${API_URL}/multileg/trades/${id}/stop-whatif`, { timeout: 90000 })
+    // saved replays (18-Nov-2026): opening the row shows the saved one, never computes one
+    useEffect(() => {
+        if (!id) return undefined;
+        let dead = false;
+        axios.get(`${API_URL}/multileg/trades/${id}/stop-whatif`, { params: { peek: 1 }, timeout: 30000 })
+            .then((r) => { if (!dead && r.data && r.data.status !== 'none' && r.data.configured) setSt({ id, status: 'done', data: r.data }); })
+            .catch(() => { /* no saved replay to show: the button stays */ });
+        return () => { dead = true; };
+    }, [id]);
+    const run = (recalc = false) => {
+        setSt((s) => ({ id, status: 'loading', data: s.id === id ? s.data : undefined }));
+        axios.get(`${API_URL}/multileg/trades/${id}/stop-whatif`, { params: recalc ? { recalc: 1 } : undefined, timeout: 120000 })
             .then((r) => setSt({ id, status: 'done', data: r.data }))
             .catch((e) => setSt({ id, status: 'error', error: e.response?.data?.error || e.message }));
     };
@@ -104,17 +114,24 @@ export function TradeStopReplay({ trade, istTime, istDateTime, istSpan }) {
             <div className="mt-1.5 text-3xs text-fg-4 space-y-1" data-testid="stop-replay">
                 {st.status === 'idle' && id && (
                     <div className="flex items-center gap-2 flex-wrap">
-                        <button type="button" className={BTN} onClick={run}
+                        <button type="button" className={BTN} onClick={() => run()}
                             title="Replay this exact trade (its strikes, fills and size) on the recorded option chain: with its stops, without its stop-loss, with no stops, and without its profit target">
                             Replay without stops or target
                         </button>
                         <span className="text-fg-5">What would it have done without its stop-loss (leg stops kept), with no stops at all, and without its profit target (stops kept)? Follows this trade on the recorded option prices past its exit, to the time it would have closed.</span>
                     </div>
                 )}
-                {st.status === 'loading' && <Spinner size="xs" label="Replaying on the recorded option chain…" />}
+                {st.status === 'loading' && <Spinner size="xs" label={st.data ? 'Recalculating the replay…' : 'Replaying on the recorded prices…'} />}
                 {st.status === 'error' && (
-                    <div className="text-danger">Replay failed: {st.error} <button type="button" className="ml-1 underline" onClick={run}>retry</button></div>
+                    <div className="text-danger">Replay failed: {st.error} <button type="button" className="ml-1 underline" onClick={() => run()}>retry</button></div>
                 )}
+                {d && (
+                    <div className="flex items-center gap-2 flex-wrap" data-testid="saved-trade-replay">
+                        <span className="text-fg-4">{savedLine(d.saved)}</span>
+                        <button type="button" className={BTN} onClick={() => run(true)} title="Replay this trade again now and replace the saved replay">Recalculate</button>
+                    </div>
+                )}
+                {d && savedWarnings(d.saved).map((w) => <div key={w} className="text-warning">{w}</div>)}
                 {d && <ReplaySummary d={d} />}
             </div>
         </div>
@@ -151,7 +168,9 @@ function ReplaySummary({ d }) {
             <div>{recoveryText(d)}</div>
             {archiveNotes(d).map((n, i) => <div key={`an${i}`} className="text-warning">{n}</div>)}
             <div className="text-fg-5">
-                Stops replayed: {stopsText(d.stops)} — {d.paramsSource}. {d.archive?.snapshots || 0} recorded minutes ({(d.archive?.days || []).join(', ')}).
+                Stops replayed: {stopsText(d.stops)} — {d.paramsSource}. {d.prices === 'tape'
+                    ? `Prices: the quote tape, every tick (${d.tape?.instants || 0} moments marked on ${(d.tape?.days || []).join(', ')}).`
+                    : `Prices: ${d.archive?.snapshots || 0} recorded minutes (${(d.archive?.days || []).join(', ')}).`}
                 {d.archive?.fullChainMinutes > 0 && ` ${d.archive.fullChainMinutes} minute(s) had a strike outside the recorded window and were priced from the smile.`}
             </div>
             {(d.caveats || []).map((c, i) => <div key={i} className="text-fg-5">{c}</div>)}
@@ -164,14 +183,14 @@ const legLabel = (x) => (x > 0 ? `${x}×` : 'off');
 const lossLabel = (x) => (x > 0 ? rup(x) : 'off');
 
 export function StopGridPanel({ deploymentId, limit = 30 }) {
-    const { st, job, res, start } = useWhatIfJob('stop-grid', deploymentId, limit);
+    const { st, job, res, start, recalc } = useWhatIfJob('stop-grid', deploymentId, limit);
     const [showAll, setShowAll] = useState(false);
     if (!deploymentId || deploymentId === 'all') {
         return <div className="text-3xs text-fg-5">Pick one deployment in the filter bar to replay its trades with other stops.</div>;
     }
     return (
         <div className="space-y-2 text-3xs text-fg-4" data-testid="stop-grid">
-            <JobStatus st={st} job={job} start={start} label={`Replay its last ${limit} trades with other stops`}
+            <JobStatus st={st} job={job} start={start} recalc={recalc} label={`Replay its last ${limit} trades with other stops`}
                 hint="Each trade keeps its strikes, fills and size; only the stops change. Takes ~10–60 s." />
             {res && <GridResult res={res} job={job} showAll={showAll} setShowAll={setShowAll} />}
         </div>

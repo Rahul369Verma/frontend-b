@@ -25,8 +25,10 @@ const RESULT = {
 };
 let calls = 0;
 vi.mock('axios', () => {
-    const get = vi.fn((url) => {
+    const get = vi.fn((url, cfg) => {
         if (/target-grid$/.test(url)) {
+            // opening the panel only peeks for a saved replay: none saved here
+            if (cfg?.params?.peek) return Promise.resolve({ data: { status: 'none', result: null, saved: null } });
             calls++;
             return Promise.resolve({ data: calls === 1
                 ? { status: 'running', done: 10, total: 60, limit: 30 }
@@ -86,7 +88,7 @@ describe('TargetGridPanel', () => {
         const [groups, heads] = within(per).getAllByRole('row');
         expect(groups.textContent).toBe('Replayed with the current settings · leg 1.5× · rupee off · target 40%How far the trade got');
         expect([...heads.cells].map((c) => c.textContent)).toEqual(['Day', 'Booked (real)', 'Net · ended', 'Target off', 'Target did', 'Stops did', 'Best point (before costs)', 'Target at', 'After the target']);
-        expect(screen.getByText(/^Booked \(real\) is what happened, with the engine's own fills\. Every other figure is a replay on the recorded quotes/)).toBeTruthy();
+        expect(screen.getByText(/^Booked \(real\) is what happened, with the engine's own fills\. Every other figure is a replay\. From 2 Nov 2026 it runs on the quote tape \(every tick\) and decides stops and the target on the last traded price/)).toBeTruthy();
         expect(screen.getAllByText('not reached')).toHaveLength(3);
         expect(screen.getByText(/· 23.3% of the credit/)).toBeTruthy();
         // 17-Nov-2026: the table also says how each trade ended and what the stops did on it

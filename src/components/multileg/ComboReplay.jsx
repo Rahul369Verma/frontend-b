@@ -37,13 +37,13 @@ const TOP = 15;
 const WIDE_REM = 72;   // the per-trade table needs about this much; narrower → one card per trade
 
 export default function ComboGridPanel({ deploymentId, limit = 30 }) {
-    const { st, job, res, start } = useWhatIfJob('combo-grid', deploymentId, limit);
+    const { st, job, res, start, recalc } = useWhatIfJob('combo-grid', deploymentId, limit);
     if (!deploymentId || deploymentId === 'all') {
         return <div className="text-3xs text-fg-5">Pick one deployment in the filter bar to replay its trades with every stop × target combination.</div>;
     }
     return (
         <div className="space-y-3 text-3xs text-fg-4" data-testid="combo-grid">
-            <JobStatus st={st} job={job} start={start} label={`Replay its last ${limit} trades with every stop × target combination`}
+            <JobStatus st={st} job={job} start={start} recalc={recalc} label={`Replay its last ${limit} trades with every stop × target combination`}
                 hint="Each trade keeps its strikes, fills and size; the leg stop, the rupee stop and the target change together. Several hundred combinations: a few minutes." />
             {res && <ComboResult res={res} job={job} />}
         </div>

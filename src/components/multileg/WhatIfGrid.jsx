@@ -6,22 +6,38 @@
 import React from 'react';
 import { Spinner } from '../viz/primitives';
 import { signed, tone } from './stopReplayFormat.js';
+import { savedLine, savedWarnings, pricesLine } from './savedReplayFormat.js';
+import { BUSY } from './useWhatIfJob.js';
 
 const BTN = 'inline-flex items-center gap-1 px-2 py-1 rounded border border-line-2 bg-card-2 text-2xs text-fg-3 hover:text-fg disabled:opacity-50';
 
-/** Idle → a button; running → progress; failed → the error and a retry. */
-export function JobStatus({ st, job, start, label, hint }) {
+/**
+ * Idle → a button; running → progress; done → when it was saved, Recalculate, and what changed since;
+ * failed → the error and a retry. While it recalculates, the saved replay stays below.
+ */
+export function JobStatus({ st, job, start, recalc, label, hint }) {
+    const busy = BUSY.has(st.status);
+    const saved = job?.saved || null;
+    const progress = st.status === 'saving' ? 'Saving the replay…'
+        : st.status === 'running' && job?.total ? `Replaying… ${job.done}/${job.total}`
+            : st.status === 'loading' ? 'Loading recorded quotes…' : 'Waiting for another replay to finish…';
     return (
         <>
             {st.status === 'idle' && (
                 <div className="flex items-center gap-2 flex-wrap">
                     <button type="button" className={BTN} onClick={start}>{label}</button>
-                    <span className="text-fg-5">{hint}</span>
+                    <span className="text-fg-5">{hint} Saved once calculated.</span>
                 </div>
             )}
-            {['queued', 'loading', 'running'].includes(st.status) && (
-                <Spinner size="xs" label={st.status === 'running' && job?.total ? `Replaying… ${job.done}/${job.total}` : st.status === 'loading' ? 'Loading recorded quotes…' : 'Waiting for another replay to finish…'} />
+            {busy && <Spinner size="xs" label={progress} />}
+            {busy && job?.recalculating && <div className="text-fg-5">Recalculating: the saved replay below stays until the new one is done.</div>}
+            {st.status === 'done' && (
+                <div className="flex items-center gap-2 flex-wrap" data-testid="saved-replay">
+                    <span className="text-fg-4">{savedLine(saved)}</span>
+                    {recalc && <button type="button" className={BTN} onClick={recalc} title="Replay these trades again now, on the current settings and the latest trades, and replace the saved replay">Recalculate</button>}
+                </div>
             )}
+            {!busy && savedWarnings(saved).map((w) => <div key={w} className="text-warning">{w}</div>)}
             {st.status === 'error' && <div className="text-danger">Failed: {st.error} <button type="button" className="ml-1 underline" onClick={start}>retry</button></div>}
             {st.status === 'failed' && <div className="text-danger">Replay failed: {job?.error}</div>}
         </>
@@ -37,6 +53,7 @@ export function ReplayedLine({ res, job, perTrade }) {
             {job.quarantinedExcluded > 0 ? `; ${job.quarantinedExcluded} void fill(s) excluded` : ''}
             {holes ? `; ${holes} ran through a hole in the recorded prices (⚠ below)` : ''}
             {res.skipped.length > 0 ? `; ${res.skipped.length} could not be replayed (${[...new Set(res.skipped.map((s) => s.why))].join('; ')})` : ''}.
+            {pricesLine(res.prices) && <> {pricesLine(res.prices)}</>}
         </div>
     );
 }
