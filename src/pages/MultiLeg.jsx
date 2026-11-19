@@ -12,7 +12,7 @@ import ResultsAnalytics from '../components/multileg/ResultsAnalytics';
 import { TradeStopReplay } from '../components/multileg/StopReplay.jsx';
 import { deploymentEditBody, editBlocker, changeLine, stableJson, runKeyOf, entryParamsOf, compareLine } from '../components/multileg/deploymentEditFormat.js';
 import { EditSource, EditChanges, BacktestCompare } from '../components/multileg/DeploymentEditPanel.jsx';
-import { comboParams, parseTry } from '../components/multileg/comboReplayFormat.js';
+import { tryParams, parseTry } from '../components/multileg/comboReplayFormat.js';
 import AutoRunProgress from '../components/multileg/AutoRunProgress';
 import { estimateStageSizes, sizesForRequest, runSummary, useRunTracker } from '../components/multileg/runProgress';
 import ZoomableChart from '../components/charts/ZoomableChart';
@@ -1028,7 +1028,7 @@ export default function MultiLeg() {
             if (!d) { setError(`Deployment ${id} could not be read.`); return; }
             const t = templates.find((x) => x.key === d.template);
             const eff = { ...(t?.defaults || {}), ...(d.params || {}) };
-            const patch = tryInfo ? comboParams(tryInfo.key, tryInfo.combo, eff) : null;
+            const patch = tryInfo ? tryParams(tryInfo, eff) : null;
             const span = { from: tryInfo?.from || from, to: isoDaysAgo(0) };
             editDeployment(d, { patch, source: tryInfo, backtest: span });
             if (!tryInfo) return;

@@ -47,6 +47,7 @@ import ExcursionsPanel from './ExcursionsPanel';
 import { StopGridPanel } from './StopReplay.jsx';
 import TargetGridPanel from './TargetReplay.jsx';
 import ComboGridPanel from './ComboReplay.jsx';
+import TimingGridPanel from './TimingReplay.jsx';
 import useScorecard from './useScorecard';
 import DocLink from '../DocLink.jsx';
 import { Panel } from '../viz/primitives';
@@ -563,6 +564,12 @@ export default function ResultsAnalytics({
                     {deploymentId && deploymentId !== 'all' && (
                         <Panel title="Stops and target together, on these trades" subtitle="Every leg stop × rupee stop × target on the same trades: the current and the best marked, a held-out check, and per trade what the stops and the target each did" docs="multi-leg#results-combo-grid" storageKey="fold:results|combogrid">
                             <ComboGridPanel deploymentId={deploymentId} />
+                        </Panel>
+                    )}
+                    {/* 9 ── …and the clock: the best entry time and square-off time, the same days replayed at every pair */}
+                    {deploymentId && deploymentId !== 'all' && (
+                        <Panel title="Entry and exit times, on these days" subtitle="Each day it traded replayed at every entry time × square-off time: the structure its own rule opens then, with its current stops and target; its own and the best marked, a held-out check, and per day own vs best" docs="multi-leg#results-timing-grid" storageKey="fold:results|timinggrid">
+                            <TimingGridPanel deploymentId={deploymentId} />
                         </Panel>
                     )}
                 </>

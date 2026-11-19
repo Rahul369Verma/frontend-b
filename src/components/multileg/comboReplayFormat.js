@@ -91,6 +91,16 @@ export function comboParams(key, combo, effective = {}) {
     return out;
 }
 
+/**
+ * A pick from Results as deployment settings: an entry and exit time (Entry and exit times: entry_time and
+ * square_off), else a stops-and-target combination (comboParams).
+ */
+export function tryParams(t, effective = {}) {
+    if (!t) return null;
+    if (t.kind === 'timing') return { entry_time: t.timing.entry, square_off: t.timing.exit };
+    return comboParams(t.key, t.combo, effective);
+}
+
 /** The trading day (IST) of an instant, as YYYY-MM-DD — a backtest's "from". */
 export function istDay(at) {
     const ms = Date.parse(at);
@@ -119,6 +129,7 @@ export function parseTry(s) {
     if (!s) return null;
     let o;
     try { o = JSON.parse(s); } catch (_) { return null; }
+    if (o && typeof o === 'object' && o.kind === 'timing') return parseTimingTry(o);
     if (!o || typeof o !== 'object' || !TARGET_KEYS.includes(o.key) || !o.combo) return null;
     const combo = { legSlX: num(o.combo.legSlX), maxLoss: num(o.combo.maxLoss), tp: num(o.combo.tp) };
     if (Object.values(combo).some((v) => v == null || v < 0)) return null;
@@ -132,15 +143,34 @@ export function parseTry(s) {
     };
 }
 
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+/** An entry-and-exit-time pick (TimingReplay.jsx timingTryLink), checked like a combination. */
+function parseTimingTry(o) {
+    const t = o.timing && typeof o.timing === 'object' ? o.timing : {};
+    if (!HHMM.test(String(t.entry || '')) || !HHMM.test(String(t.exit || '')) || !(t.exit > t.entry)) return null;
+    const w = o.whatIf && typeof o.whatIf === 'object' ? o.whatIf : {};
+    return {
+        kind: 'timing', timing: { entry: t.entry, exit: t.exit },
+        label: typeof o.label === 'string' ? o.label.slice(0, 80) : 'From Results',
+        from: /^\d{4}-\d{2}-\d{2}$/.test(String(o.from || '')) ? o.from : null,
+        source: SOURCES.includes(o.source) ? o.source : 'archive',
+        whatIf: { trades: num(w.trades), net: num(w.net), worst: num(w.worst), currentNet: num(w.currentNet), currentWorst: num(w.currentWorst) },
+    };
+}
+
+/** Which Results section a pick came from. */
+export const trySection = (t) => (t && t.kind === 'timing' ? 'Entry and exit times' : 'Stops and target together');
+
 /** "★ Best net — leg 1.5× · rupee off · target 20%: +₹31,344 on its last 17 trades replayed, +₹7,938 against the current +₹23,406" */
 export function tryText(t) {
     if (!t) return '';
     const w = t.whatIf || {};
-    let s = `${t.label} — ${comboText(t.key, t.combo)}`;
+    const timing = t.kind === 'timing';
+    let s = timing ? `${t.label} — entry ${t.timing.entry} · square-off ${t.timing.exit}` : `${t.label} — ${comboText(t.key, t.combo)}`;
     if (w.net != null) {
-        s += `: ${signed(w.net)} on its last ${w.trades ?? '?'} trades replayed`;
+        s += `: ${signed(w.net)} on its last ${w.trades ?? '?'} ${timing ? 'days' : 'trades'} replayed`;
         if (w.currentNet != null && w.currentNet !== w.net) s += `, ${signed(w.net - w.currentNet)} against the current ${signed(w.currentNet)}`;
-        if (w.worst != null) s += ` (worst trade ${signed(w.worst)}${w.currentWorst != null ? `; current ${signed(w.currentWorst)}` : ''})`;
+        if (w.worst != null) s += ` (worst ${timing ? 'day' : 'trade'} ${signed(w.worst)}${w.currentWorst != null ? `; current ${signed(w.currentWorst)}` : ''})`;
     }
     return s;
 }

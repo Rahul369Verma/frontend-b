@@ -12,7 +12,7 @@
  */
 import React from 'react';
 import { changeLine, compareRows, sourceWords } from './deploymentEditFormat.js';
-import { tryText } from './comboReplayFormat.js';
+import { tryText, trySection } from './comboReplayFormat.js';
 import { rup, signed } from './stopReplayFormat.js';
 
 
@@ -20,7 +20,7 @@ export function EditSource({ source }) {
     if (!source) return null;
     return (
         <div className="text-fg-3" data-testid="edit-source">
-            <b>From Results → Stops and target together:</b> {tryText(source)}. That replay is in hindsight on those trades; the backtest below checks the settings on every day.
+            <b>From Results → {trySection(source)}:</b> {tryText(source)}. That replay is in hindsight on those {source.kind === 'timing' ? 'days' : 'trades'}; the backtest below checks the settings on every day.
         </div>
     );
 }

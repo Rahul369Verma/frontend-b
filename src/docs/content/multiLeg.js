@@ -635,6 +635,54 @@ Nothing is saved until you press **Save to deployment** and confirm. The confirm
 **A stopped deployment** opens the same way: it is backtested with all its settings and can be updated. The banner and the confirmation say it is stopped; the changes act once you start it again. On a server where the trading engines are off (dev), the deployment is read from the database and a saved change is written there; the engine reads it when it starts. A deleted deployment has no settings left to open, and the page says so; its trades stay in Results.`,
         },
         {
+            id: 'results-timing-grid',
+            title: 'Results · Entry and exit times',
+            md: `When should it open, and when should it square off? This section replays the days the deployment traded (its last 30 trades) at every **entry time × square-off time**:
+- entry times from 09:20 to 14:00 (every 15 minutes until 11:00, then every 30);
+- square-off times from 10:00 to 15:20;
+- its own pair always included.
+
+An exit less than 30 minutes after its entry is not tried.
+
+**Another entry time is another trade.** At 11:00 the money has moved, so the strikes and premiums differ from those at 09:20. For each day and entry time, the replay opens the structure **its own rule** would open then:
+- the template's strike offsets, or the zone finder with its retry window moved with the entry;
+- short legs sold at the bid;
+- the contract and lot size of that day.
+
+That structure is then managed with the deployment's **current** stops and target, exactly as the live engine manages it, and squared off at each exit time. Each day keeps the size (lots) of its real trade.
+
+**Which prices.**
+- **From 2 Nov 2026.** The entry is read on the chain as the quote tape had it **5 seconds after the entry time**. That is when live enters: a median 5 s after its time, because of its 10-second loop. The rest of the day runs on the tape's every tick, and stops and the target decide on the last traded price.
+- **Before 2 Nov.** The replay uses the archive's minute quotes. The entry is at the first recorded chain at or after the time, so it can be a minute or two late.
+
+**What it shows:**
+- **The pairs side by side.** Its own times (ringed) next to:
+  - the **★ best net**;
+  - the **best without a worse worst day**;
+  - the **smallest worst day**.
+
+  Each row has its net, the difference from its own times, its worst day, its winners, how many days its stops acted on, and how many times its target was hit.
+- **Held-out check.** The pair that did best on the first 70% of the days alone, measured on the last 30%, which it never saw. This is the fairer guide; the ★ best is chosen in hindsight.
+- **Every entry × square-off time.** A table with the entry time down the side and the square-off across the top. Each cell is that pair's net, shaded green for a gain and red for a loss, deeper the larger it is. Hover a cell for its worst day and winners.
+- **No entry at some times.** If the rule could not open a structure at some time on some day, the count and the reason are listed. Examples: a strike that never traded, or the zone finder declining. That day counts as ₹0 in that row.
+- **Every pair, best net first.** Tick *show all* for the full list.
+- **Each day, own vs best.** For each side: when it entered, which strikes, and how it ended (a leg stop, the target, the square-off). **Best − own** is the difference.
+
+**Why its own times differ from the stops-and-target sections.** Here its own pair is replayed like every other pair: entered by its rule on the recorded chain, not from its real fills. That way the pairs compare fairly. The stops-and-target sections keep each trade's real entry. On tape days the two agree closely. Before the tape, an entry here can be a minute or two late, so they differ more.
+
+**Not for every deployment.**
+- A **positional** structure is not closed by a time of day. Its exits are its days held, its expiry and its stops, so there is no square-off to choose.
+- A **signal** deployment enters when its signal fires, not at a time.
+
+For both, the section says so instead of showing a grid.
+
+**Times the live engine would refuse.** A deployment with a minimum runway (*min_minutes_to_square_off*) refuses an entry that leaves less than that before its square-off. Those pairs are struck through in the table, marked *live refuses*, and never picked.
+
+**Backtest & update…** works as for the combinations above. It opens the builder with that entry time and square-off. It backtests them next to the deployment's own settings over the same days. Nothing is saved until you confirm.
+
+About 130 pairs take a few minutes the first time. The result is saved and shown again until you press **Recalculate**. The filters that let its real entries through (VIX, funds, the daily-loss halt) are not asked again at other times. Every figure is in hindsight on these days: try a new time on paper first.`,
+        },
+        {
             id: 'compare-tab',
             title: 'Compare tab',
             md: `Deployed strategies side by side: up to **six** at a time, running, stopped, or deleted but with trades. Nothing on this tab changes a deployment.
