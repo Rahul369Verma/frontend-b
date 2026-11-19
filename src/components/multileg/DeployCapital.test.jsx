@@ -25,8 +25,10 @@ const ORDERS = {
         { id: '2', time: '27-Oct-2026 09:20:10', symbol: 'NSE:NIFTY26OCT22650PE', side: 'SELL', type: 'LIMIT', qty: 65, filledQty: 0, status: 'rejected', message: 'RED:Margin Shortfall:INR 42,626.67', strategy: { id: 's', name: 'nifty-atm-straddle (LIVE)', engine: 'multileg', mode: 'LIVE' }, why: 'entry', matchedBy: 'tag' },
         { id: '3', time: '28-Oct-2026 15:10:07', day: '2026-10-28', at: '2026-10-28T09:40:07Z', placedAt: '2026-10-28T04:32:57Z', symbol: 'NSE:NIFTY26OCT22550PE', side: 'BUY', type: 'SL-LIMIT', qty: 65, filledQty: 0, stopPrice: 132.15, limitPrice: 138.75, status: 'pending', strategy: { id: 'w', name: 'nifty-wide-tail (LIVE)', engine: 'multileg', mode: 'LIVE' }, why: 'safety stop at the broker', matchedBy: 'tag' },
         { id: '4', time: '27-Oct-2026 10:00:00', symbol: 'NSE:SBIN-EQ', side: 'BUY', type: 'MARKET', qty: 1, filledQty: 1, status: 'filled', strategy: null, why: 'not placed by this app (no tag the app writes)', matchedBy: null },
+        // the app's own order for no deployment (18-Nov-2026 these were listed as "not from this app")
+        { id: '5', time: '28-Oct-2026 09:05:22', symbol: 'MCX:GOLDM26DECFUT', side: 'BUY', type: 'LIMIT', qty: 10, filledQty: 0, limitPrice: 130276, status: 'cancelled', tag: 'golivedrill', strategy: null, why: 'go-live drill order', matchedBy: null, fromApp: true, orphanTag: false, source: 'go-live drill' },
     ],
-    byStrategy: { 'nifty-wide-tail (LIVE)': { orders: 2, filled: 1, pending: 1, rejected: 0 }, 'nifty-atm-straddle (LIVE)': { orders: 1, filled: 0, pending: 0, rejected: 1 }, 'not from this app': { orders: 1, filled: 1, pending: 0, rejected: 0 } },
+    byStrategy: { 'nifty-wide-tail (LIVE)': { orders: 2, filled: 1, pending: 1, rejected: 0 }, 'nifty-atm-straddle (LIVE)': { orders: 1, filled: 0, pending: 0, rejected: 1 }, 'not from this app': { orders: 1, filled: 1, pending: 0, rejected: 0 }, 'go-live drill': { orders: 1, filled: 0, pending: 0, rejected: 0 } },
 };
 vi.mock('axios', () => {
     const get = vi.fn((url) => {
@@ -108,8 +110,18 @@ describe('BrokerOrdersPanel', () => {
         fireEvent.click(screen.getByRole('button', { name: /^nifty-wide-tail \(LIVE\): 2 · 1 pending/ }));
         const rows = screen.getByTestId('broker-orders').querySelectorAll('tbody tr');
         expect(rows.length).toBe(2);
-        fireEvent.click(screen.getByRole('button', { name: /^All \(4\)/ }));
-        expect(screen.getByTestId('broker-orders').querySelectorAll('tbody tr').length).toBe(4);
+        fireEvent.click(screen.getByRole('button', { name: /^All \(5\)/ }));
+        expect(screen.getByTestId('broker-orders').querySelectorAll('tbody tr').length).toBe(5);
+        // a drill order is the app's own: named so, and not amber like an order from outside the app
+        fireEvent.click(screen.getByRole('button', { name: /^go-live drill: 1/ }));
+        const drillRows = screen.getByTestId('broker-orders').querySelectorAll('tbody tr');
+        expect(drillRows.length).toBe(1);
+        const who = drillRows[0].querySelectorAll('td')[1];
+        expect(who.textContent).toBe('go-live drill');
+        expect(who.className).not.toMatch(/text-warning/);
+        fireEvent.click(screen.getByRole('button', { name: /^not from this app: 1/ }));
+        expect(screen.getByTestId('broker-orders').querySelectorAll('tbody tr')[0].querySelectorAll('td')[1].className).toMatch(/text-warning/);
+        fireEvent.click(screen.getByRole('button', { name: /^All \(5\)/ }));
     });
 });
 

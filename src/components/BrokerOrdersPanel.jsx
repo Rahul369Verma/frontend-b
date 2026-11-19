@@ -26,7 +26,11 @@ export default function BrokerOrdersPanel({ className = 'mb-4' }) {
     const load = () => { setSt((s) => ({ ...s, busy: true })); fetchIt(); };
     // an answer without its rows (an older server, a proxy page) is no answer — never a crash
     const d = useMemo(() => (st.data && Array.isArray(st.data.rows) ? { byStrategy: {}, ...st.data } : null), [st.data]);
-    const label = (r) => (r.strategy ? r.strategy.name : r.orphanTag ? 'a deleted deployment' : 'not from this app');
+    // the server names who placed each order (a deployment, the go-live drill, the kill switch…);
+    // the fallback is for an older server that does not send `source`
+    const label = (r) => r.source || (r.strategy ? r.strategy.name : r.orphanTag ? 'a deleted deployment' : 'not from this app');
+    // amber only for an order nobody in the app can answer for: placed outside it, or by a deleted deployment
+    const unowned = (r) => !r.strategy && (r.orphanTag || !(r.fromApp && r.source));
     const names = useMemo(() => (d ? Object.keys(d.byStrategy || {}) : []), [d]);
     const rows = d ? d.rows.filter((r) => who === 'all' || label(r) === who) : [];
     return (
@@ -74,7 +78,7 @@ export default function BrokerOrdersPanel({ className = 'mb-4' }) {
                                                     <span className="block text-4xs">placed {new Date(r.placedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false })}</span>
                                                 )}
                                             </td>
-                                            <td className={r.strategy ? 'text-fg-2' : 'text-warning'} title={r.matchedBy ? `matched by ${r.matchedBy}${r.tag ? ` · tag ${r.tag}` : ''}` : r.tag ? `tag ${r.tag}` : 'no tag'}>
+                                            <td className={unowned(r) ? 'text-warning' : 'text-fg-2'} title={r.matchedBy ? `matched by ${r.matchedBy}${r.tag ? ` · tag ${r.tag}` : ''}` : r.tag ? `tag ${r.tag}` : 'no tag'}>
                                                 {label(r)}{r.strategy && r.strategy.mode ? <span className={r.strategy.mode === 'LIVE' ? 'text-danger' : 'text-fg-5'}> · {r.strategy.mode}</span> : null}
                                             </td>
                                             <td className="text-fg-4">{r.why || '—'}</td>

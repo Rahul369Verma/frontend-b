@@ -38,6 +38,8 @@ Choose the account, the instrument and the order; the window explains what will 
 
 **Drill history** lists every drill, newest first: when, segment, instrument, order, result and detail.
 
+The drill's price is never outside the exchange's price limit (the "circuit"): Fyers refuses such an order. The app reads the limit first and, when the usual distance (options 20 %, MCX 1.5 % under the price) would cross it, places the order just inside it instead. If the price is within 0.5 % of the lower limit, the drill is not sent (an order resting there could fill) and nothing is recorded.
+
 A pass counts for **14 days**. Fyers accepts orders through the API only while the exchange is open (NSE and BSE 09:15–15:30, MCX 09:00–23:30 IST), so a drill can't run in the evening or at the weekend.
 
 **Automatic drills.** Every trading day the server checks each segment while its exchange is open. It runs the same drill by itself when the segment was never drilled, its newest drill failed, or its last pass is more than 7 days old — so a pass never lapses and a promotion is never blocked by an old drill. Each line under a segment says what the automatic drill is doing ("passed at 09:40", "retries after 10:15", "no Delta API keys").
